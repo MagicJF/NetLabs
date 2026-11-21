@@ -1,0 +1,43 @@
+# PROPÓSITO:   leer el mundo por la API: qué invitados hay, qué puentes y qué pools.
+#              Nada de esto se guarda: se vuelve a leer en cada ejecución.
+# INVARIANTES: si el nodo configurado no está en el clúster, se para aquí y se dice.
+# VER:         docs/diseno.md §2.1
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: /nodes
+    pve_do: "leer los nodos del clúster"
+
+- name: el nodo configurado tiene que existir en el clúster
+  ansible.builtin.assert:
+    that:
+      - env.proxmox.node in (pve_r.json.data | map(attribute='node') | list)
+    fail_msg: >-
+      netlabs.yml dice que el nodo es {{ env.proxmox.node }}, pero la API del clúster
+      solo conoce {{ pve_r.json.data | map(attribute='node') | join(', ') }}.
+      Corrige `proxmox.node` antes de seguir.
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: /cluster/resources
+    pve_do: "leer los invitados del clúster"
+- set_fact:
+    recursos: "{{ pve_r.json.data }}"
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: "/nodes/{{ env.proxmox.node }}/network"
+    pve_do: "leer las redes del nodo"
+- set_fact:
+    redes: "{{ pve_r.json.data }}"
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: /pools
+    pve_do: "leer los pools"
+- set_fact:
+    world: "{{ recursos | netlabs_world(redes, pve_r.json.data) }}"

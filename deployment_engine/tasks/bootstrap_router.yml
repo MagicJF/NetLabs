@@ -1,0 +1,88 @@
+# PROPÓSITO:   el arranque de un router por el agente del invitado, sin consola y sin
+#              que nadie escriba un número: el script lo calcula el motor y la única
+#              prueba que vale es la lectura del agente después.
+# INVARIANTES: se escribe el script y se ejecuta SU RUTA (medido: el agente ejecuta por
+#              ruta, no por texto). El `guest-file-close timeout` de file-write es
+#              cosmético: el fichero llega entero y se comprueba por el efecto.
+#              Nada de esperas fijas: se sondea el agente con un tope.
+# VER:         docs/diseno.md §4.5; AGENTS.md §7
+
+- name: "PVE · esperar a que el agente de {{ guest.name }} conteste"
+  ansible.builtin.uri:
+    url: "https://{{ secrets.pve_nodo }}:{{ secrets.pve_puerto }}/api2/json/nodes/{{ env.proxmox.node }}/qemu/{{ guest.vmid }}/agent/ping"
+    method: POST
+    headers:
+      Authorization: "PVEAPIToken={{ secrets.pve_token_id }}={{ secrets.pve_token_secreto }}"
+    validate_certs: "{{ env.proxmox.verify_tls }}"
+    status_code: [200, 500, 501, 595, 596]
+    timeout: 30
+  register: agente
+  until: agente.status == 200
+  retries: "{{ agente_intentos | default(60) }}"
+  delay: 3
+  changed_when: false
+  failed_when: false
+
+- name: "{{ guest.name }} no tiene agente: la puerta de arranque está cerrada"
+  ansible.builtin.assert:
+    that: agente.status == 200
+    fail_msg: >-
+      El agente de {{ guest.name }} ({{ guest.vmid }}) no contestó. Sin agente no se
+      arranca: la consola es la puerta de emergencia, no el camino normal, y el motor
+      no adivina direcciones.
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: POST
+    pve_path: "/nodes/{{ env.proxmox.node }}/qemu/{{ guest.vmid }}/agent/file-write"
+    pve_body:
+      file: "{{ guest | netlabs_bootstrap_path }}"
+      content: "{{ guest | netlabs_bootstrap(env, secrets.routeros_clave) | b64encode }}"
+      encode: 0
+    pve_do: "escribir el arranque de {{ guest.name }}"
+    # El cierre del fichero se anuncia con timeout aunque el fichero llegue entero.
+    pve_status: [200, 500]
+
+- name: "{{ guest.name }}: el fichero de arranque no llegó entero"
+  ansible.builtin.assert:
+    that: "'guest-file-close' in (pve_r.content | default('')) or pve_r.status == 200"
+    fail_msg: >-
+      La API no respondió con el aviso conocido de cierre del fichero: {{ pve_r.content }}.
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: POST
+    pve_path: "/nodes/{{ env.proxmox.node }}/qemu/{{ guest.vmid }}/agent/exec"
+    pve_body:
+      command: "{{ guest | netlabs_bootstrap_path }}"
+    pve_do: "ejecutar el arranque de {{ guest.name }}"
+    pve_status: [200]
+
+- name: "PVE · leer la dirección de gestión de {{ guest.name }}"
+  ansible.builtin.uri:
+    url: "https://{{ secrets.pve_nodo }}:{{ secrets.pve_puerto }}/api2/json/nodes/{{ env.proxmox.node }}/qemu/{{ guest.vmid }}/agent/network-get-interfaces"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ secrets.pve_token_id }}={{ secrets.pve_token_secreto }}"
+    validate_certs: "{{ env.proxmox.verify_tls }}"
+    status_code: [200, 500]
+    timeout: 30
+  register: interfaces
+  until: >-
+    interfaces.status == 200 and
+    (guest.mgmt_address in (interfaces.content | default('')))
+  retries: 20
+  delay: 3
+  changed_when: false
+  failed_when: false
+
+- name: "{{ guest.name }} no tomó su dirección de gestión"
+  ansible.builtin.assert:
+    that: interfaces.status == 200 and guest.mgmt_address in (interfaces.content | default(''))
+    fail_msg: >-
+      Se ejecutó el arranque y el agente no ve {{ guest.mgmt_address }} en
+      {{ guest.name }}. El router no está en la red de gestión: no se sigue.
+
+- name: la dirección de gestión quedó puesta
+  ansible.builtin.debug:
+    msg: "{{ guest.name }} ({{ guest.vmid }}) responde con {{ guest.mgmt_address }}"

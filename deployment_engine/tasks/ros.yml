@@ -1,0 +1,77 @@
+# PROPÓSITO:   la única puerta a RouterOS: su REST, por la red de gestión. Nada de
+#              sesiones SSH al router, y nada de pasar de un lado a otro por dentro.
+# INVARIANTES: se lee el interior antes de escribir; lo que se escribe son las
+#              llamadas que calcula `netlabs_ros_ops`, nunca una lista escrita a mano.
+#              El área declarada es la frontera: dentro se quita lo que sobra, fuera no
+#              se entra.
+# VER:         docs/diseno.md §4.4, §6
+
+- name: "RouterOS · leer el interior de {{ router.name }}"
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ item }}"
+    method: GET
+    url_username: "{{ ros_user }}"
+    url_password: "{{ secrets.routeros_clave }}"
+    force_basic_auth: true
+    status_code: [200]
+    timeout: 30
+  loop: "{{ router | netlabs_ros_reads }}"
+  loop_control:
+    label: "{{ item }}"
+  register: ros_lecturas
+  changed_when: false
+
+- name: "RouterOS · ordenar lo leído"
+  ansible.builtin.set_fact:
+    ros_current: >-
+      {{ dict(ros_claves | zip(ros_lecturas.results | map(attribute='json') | list)) }}
+  vars:
+    ros_claves: [identity, addresses, pools, dhcp_servers, dhcp_networks, services, users]
+
+- name: "RouterOS · calcular la diferencia de {{ router.name }}"
+  ansible.builtin.set_fact:
+    ros_ops: "{{ router | netlabs_ros_ops(ros_current, secrets.routeros_clave) }}"
+
+- name: "RouterOS · enseñar la diferencia de {{ router.name }}"
+  ansible.builtin.debug:
+    msg: "{{ ros_ops | map(attribute='effect') | list }}"
+  when: ros_ops | length > 0
+
+- name: "RouterOS · escribir en {{ router.name }}"
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ item.path }}"
+    method: "{{ item.method }}"
+    url_username: "{{ ros_user }}"
+    url_password: "{{ secrets.routeros_clave }}"
+    force_basic_auth: true
+    body_format: json
+    body: "{{ item.body | default(omit) }}"
+    status_code: [200, 201, 204]
+    timeout: 30
+  loop: "{{ ros_ops }}"
+  loop_control:
+    label: "{{ item.effect }}"
+
+- name: "RouterOS · comprobar que lo declarado está de verdad en {{ router.name }}"
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}/rest/ip/address"
+    method: GET
+    url_username: "{{ ros_user }}"
+    url_password: "{{ secrets.routeros_clave }}"
+    force_basic_auth: true
+    status_code: [200]
+    timeout: 30
+  register: ros_direcciones
+  changed_when: false
+
+- name: "RouterOS · la comprobación no puede ser vacía"
+  ansible.builtin.assert:
+    that:
+      - ros_direcciones.json | length > 0
+      - >-
+        (router.configure.addresses | default([]) | map(attribute='address') | list)
+        | difference(ros_direcciones.json | map(attribute='address') | list) | length == 0
+    fail_msg: >-
+      Después de escribir, {{ router.name }} no tiene todas las direcciones declaradas:
+      {{ ros_direcciones.json | map(attribute='address') | list }}. El motor no da por
+      bueno un cambio que no puede leer de vuelta.

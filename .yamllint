@@ -1,0 +1,21 @@
+# Las reglas con las que se comprueba el estilo de todo el YAML del repositorio.
+# Ancho 120: las tareas de Ansible con expresiones largas son más claras en una línea
+# que partidas en cinco; el límite existe para que nadie escriba un párrafo, no para
+# contar columnas.
+extends: default
+
+rules:
+  line-length:
+    max: 160
+  document-start: disable
+  indentation:
+    spaces: 2
+    indent-sequences: whatever
+  truthy:
+    allowed-values: ["true", "false", "yes", "no", "on", "off"]
+  comments:
+    min-spaces-from-content: 1
+  braces:
+    max-spaces-inside: 1
+  brackets:
+    max-spaces-inside: 1

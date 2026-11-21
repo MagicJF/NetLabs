@@ -1,0 +1,27 @@
+# PROPÓSITO:   la única puerta al hipervisor. Toda llamada a la API de Proxmox sale
+#              por esta tarea; no hay `qm`, ni `pct`, ni SSH al nodo en ningún sitio
+#              del motor.
+# INVARIANTES: el token va en la cabecera y nunca se escribe en el registro.
+#              Un código de estado fuera de lo esperado es un fallo con su cuerpo,
+#              no un aviso.
+#              Las llamadas DELETE no llevan cuerpo: la API de Proxmox rechaza un
+#              DELETE con parámetros en el cuerpo (medido), así que van en la ruta.
+# VER:         docs/diseno.md §2, §3
+
+- name: "PVE · {{ pve_do | default(pve_method ~ ' ' ~ pve_path) }}"
+  ansible.builtin.uri:
+    url: "https://{{ secrets.pve_nodo }}:{{ secrets.pve_puerto }}/api2/json{{ pve_path }}"
+    method: "{{ pve_method }}"
+    headers:
+      Authorization: "PVEAPIToken={{ secrets.pve_token_id }}={{ secrets.pve_token_secreto }}"
+    # La API del nodo rechaza con 501 cualquier método que llegue con cuerpo: GET y
+    # DELETE se mandan sin `body` ni `body_format` (medido).
+    body_format: "{{ 'json' if pve_body is defined else omit }}"
+    body: "{{ pve_body | default(omit) }}"
+    validate_certs: "{{ env.proxmox.verify_tls }}"
+    status_code: "{{ pve_status | default([200, 201]) }}"
+    timeout: 120
+  register: pve_r
+  # Una lectura no cambia nada; una escritura sí. Es lo que hace honesto el `changed`
+  # del segundo apply.
+  changed_when: pve_method != 'GET'

@@ -1,0 +1,141 @@
+# PROPÓSITO:   `destroy`: retirar lo que el laboratorio declaró y lleva su marca.
+#              Nada más. Lo que no está declarado es de otro y no se toca.
+# INVARIANTES: se borra por pool y por marca (`netlabs lab=<lab>`), nunca "todo lo
+#              parado" ni "lo que sobra".
+#              Si algo no se puede borrar, se para y se dice qué quedó.
+# VER:         docs/diseno.md §7; AGENTS.md §3.6
+
+- name: netlabs · destroy
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    raiz: "{{ playbook_dir | dirname | dirname }}"
+    env: "{{ lookup('file', raiz ~ '/netlabs.yml') | from_yaml }}"
+    secrets: "{{ lookup('file', raiz ~ '/secrets.yml') | from_yaml }}"
+    lab: "{{ lookup('file', raiz ~ '/labs/' ~ netlabs_lab ~ '/' ~ netlabs_lab ~ '.yml') | from_yaml }}"
+  tasks:
+    - include_tasks: ../tasks/world.yml
+
+    - name: destroy · calcular qué es de este laboratorio
+      ansible.builtin.set_fact:
+        pool: "netlabs-lab-{{ lab.lab }}"
+        marca: "netlabs lab={{ lab.lab }}"
+        puentes: "{{ world.bridges | selectattr('comments', 'search', 'netlabs lab=' ~ lab.lab) | list }}"
+        suyos: "{{ world.guests | selectattr('pool', 'equalto', 'netlabs-lab-' ~ lab.lab) | list }}"
+
+    - name: "destroy · {{ lab.lab }}"
+      ansible.builtin.debug:
+        msg: >-
+          {{ ['se retiran ' ~ (suyos | length | string) ~ ' invitados del pool ' ~ pool,
+              'y los puentes ' ~ (puentes | map(attribute='iface') | list | join(', ') if puentes else 'ninguno')] }}
+
+    - name: destroy · lo que no es de este laboratorio no se toca
+      ansible.builtin.assert:
+        that: >-
+          suyos | selectattr('pool', 'ne', pool) | list | length == 0
+        fail_msg: "El filtro de propiedad está mal: se ha colado un invitado ajeno."
+
+    # --- invitados ---------------------------------------------------------
+    - name: "destroy · parar {{ item.name }}"
+      include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: POST
+        pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if item.type == 'lxc' else 'qemu' }}/{{ item.vmid }}/status/stop"
+        pve_do: "parar {{ item.name }} ({{ item.vmid }})"
+        pve_status: [200, 500]
+      loop: "{{ suyos | selectattr('status', 'ne', 'stopped') | list }}"
+      loop_control: {label: "{{ item.name }}"}
+      when: suyos | selectattr('status', 'ne', 'stopped') | list | length > 0
+
+    - name: "destroy · esperar a que pare {{ item.name }}"
+      include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: GET
+        pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if item.type == 'lxc' else 'qemu' }}/{{ item.vmid }}/status/current"
+        pve_do: "leer el estado de {{ item.name }}"
+      loop: "{{ suyos | selectattr('status', 'ne', 'stopped') | list }}"
+      loop_control: {label: "{{ item.name }}"}
+      register: parando
+      until: parando.json.data.status == 'stopped'
+      retries: 30
+      delay: 2
+      when: suyos | selectattr('status', 'ne', 'stopped') | list | length > 0
+
+    - name: "destroy · borrar {{ item.name }}"
+      include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: DELETE
+        # purge va en la ruta: la API rechaza un DELETE con cuerpo (medido).
+        pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if item.type == 'lxc' else 'qemu' }}/{{ item.vmid }}?purge=1"
+        pve_do: "borrar {{ item.name }} ({{ item.vmid }})"
+        pve_status: [200]
+      loop: "{{ suyos }}"
+      loop_control: {label: "{{ item.name }}"}
+      when: suyos | length > 0
+
+    - name: "destroy · esperar a que desaparezca {{ item.name }}"
+      include_tasks: ../tasks/wait_task.yml
+      vars:
+        upid: "{{ item.json.data }}"
+        pve_do: "borrar {{ item.item.name }}"
+      loop: "{{ pve_r.results | default([]) }}"
+      loop_control: {label: "{{ item.item.name }}"}
+      when: suyos | length > 0
+
+    # --- puentes -----------------------------------------------------------
+    - name: "destroy · borrar el puente {{ item.iface }}"
+      include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: DELETE
+        pve_path: "/nodes/{{ env.proxmox.node }}/network/{{ item.iface }}"
+        pve_do: "borrar el puente {{ item.iface }}"
+        pve_status: [200]
+      loop: "{{ puentes }}"
+      loop_control: {label: "{{ item.iface }}"}
+      when: puentes | length > 0
+
+    - name: destroy · aplicar el cambio de redes
+      include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: PUT
+        pve_path: "/nodes/{{ env.proxmox.node }}/network"
+        pve_do: "aplicar las redes del nodo"
+        pve_status: [200]
+      when: puentes | length > 0
+
+    - name: destroy · esperar al cambio de redes
+      include_tasks: ../tasks/wait_task.yml
+      vars:
+        upid: "{{ pve_r.json.data }}"
+        pve_do: "aplicar las redes del nodo"
+      when: puentes | length > 0
+
+    # --- pool --------------------------------------------------------------
+    - name: "destroy · borrar el pool {{ pool }}"
+      include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: DELETE
+        pve_path: "/pools/{{ pool }}"
+        pve_do: "borrar el pool {{ pool }}"
+        pve_status: [200]
+      when: pool in (world.pools | default([]))
+
+    # --- la comprobación que cuenta ---------------------------------------
+    - include_tasks: ../tasks/world.yml
+
+    - name: destroy · no puede quedar nada del laboratorio
+      ansible.builtin.assert:
+        that:
+          - (world.guests | selectattr('pool', 'equalto', pool) | list | length) == 0
+          - (world.bridges | selectattr('comments', 'search', marca) | list | length) == 0
+          - pool not in (world.pools | default([]))
+        fail_msg: >-
+          Después de destruir queda algo del laboratorio {{ lab.lab }}:
+          invitados {{ world.guests | selectattr('pool', 'equalto', pool) | map(attribute='name') | list }},
+          puentes {{ world.bridges | selectattr('comments', 'search', marca) | map(attribute='iface') | list }},
+          pool {{ pool }} {{ 'presente' if pool in (world.pools | default([])) else 'ausente' }}.
+
+    - name: destroy · limpio
+      ansible.builtin.debug:
+        msg: "No queda nada de {{ lab.lab }}: ni invitados, ni puentes, ni pool."

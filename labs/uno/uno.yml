@@ -1,0 +1,55 @@
+# El laboratorio mínimo del diseño (Fase 1, entregable 2): un router, dos redes y
+# dos puestos que toman dirección del router.
+#
+# No hay un solo número derivado: ni vmid, ni MAC, ni dirección de gestión. El
+# router nace con una pata más en la red de gestión (la última) y la dirección de
+# cada pata de laboratorio se declara por red, no por posición.
+
+lab: uno
+
+# Lo que este laboratorio puede usar. Ningún otro puede solaparse con esto, y el
+# plan lo comprueba contra lo que ya vive en el hipervisor antes de tocar nada.
+address_spaces:
+  - 10.44.0.0/16
+
+# Primero las redes, después los nodos, y los nodos se refieren a ellas por nombre.
+networks:
+  - name: lan1
+    address: 10.44.1.0/24
+  - name: lan2
+    address: 10.44.2.0/24
+
+nodes:
+  - role: edge                    # el contrato: así se le cita desde otros nodos
+    type: router
+    stage: 1
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [lan1, lan2]        # net0 = lan1, net1 = lan2; la gestión va después
+    address: 10.44.1.1/24         # la dirección de su primera pata de laboratorio
+    configure:
+      identity: {name: rt-edge}
+      addresses:
+        - {network: lan1, address: 10.44.1.1/24}
+        - {network: lan2, address: 10.44.2.1/24}
+      dhcp_server:
+        - {network: lan1, pool: 10.44.1.100-10.44.1.199, gateway: 10.44.1.1}
+        - {network: lan2, pool: 10.44.2.100-10.44.2.199, gateway: 10.44.2.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_password}
+      services: {www: true}
+
+  - role: pc-1
+    type: workstation
+    stage: 2
+    after: [edge]                 # no arranca antes de que el router sirva
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [lan1]
+    address: dhcp
+
+  - role: pc-2
+    type: workstation
+    stage: 2
+    after: [edge]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [lan2]
+    address: dhcp

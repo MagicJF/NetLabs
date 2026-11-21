@@ -1,0 +1,51 @@
+# Netlabs · configuración del entorno
+#
+# Lo que hay aquí NO es un laboratorio: es el mundo donde los laboratorios viven.
+# El motor lo lee para saber a quién preguntar y de dónde derivar; ningún valor de
+# ningún laboratorio puede aparecer en este fichero.
+#
+# Las credenciales viven en `secrets.yml` (ignorado por git). Esto es lo demás.
+
+engine: 1
+
+proxmox:
+  node: Proxmox                 # el nodo del clúster; la API lo confirma al leer
+  verify_tls: false             # certificado propio del nodo: se acepta y se dice
+  storage: local                # plantillas e imágenes
+  storage_guests: local-zfs     # discos de los invitados
+  template_lxc: local:vztmpl/debian-13-standard_13.6-1_amd64.tar.zst
+  template_router: chr-7.25.1.raw   # imagen de fábrica del CHR, importada al crear
+
+# La red de gestión (OOB): una sola, compartida por todos los laboratorios, que no
+# pertenece a ninguno. El motor la crea si no está y la marca como suya; no la
+# replantea en cada despliegue y `destroy` de un laboratorio no la toca.
+management:
+  bridge: vmbr30
+  address_space: 10.30.0.0/16
+  gateway: 10.30.0.1
+  pool: netlabs-site
+  guest: netxms
+  cores: 2
+  memory: 4096
+  disk: 16
+  # Puertos del túnel inverso que el invitado persistente abre hacia el nodo de
+  # control (por el 443, que es lo único que el cortafuegos de casa deja entrar).
+  # De aquí NO cuelga nada de un laboratorio: el camino base es uno y no cambia.
+  tunnel:
+    local_ssh_port: 2210
+    local_web_port: 8443
+    key: ~/.ssh/netlabs_tunnel   # la clave con la que el servicio vuelve a casa
+
+# Rangos de identificadores: el más bajo libre del clúster, nunca uno ya usado.
+vmids:
+  min: 100
+  max: 9999
+
+# Un invitado de laboratorio se nombra `<tipo>-<rol>`; el tipo sale de la
+# declaración y este mapa es la única traducción.
+type_codes:
+  router: rt
+  switch: sw
+  server: srv
+  workstation: ws
+  firewall: fw

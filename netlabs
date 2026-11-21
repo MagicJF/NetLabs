@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+# PROPÓSITO:   el único punto de entrada del motor: `check`, `plan`, `apply`, `apply
+#              --site`, `destroy`, `docs`. Envuelve los libros de Ansible para que el
+#              informe se guarde y para abrir, mientras dura, el camino hacia la red de
+#              gestión (un reenvío SSH por router, con puerto derivado de su vmid).
+# INVARIANTES: cada verbo escribe su salida real en labs/<lab>/logs/ y devuelve el
+#              código de Ansible: un verde aquí es el verde de la ejecución, no una
+#              interpretación.
+#              Los reenvíos se cierran siempre, incluso si Ansible falla.
+# LÍMITES:     no decide nada del despliegue: eso es de la capa pura y de los libros.
+# VER:         docs/diseno.md §7; AGENTS.md §5
+
+from __future__ import annotations
+
+import datetime as dt
+import os
+import pathlib
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+RAIZ = pathlib.Path(__file__).resolve().parent
+MOTOR = RAIZ / "deployment_engine"
+sys.path.insert(0, str(MOTOR / "tools"))
+
+import checks  # noqa: E402
+import docs as docs_mod  # noqa: E402
+import identity  # noqa: E402
+
+
+def entorno():
+    import yaml
+
+    return yaml.safe_load((RAIZ / "netlabs.yml").read_text())
+
+
+def log_de(verbo: str, lab: str | None) -> pathlib.Path:
+    if lab:
+        carpeta = RAIZ / "labs" / lab / "logs"
+    else:
+        carpeta = RAIZ / "deployment_engine" / "logs"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    sello = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
+    return carpeta / f"{verbo}-{sello}.log"
+
+
+def ansible(playbook: str, extra: dict, log: pathlib.Path) -> int:
+    binario = shutil.which("ansible-playbook")
+    if not binario:
+        print("no encuentro ansible-playbook en el PATH: el motor lo necesita para ejecutar.")
+        return 127
+    orden = [binario, "-i", "localhost,", "-c", "local", str(MOTOR / "playbooks" / playbook)]
+    for clave, valor in extra.items():
+        orden += ["-e", f"{clave}={valor}"]
+    os.environ["ANSIBLE_FILTER_PLUGINS"] = str(MOTOR / "filter_plugins")
+    os.environ["ANSIBLE_HOST_KEY_CHECKING"] = "False"
+    os.environ.setdefault("ANSIBLE_LOCALHOST_WARNING", "False")
+    os.environ.setdefault("ANSIBLE_INVENTORY_UNPARSED_WARNING", "False")
+    with log.open("w") as salida:
+        salida.write(" ".join(orden) + "\n\n")
+        proceso = subprocess.Popen(orden, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                   text=True, bufsize=1)
+        assert proceso.stdout is not None
+        for linea in proceso.stdout:
+            print(linea, end="")
+            salida.write(linea)
+        return proceso.wait()
+
+
+def plan_json(lab: str, log: pathlib.Path) -> dict | None:
+    import json
+
+    carpeta = pathlib.Path(tempfile.mkdtemp(prefix="netlabs-", dir=os.environ.get("TMPDIR")))
+    destino = carpeta / "plan.json"
+    codigo = ansible("plan.yml", {"netlabs_lab": lab, "netlabs_plan_out": destino}, log)
+    if codigo != 0 or not destino.exists():
+        return None
+    return json.loads(destino.read_text())
+
+
+class Reenvios:
+    """Un reenvío SSH por router: el puerto local se deriva de su vmid.
+
+    Es el camino declarado: la sesión SSH termina en el invitado de gestión y es él
+    quien enruta hacia el router. No se salta por dentro de ningún router.
+    """
+
+    def __init__(self, clave: pathlib.Path, puerto_ssh: int):
+        self.clave = clave
+        self.puerto_ssh = puerto_ssh
+        self.procesos: list[subprocess.Popen] = []
+        self.puertos: list[int] = []
+
+    def abrir(self, destinos: list[dict]) -> None:
+        for destino in destinos:
+            local = identity.tunnel_port(int(destino["vmid"]))
+            if not _escucha(local) and not _ocupado(local):
+                proceso = subprocess.Popen(
+                    ["ssh", "-i", str(self.clave), "-p", str(self.puerto_ssh),
+                     "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+                     "-o", "UserKnownHostsFile=/dev/null", "-o", "ExitOnForwardFailure=yes",
+                     "-N", "-L", f"{local}:{destino['address']}:80", "root@127.0.0.1"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                )
+                self.procesos.append(proceso)
+                self.puertos.append(local)
+            elif _escucha(local):
+                self.puertos.append(local)
+        for local in self.puertos:
+            _esperar_puerto(local)
+
+    def cerrar(self) -> None:
+        for proceso in self.procesos:
+            proceso.terminate()
+        for proceso in self.procesos:
+            try:
+                proceso.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proceso.kill()
+
+
+def _escucha(puerto: int) -> bool:
+    with socket.socket() as s:
+        s.settimeout(0.4)
+        return s.connect_ex(("127.0.0.1", puerto)) == 0
+
+
+def _ocupado(puerto: int) -> bool:
+    try:
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", puerto))
+            return False
+    except OSError:
+        return True
+
+
+def _esperar_puerto(puerto: int, segundos: float = 12.0) -> None:
+    final = time.time() + segundos
+    while time.time() < final:
+        if _escucha(puerto):
+            return
+        time.sleep(0.4)
+    print(f"aviso: el reenvío al puerto {puerto} no llegó a escuchar; el router dirá por qué.")
+
+
+def verbo_check() -> int:
+    return checks.ejecutar()
+
+
+def verbo_docs(comprobar: bool) -> int:
+    env = entorno()
+    codigo = 0
+    for ruta in sorted((RAIZ / "labs").glob("*/*.yml")):
+        codigo |= docs_mod.escribir(ruta.parent.name, env, comprobar)
+    return codigo
+
+
+def verbo_plan(lab: str) -> int:
+    log = log_de("plan", lab)
+    codigo = ansible("plan.yml", {"netlabs_lab": lab}, log)
+    print(f"\ninforme: {log.relative_to(RAIZ)}")
+    return codigo
+
+
+def verbo_apply(lab: str) -> int:
+    env = entorno()
+    log = log_de("apply", lab)
+    plan = plan_json(lab, log_de("plan", lab))
+    if plan is None:
+        print("el plan no salió: no se aplica nada.")
+        return 1
+    clave = pathlib.Path(env["management"]["tunnel"]["key"]).expanduser()
+    reenvios = Reenvios(clave, env["management"]["tunnel"]["local_ssh_port"])
+    try:
+        reenvios.abrir(plan.get("tunnel_forwards") or [])
+        codigo = ansible("apply.yml", {"netlabs_lab": lab}, log)
+    finally:
+        reenvios.cerrar()
+    print(f"\ninforme: {log.relative_to(RAIZ)}")
+    return codigo
+
+
+def verbo_destroy(lab: str) -> int:
+    log = log_de("destroy", lab)
+    codigo = ansible("destroy.yml", {"netlabs_lab": lab}, log)
+    print(f"\ninforme: {log.relative_to(RAIZ)}")
+    return codigo
+
+
+def _clave_del_sitio(env: dict, log: pathlib.Path) -> pathlib.Path:
+    clave = pathlib.Path(env["management"]["tunnel"]["key"]).expanduser()
+    clave.parent.mkdir(parents=True, exist_ok=True)
+    if not clave.exists():
+        codigo = subprocess.call(["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "netlabs-tunnel",
+                                  "-f", str(clave)], stdout=log.open("a"), stderr=subprocess.STDOUT)
+        if codigo != 0:
+            raise SystemExit("no se pudo crear la clave del túnel")
+    autorizadas = clave.parent / "authorized_keys"
+    linea = (f'restrict,port-forwarding,permitlisten="{env["management"]["tunnel"]["local_ssh_port"]}",'
+             f'permitlisten="{env["management"]["tunnel"]["local_web_port"]}" '
+             + (clave.with_suffix(".pub")).read_text().strip())
+    actual = autorizadas.read_text() if autorizadas.exists() else ""
+    if linea not in actual:
+        with autorizadas.open("a") as fichero:
+            fichero.write(("\n" if actual and not actual.endswith("\n") else "") + linea + "\n")
+    return clave
+
+
+def verbo_apply_site() -> int:
+    import json
+
+    env = entorno()
+    log = log_de("site", None)
+    clave = _clave_del_sitio(env, log)
+    publica = clave.with_suffix(".pub").read_text().strip()
+    carpeta = pathlib.Path(tempfile.mkdtemp(prefix="netlabs-site-", dir=os.environ.get("TMPDIR")))
+    destino = carpeta / "site.json"
+    codigo = ansible("site.yml", {"netlabs_plan_out": destino}, log)
+    if codigo != 0 or not destino.exists():
+        print(f"\ninforme: {log.relative_to(RAIZ)}")
+        return codigo
+
+    sitio = json.loads(destino.read_text())
+    puerto = env["management"]["tunnel"]["local_ssh_port"]
+    if _escucha(puerto):
+        print(f"el camino ya estaba abierto en 127.0.0.1:{puerto}")
+    else:
+        print("abriendo el camino por la consola del invitado de gestión (una sola vez)…")
+        codigo = subprocess.call([sys.executable, str(MOTOR / "tools" / "site_console.py"), str(destino)])
+        if codigo != 0:
+            print("la consola no dejó el túnel en pie: mira el informe.")
+            return codigo
+        final = time.time() + 30
+        while time.time() < final and not _escucha(puerto):
+            time.sleep(1)
+        if not _escucha(puerto):
+            print(f"el túnel no escucha en 127.0.0.1:{puerto}: el invitado no alcanza "
+                  f"{env['management']['tunnel'].get('key') and 'la salida'} (¿tiene salida a internet su red?).")
+            return 1
+    print(f"sitio listo: {sitio['name']} ({sitio['vmid']}) en {sitio['mgmt_address']}, "
+          f"camino en 127.0.0.1:{puerto}")
+    print(f"\ninforme: {log.relative_to(RAIZ)}")
+    return 0
+
+
+USO = """uso:
+  ./netlabs check
+  ./netlabs docs [--check]
+  ./netlabs plan <laboratorio>
+  ./netlabs apply <laboratorio>
+  ./netlabs apply --site
+  ./netlabs destroy <laboratorio>
+"""
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        print(USO)
+        return 2
+    verbo, resto = argv[1], argv[2:]
+    if verbo == "check":
+        return verbo_check()
+    if verbo == "docs":
+        return verbo_docs("--check" in resto)
+    if verbo == "plan" and resto:
+        return verbo_plan(resto[0])
+    if verbo == "apply":
+        return verbo_apply_site() if resto and resto[0] == "--site" else (
+            verbo_apply(resto[0]) if resto else (print(USO) or 2))
+    if verbo == "destroy" and resto:
+        return verbo_destroy(resto[0])
+    print(USO)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

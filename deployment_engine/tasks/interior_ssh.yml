@@ -1,0 +1,22 @@
+# PROPÓSITO:   la única puerta a un interior Linux: SSH a su dirección, con el salto
+#              hecho por el servicio de gestión (nunca por dentro de un router).
+# INVARIANTES: la clave y el puerto del túnel salen de netlabs.yml; la dirección es la
+#              declarada, no la inventada.
+#              Una lectura no cambia nada (`changed_when: false`).
+# VER:         docs/diseno.md §4.3
+
+- name: "SSH · {{ interior_descripcion | default(objetivo) }}"
+  ansible.builtin.command:
+    argv: >-
+      {{ ['ssh', '-i', clave, '-p', puerto | string,
+          '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no',
+          '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR',
+          '-o', 'ProxyCommand=ssh -i ' ~ clave ~ ' -p ' ~ puerto | string ~
+                ' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -W %h:%p root@127.0.0.1',
+          'root@' ~ objetivo] + comando }}
+  register: interior
+  changed_when: false
+
+- name: "SSH · lo que dijo {{ objetivo }}"
+  ansible.builtin.debug:
+    var: interior.stdout_lines

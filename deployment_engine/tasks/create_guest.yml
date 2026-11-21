@@ -1,0 +1,33 @@
+# PROPÓSITO:   hacer nacer un invitado con su cuerpo calculado y esperar a que la
+#              tarea del hipervisor termine bien.
+# INVARIANTES: el cuerpo lo compone `netlabs_create_body` (un solo sitio); aquí no se
+#              decide ningún valor.
+# VER:         deployment_engine/filter_plugins/netlabs.py
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: POST
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if guest.guest == 'lxc' else 'qemu' }}"
+    pve_body: "{{ guest | netlabs_create_body(env, plan.pool, ssh_public_key | default(omit)) }}"
+    pve_do: "crear {{ guest.name }} ({{ guest.vmid }})"
+    pve_status: [200]
+
+- name: "PVE · esperar a que exista {{ guest.name }}"
+  include_tasks: wait_task.yml
+  vars:
+    upid: "{{ pve_r.json.data }}"
+    pve_do: "crear {{ guest.name }} ({{ guest.vmid }})"
+
+- name: "arrancar {{ guest.name }}"
+  include_tasks: pve.yml
+  vars:
+    pve_method: POST
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if guest.guest == 'lxc' else 'qemu' }}/{{ guest.vmid }}/status/start"
+    pve_do: "arrancar {{ guest.name }} ({{ guest.vmid }})"
+    pve_status: [200]
+
+- name: "PVE · esperar a que arranque {{ guest.name }}"
+  include_tasks: wait_task.yml
+  vars:
+    upid: "{{ pve_r.json.data }}"
+    pve_do: "arrancar {{ guest.name }} ({{ guest.vmid }})"

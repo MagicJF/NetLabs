@@ -9,3 +9,6 @@ labs/*/logs/
 __pycache__/
 *.pyc
 .venv/
+
+# informes de ejecución del motor
+deployment_engine/logs/

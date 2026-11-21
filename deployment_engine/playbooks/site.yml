@@ -1,0 +1,98 @@
+# PROPÓSITO:   `apply --site`: el servicio de gestión, que no es de ningún laboratorio
+#              y sobrevive a todos. Crea el puente de gestión (si no está), el pool del
+#              sitio y el invitado persistente con su dirección derivada.
+# INVARIANTES: el puente de gestión y el invitado llevan la marca del sitio: si existe
+#              un puente con ese nombre y sin la marca, es de otro y se para.
+#              No se toca ningún pool de laboratorio.
+# VER:         docs/diseno.md §3.4, §9; docs/decisiones/0002
+
+- name: netlabs · sitio
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    raiz: "{{ playbook_dir | dirname | dirname }}"
+    env: "{{ lookup('file', raiz ~ '/netlabs.yml') | from_yaml }}"
+    secrets: "{{ lookup('file', raiz ~ '/secrets.yml') | from_yaml }}"
+    plan: {pool: "{{ env.management.pool }}"}
+    marca: "netlabs site=management"
+    publica: "{{ lookup('file', (env.management.tunnel.key | expanduser) ~ '.pub') }}"
+  tasks:
+    - include_tasks: ../tasks/world.yml
+
+    - name: sitio · derivar su identidad
+      ansible.builtin.set_fact:
+        sitio: "{{ world | netlabs_site(env) }}"
+        puente: "{{ world.bridges | selectattr('iface', 'equalto', env.management.bridge) | list }}"
+
+    - name: "sitio · {{ sitio.name }} {{ sitio.vmid }} en {{ sitio.mgmt_address }}"
+      ansible.builtin.debug:
+        msg:
+          - "puente {{ env.management.bridge }} ({{ 'ya está' if puente else 'se crea' }})"
+          - "pool {{ env.management.pool }}"
+          - "invitado {{ sitio.name }} vmid {{ sitio.vmid }} dirección {{ sitio.mgmt_address }} ({{ 'ya está' if sitio.exists else 'se crea' }})"
+
+    - name: sitio · el puente existe y no es nuestro
+      ansible.builtin.fail:
+        msg: >-
+          {{ env.management.bridge }} ya existe y no lleva la marca '{{ marca }}'
+          ({{ puente[0].comments | default('sin comentario') }}). Es de otro: el motor
+          no lo toca. Elige otro puente en netlabs.yml o retíralo a mano.
+      when: puente | length > 0 and marca not in (puente[0].comments | default(''))
+
+    - include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: POST
+        pve_path: "/nodes/{{ env.proxmox.node }}/network"
+        pve_body: {iface: "{{ env.management.bridge }}", type: bridge, autostart: 1, comments: "{{ marca }}"}
+        pve_do: "crear el puente de gestión"
+        pve_status: [200]
+      when: puente | length == 0
+
+    - include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: PUT
+        pve_path: "/nodes/{{ env.proxmox.node }}/network"
+        pve_do: "aplicar las redes del nodo"
+        pve_status: [200]
+      when: puente | length == 0
+
+    - include_tasks: ../tasks/wait_task.yml
+      vars:
+        upid: "{{ pve_r.json.data }}"
+        pve_do: "aplicar las redes del nodo"
+      when: puente | length == 0
+
+    - include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: POST
+        pve_path: /pools
+        pve_body: {poolid: "{{ env.management.pool }}", comment: "{{ marca }}"}
+        pve_do: "crear el pool del sitio"
+      when: env.management.pool not in (world.pools | default([]))
+
+    - include_tasks: ../tasks/create_guest.yml
+      vars:
+        guest: "{{ sitio }}"
+        ssh_public_key: "{{ publica }}"
+      when: not sitio.exists
+
+    - include_tasks: ../tasks/wait_running.yml
+      vars:
+        guest: "{{ sitio }}"
+      when: sitio.exists
+
+    - name: guardar la identidad del sitio para el paso de consola
+      ansible.builtin.copy:
+        content: "{{ sitio | to_nice_json }}"
+        dest: "{{ netlabs_plan_out }}"
+        mode: "0600"
+      # Es un artefacto de esta ejecución (un tmpdir nuevo por invocación), no un
+      # cambio en el hipervisor: no debe contar como «changed» ni romper la
+      # idempotencia del segundo apply.
+      changed_when: false
+      when: netlabs_plan_out is defined
+
+    - name: sitio · el invitado está en pie
+      ansible.builtin.debug:
+        msg: "{{ sitio.name }} ({{ sitio.vmid }}) en {{ sitio.mgmt_address }}"

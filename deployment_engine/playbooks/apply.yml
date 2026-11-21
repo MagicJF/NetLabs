@@ -1,0 +1,156 @@
+# PROPÓSITO:   `apply`: converger el laboratorio declarado sobre el mundo leído.
+#              Etapas: pool y puentes -> invitados -> arranque del router -> REST ->
+#              direcciones de los puestos -> comprobación del cruce.
+# INVARIANTES: si el camino hacia la gestión no está abierto, para y dice qué falta:
+#              no lo abre él (eso es `apply --site`).
+#              Sólo actúa sobre el pool y los puentes con la marca del laboratorio.
+#              La segunda pasada no escribe: cada escritura está condicionada a la
+#              diferencia calculada.
+# VER:         docs/diseno.md §7, §8
+
+- name: netlabs · apply
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    raiz: "{{ playbook_dir | dirname | dirname }}"
+    env: "{{ lookup('file', raiz ~ '/netlabs.yml') | from_yaml }}"
+    secrets: "{{ lookup('file', raiz ~ '/secrets.yml') | from_yaml }}"
+    lab: "{{ lookup('file', raiz ~ '/labs/' ~ netlabs_lab ~ '/' ~ netlabs_lab ~ '.yml') | from_yaml }}"
+    clave: "{{ lookup('env', 'HOME') }}/.ssh/netlabs_tunnel"
+    puerto: "{{ env.management.tunnel.local_ssh_port }}"
+    crear: "{{ plan.steps | selectattr('op', 'equalto', 'guest_create') | map(attribute='guest.vmid') | list }}"
+  tasks:
+    - include_tasks: ../tasks/world.yml
+
+    - name: netlabs · calcular la diferencia
+      ansible.builtin.set_fact:
+        plan: "{{ world | netlabs_plan(lab, env) }}"
+
+    - name: "apply · {{ plan.lab }}"
+      ansible.builtin.debug:
+        msg: "{{ ['pool ' ~ plan.pool] + plan.effects }}"
+
+    - name: apply · lo que se va a crear en esta pasada
+      ansible.builtin.set_fact:
+        nuevos: "{{ plan.steps | selectattr('op', 'equalto', 'guest_create') | map(attribute='guest.vmid') | list }}"
+        puentes: "{{ plan.steps | selectattr('op', 'equalto', 'bridge_ensure') | list }}"
+
+    # --- el camino ---------------------------------------------------------
+    - name: apply · el camino hacia la gestión tiene que estar abierto
+      ansible.builtin.command:
+        argv: [ssh, -i, "{{ clave }}", -p, "{{ puerto }}", -o, BatchMode=yes,
+               -o, StrictHostKeyChecking=no, -o, "UserKnownHostsFile=/dev/null",
+               -o, ConnectTimeout=8, root@127.0.0.1, true]
+      register: camino
+      changed_when: false
+      failed_when: false
+
+    - name: apply · no hay camino hacia la red de gestión
+      ansible.builtin.fail:
+        msg: >-
+          No hay camino hacia la red de gestión por 127.0.0.1:{{ puerto }}
+          ({{ camino.stderr | trim }}). El servicio de gestión no está en pie:
+          ejecuta `./netlabs apply --site` y vuelve.
+      when: camino.rc != 0
+
+    # --- el pool y los puentes --------------------------------------------
+    - include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: POST
+        pve_path: /pools
+        pve_body: {poolid: "{{ plan.pool }}", comment: "netlabs lab={{ plan.lab }}"}
+        pve_do: "crear el pool {{ plan.pool }}"
+      when: plan.steps | selectattr('op', 'equalto', 'pool_ensure') | list | length > 0
+
+    - include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: POST
+        pve_path: "/nodes/{{ env.proxmox.node }}/network"
+        pve_body: {iface: "{{ item.bridge }}", type: bridge, autostart: 1, comments: "{{ item.comment }}"}
+        pve_do: "crear el puente {{ item.bridge }}"
+        pve_status: [200]
+      loop: "{{ puentes }}"
+      loop_control: {label: "{{ item.bridge }}"}
+      when: puentes | length > 0
+
+    - include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: PUT
+        pve_path: "/nodes/{{ env.proxmox.node }}/network"
+        pve_do: "aplicar las redes del nodo"
+        pve_status: [200]
+      when: puentes | length > 0
+
+    - include_tasks: ../tasks/wait_task.yml
+      vars:
+        upid: "{{ pve_r.json.data }}"
+        pve_do: "aplicar las redes del nodo"
+      when: puentes | length > 0
+
+    # --- los invitados -----------------------------------------------------
+    - name: apply · los invitados que faltan
+      include_tasks: ../tasks/create_guest.yml
+      loop: "{{ plan.nodes }}"
+      loop_control: {label: "{{ item.name }}"}
+      vars:
+        guest: "{{ item }}"
+      when: item.vmid in nuevos
+
+    - name: apply · los invitados que ya existían tienen que estar en pie
+      include_tasks: ../tasks/wait_running.yml
+      loop: "{{ plan.nodes }}"
+      loop_control: {label: "{{ item.name }}"}
+      vars:
+        guest: "{{ item }}"
+      when: item.vmid not in nuevos
+
+    # --- el router ---------------------------------------------------------
+    - name: apply · el arranque de los routers
+      include_tasks: ../tasks/bootstrap_router.yml
+      loop: "{{ plan.nodes | selectattr('management') | list }}"
+      loop_control: {label: "{{ item.name }}"}
+      vars:
+        guest: "{{ item }}"
+      when: item.vmid in nuevos
+
+    # --- el interior del router, por REST ---------------------------------
+    - name: apply · el interior de los routers
+      include_tasks: ../tasks/ros.yml
+      loop: "{{ plan.nodes | selectattr('management') | list }}"
+      loop_control: {label: "{{ item.name }}"}
+      vars:
+        router: "{{ item }}"
+        ros_user: "{{ (item.configure.users | default([{'name': 'admin'}]))[0].name }}"
+
+    # --- los puestos toman dirección --------------------------------------
+    - name: "PVE · leer la dirección que tomó {{ item.name }}"
+      ansible.builtin.uri:
+        url: "https://{{ secrets.pve_nodo }}:{{ secrets.pve_puerto }}/api2/json/nodes/{{ env.proxmox.node }}/lxc/{{ item.vmid }}/interfaces"
+        method: GET
+        headers:
+          Authorization: "PVEAPIToken={{ secrets.pve_token_id }}={{ secrets.pve_token_secreto }}"
+        validate_certs: "{{ env.proxmox.verify_tls }}"
+        status_code: [200]
+        timeout: 30
+      register: leases
+      loop: "{{ plan.nodes | rejectattr('management') | list }}"
+      loop_control: {label: "{{ item.name }}"}
+      until: (leases.content | default('')) is search('"inet"')
+      retries: 30
+      delay: 4
+      changed_when: false
+      failed_when: false
+
+    - name: apply · un puesto se quedó sin dirección
+      ansible.builtin.assert:
+        that: (item.content | default('')) is search('"inet"')
+        fail_msg: >-
+          {{ item.item.name }} no tiene dirección después de esperar: el router no le
+          sirvió una concesión. No se sigue con un laboratorio donde un puesto no habla.
+      loop: "{{ leases.results }}"
+      loop_control: {label: "{{ item.item.name }}"}
+
+    - name: apply · el laboratorio está desplegado
+      ansible.builtin.debug:
+        msg: "{{ plan.nodes | map(attribute='name') | list }} en {{ plan.pool }}"
