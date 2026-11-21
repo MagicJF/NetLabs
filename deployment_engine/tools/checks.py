@@ -118,6 +118,31 @@ def comprobar_espacios(env) -> list[str]:
     return errores
 
 
+def comprobar_slots(env) -> list[str]:
+    """Dos laboratorios no pueden compartir slot: el slot va dentro del nombre de cada cable.
+
+    Un cable se llama por sus dos puntas (`rt01p02_sw01p01`) y el número de laboratorio
+    vive en el identificador del nodo. Si dos laboratorios comparten slot, sus cables
+    comparten nombre y el segundo `apply` se encuentra puentes ajenos con su propio
+    nombre. El slot es la única defensa contra eso, así que se comprueba aquí.
+    """
+    errores = []
+    vistos = {}
+    for nombre, (ruta, lab) in laboratorios().items():
+        slot = lab.get("slot", 0)
+        if not isinstance(slot, int) or not 0 <= slot <= 9:
+            errores.append(f"{ruta.relative_to(RAIZ)}: slot {slot!r} fuera de 0-9")
+            continue
+        if slot in vistos:
+            errores.append(
+                f"{ruta.relative_to(RAIZ)}: slot {slot} ya lo usa '{vistos[slot]}'; "
+                "dos laboratorios con el mismo slot comparten nombres de cable"
+            )
+        else:
+            vistos[slot] = nombre
+    return errores
+
+
 def comprobar_documentacion(env) -> list[str]:
     errores = []
     for nombre, (ruta, lab) in laboratorios().items():
@@ -225,6 +250,7 @@ def ejecutar() -> int:
         ("YAML válido y sin claves duplicadas", lambda: comprobar_yaml()),
         ("declaraciones del vocabulario cerrado", lambda: comprobar_declaraciones(env)),
         ("espacios de direcciones disjuntos", lambda: comprobar_espacios(env)),
+        ("slots de laboratorio distintos", lambda: comprobar_slots(env)),
         ("documentación generada al día", lambda: comprobar_documentacion(env)),
         ("el motor no conoce ningún laboratorio", lambda: comprobar_pureza(env)),
         ("enlaces de la documentación", comprobar_enlaces),

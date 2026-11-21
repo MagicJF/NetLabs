@@ -52,13 +52,20 @@ ejecuta; es la única puerta que se abre antes de que exista red, y se cierra en
    que lleva su marca. Todo lo demás es de otro y no se toca.
 7. **No se configura fuera de las áreas que el laboratorio declara.** Dentro de un área, lo que sobra
    se quita; fuera, no se entra. Sin esta frontera, el motor se convierte en un `ssh` con esteroides.
+8. **El hipervisor no conmuta: un puente es un cable tonto.** Un `bridge` de Proxmox une exactamente
+   dos puertos y se llama por sus dos puntas, `<A-end>_<Z-end>`, cada una `<rol><id>p<puerto>` (por
+   ejemplo `rt01p02_sw01p01`, 15 caracteres como tope). No lleva CIDR, ni puerta, ni MAC, ni DHCP, ni
+   VLAN: esas cosas son del puerto, no del cable. Si un laboratorio necesita conmutar, se declara un
+   nodo `switch` (un RouterOS) y se cablea como cualquier otro equipo. El número de laboratorio va
+   dentro del identificador de cada nodo (slot + ordinal), no como sufijo del cable: así dos labs no
+   comparten nombres y el cable sigue cabiendo en 15 caracteres.
 
 ## 4. Quién pone los números
 
-El laboratorio declara **qué** quiere: roles, tipo de equipo, redes con nombre y CIDR, recursos, y qué
-configurar dentro. El motor decide **cuánto y cuál**: el identificador (el menor libre del clúster), el
-nombre (`<tipo>-<alias>`), la MAC, la dirección de gestión y la descripción que dice de quién es cada
-invitado.
+El laboratorio declara **qué** quiere: roles, tipo de equipo, puertos, cables (qué puerto une con qué
+puerto) y qué configurar dentro. El motor decide **cuánto y cuál**: el identificador (el menor libre
+del clúster), el nombre (`<tipo>-<alias>`), el nombre de cada cable, la MAC, la dirección de gestión y
+la descripción que dice de quién es cada invitado.
 
 Esa derivación es una función pura —(lo que hay en el mundo, lo que pides) → identidad— y por eso se
 prueba con casos inventados, sin hipervisor. Si la tocas, la prueba va en el mismo commit.

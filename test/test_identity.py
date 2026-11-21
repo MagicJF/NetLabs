@@ -123,8 +123,37 @@ class ElPlan(unittest.TestCase):
     def test_plan_marca_los_puentes_con_el_laboratorio(self):
         plan = identity.plan(mundo(), laboratorio(), entorno())
         self.assertEqual({s["bridge"]: s["comment"] for s in plan["steps"] if s["op"] == "bridge_ensure"},
-                         {"vmb_uno_lan1": "netlabs lab=uno network=lan1",
-                          "vmb_uno_lan2": "netlabs lab=uno network=lan2"})
+                         {"rt01p01_ws01p01": "netlabs lab=uno space=10.44.1.0/24 cable=rt01p01_ws01p01",
+                          "rt01p02_ws02p01": "netlabs lab=uno space=10.44.2.0/24 cable=rt01p02_ws02p01"})
+
+    def test_un_puente_es_un_cable_entre_dos_puntas_y_nada_mas(self):
+        # El nombre del puente son sus dos puntas, y el puente no lleva ni CIDR,
+        # ni puerta, ni MAC: es un cable tonto. Un puente con dirección sería un
+        # switch, y el motor no crea switches.
+        plan = identity.plan(mundo(), laboratorio(), entorno())
+        puentes = [s for s in plan["steps"] if s["op"] == "bridge_ensure"]
+        self.assertEqual([s["bridge"] for s in puentes], ["rt01p01_ws01p01", "rt01p02_ws02p01"])
+        for step in puentes:
+            # Ni `cidr`, ni `gateway`, ni `mac`: el puente es el cable y nada más.
+            self.assertEqual(set(step), {"op", "bridge", "comment"})
+        for node in plan["nodes"]:
+            for iface in node["interfaces"]:
+                if iface["network"] is not None:
+                    self.assertEqual(len(iface["bridge"]), 15)
+                    self.assertIn("_", iface["bridge"])
+
+    def test_el_slot_separa_los_nombres_de_dos_laboratorios(self):
+        # Dos laboratorios con la misma topología en el mismo hipervisor no
+        # comparten un nombre de cable: el slot va dentro del identificador.
+        primero = identity.plan(mundo(), laboratorio(), entorno())
+        otro = copy.deepcopy(laboratorio())
+        otro["lab"] = "dos"
+        otro["slot"] = 1
+        segundo = identity.plan(mundo(), otro, entorno())
+        cables_uno = {s["bridge"] for s in primero["steps"] if s["op"] == "bridge_ensure"}
+        cables_dos = {s["bridge"] for s in segundo["steps"] if s["op"] == "bridge_ensure"}
+        self.assertEqual(cables_uno & cables_dos, set())
+        self.assertIn("rt11p01_ws11p01", cables_dos)
 
     def test_el_router_nace_con_la_pata_de_gestion_la_ultima(self):
         plan = identity.plan(mundo(), laboratorio(), entorno())
@@ -179,26 +208,46 @@ class Rechazos(unittest.TestCase):
             identity.plan(mundo(), lab, entorno())
 
     def test_rechaza_pisar_el_espacio_de_otro_laboratorio_vivo(self):
-        puentes = [{"iface": "vmb_otro_lan1", "type": "bridge", "cidr": "10.44.1.1/24",
-                    "comments": "netlabs lab=otro network=lan1"}]
+        # El cable del otro laboratorio no lleva CIDR en el puente: el espacio
+        # viaja en el comentario, que es lo único que se puede leer de un cable.
+        puentes = [{"iface": "rt01p01_ws01p01", "type": "bridge", "cidr": None,
+                    "comments": "netlabs lab=otro space=10.44.1.0/24 cable=rt01p01_ws01p01"}]
         with self.assertRaisesRegex(identity.LabError, "se pisa con el de 'otro'"):
             identity.plan(mundo(bridges=puentes), laboratorio(), entorno())
 
+    def test_retira_un_cable_marcado_que_ya_no_se_declara(self):
+        # La diferencia va en los dos sentidos también para los cables: un puente
+        # con la marca de este laboratorio que ya no une nada es basura suya.
+        puentes = [{"iface": "rt01p09_ws09p09", "type": "bridge", "cidr": None,
+                    "comments": "netlabs lab=uno space=10.44.9.0/24 cable=rt01p09_ws09p09"}]
+        plan = identity.plan(mundo(bridges=puentes), laboratorio(), entorno())
+        retiros = [s for s in plan["steps"] if s["op"] == "bridge_destroy"]
+        self.assertEqual([s["bridge"] for s in retiros], ["rt01p09_ws09p09"])
+
+    def test_no_toca_un_puente_sin_marca_aunque_sobre(self):
+        # Un puente sin marca no es de este laboratorio: puede ser del hipervisor
+        # o de otro. Retirarlo sería borrar lo que no está declarado.
+        puentes = [{"iface": "vmbr30", "type": "bridge", "cidr": None, "comments": ""}]
+        plan = identity.plan(mundo(bridges=puentes), laboratorio(), entorno())
+        self.assertEqual([s for s in plan["steps"] if s["op"] == "bridge_destroy"], [])
+
     def test_rechaza_un_puente_ajeno_con_el_mismo_nombre(self):
-        puentes = [{"iface": "vmb_uno_lan1", "type": "bridge", "cidr": None, "comments": ""}]
+        puentes = [{"iface": "rt01p01_ws01p01", "type": "bridge", "cidr": None, "comments": ""}]
         with self.assertRaisesRegex(identity.LabError, "no es suyo"):
             identity.plan(mundo(bridges=puentes), laboratorio(), entorno())
 
-    def test_rechaza_un_nombre_de_puente_que_no_cabe(self):
-        lab = {
-            "lab": "uno",
-            "address_spaces": ["10.44.0.0/16"],
-            "networks": [{"name": "larguisima", "address": "10.44.1.0/24"}],
-            "nodes": [{"role": "srv", "type": "server", "stage": 1,
-                       "networks": ["larguisima"], "address": "dhcp",
-                       "resources": {"cores": 1, "memory": 256, "disk": 2}}],
-        }
-        with self.assertRaisesRegex(identity.LabError, "15 caracteres"):
+    def test_rechaza_un_puerto_sin_cable(self):
+        # Un puerto declarado sin cable no es una red: es un olvido. El plan lo
+        # dice en vez de dejar la interfaz colgando de un puente que no existe.
+        lab = copy.deepcopy(laboratorio())
+        lab["links"] = lab["links"][:1]
+        with self.assertRaisesRegex(identity.LabError, "no está en ningún cable"):
+            identity.plan(mundo(), lab, entorno())
+
+    def test_rechaza_un_cable_que_mezcla_dos_redes(self):
+        lab = copy.deepcopy(laboratorio())
+        lab["links"][0]["z"] = {"node": "pc-2", "port": 1}
+        with self.assertRaisesRegex(identity.LabError, "misma red"):
             identity.plan(mundo(), lab, entorno())
 
     def test_rechaza_cambiar_de_contenedor_a_maquina(self):

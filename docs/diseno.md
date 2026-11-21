@@ -312,6 +312,8 @@ se ponen al aplicar el laboratorio.
 - **Los puentes se van con el laboratorio**, igual que sus invitados: se crean con la marca de
   propiedad, y `destroy` se lleva los que llevan la marca y ya no usa nadie de fuera. Nada se
   acumula entre despliegues.
+- **Un puente no es una red: es un cable.** El hipervisor no hace de conmutador. Lo que aquí se
+  llama puente es el cable tonto que une dos puertos, y se explica en §3.9.
 
 ### 3.6. La consola serie: puerta de emergencia
 
@@ -412,6 +414,51 @@ invitados:
 - **Leer se hace con el permiso mínimo** (`VM.GuestAgent.Audit`), y el token está acotado al
   pool del laboratorio, de modo que no alcanza a nada de fuera de él.
 
+### 3.9. El cableado: un puente es un cable, no un conmutador
+
+**El hipervisor no conmuta nada.** Un puente de Proxmox es, en este diseño, un **cable tonto**:
+une exactamente dos puertos y transporta lo que le metan. No tiene dirección, ni puerta, ni MAC,
+ni DHCP, ni VLAN: si tuviera cualquiera de esas cosas, sería un conmutador, y el motor no crea
+conmutadores.
+
+**El nombre del cable son sus dos puntas.** Se nombra con lo que une, en el orden
+`<A-end>_<Z-end>`, y cada punta es `<código-de-rol><id>p<puerto>`:
+
+```
+rt01p01_ws01p01     router 01, puerto 01  ->  workstation 01, puerto 01
+fw01p02_rt01p01     firewall 01, puerto 02 -> router 01, puerto 01
+sw01p03_ws01p01     switch 01, puerto 03  ->  workstation 01, puerto 01
+```
+
+Cada punta mide siempre 7 caracteres (código de dos letras, identificador de dos cifras, `p` y
+puerto de dos cifras), así que el nombre mide 15 y **cabe en el tope de 15 caracteres de un
+nombre de interfaz en Linux**. El nombre del cable dice qué une sin consultar la declaración: es
+la mitad de la documentación.
+
+**Por qué el identificador lleva el slot.** Un cable no puede llamarse
+`rt01p02_sw01p01_XX` porque no cabe. El número de laboratorio va **dentro** del identificador de
+cada nodo: dos cifras, **slot + ordinal dentro del tipo**. Slot 0 y primer router -> `01`; slot 1
+y primer router -> `11`. Así dos laboratorios con la misma topología en el mismo hipervisor no
+comparten un solo nombre de cable, sin sufijos y sin alargar el nombre. El precio, dicho claro:
+**diez slots por hipervisor** (0-9) y **nueve nodos por tipo y laboratorio**; al agotarse, el
+motor lo dice en vez de repetir un nombre.
+
+**El comentario del puente dice de quién es.** Como el cable no puede llevar CIDR, su marca vive
+en el comentario: `netlabs lab=<lab> space=<cidr> cable=<nombre>`. Es lo que permite a `destroy`
+retirar sólo lo suyo y a otro laboratorio detectar que ese nombre ya está ocupado. Un puente con
+el nombre de un cable de este laboratorio y sin su marca **no se toca**: es de otro.
+
+**Funciones de conmutación: se declaran, no se improvisan.** Cuando un laboratorio necesita
+conmutar (VLAN, agregación, varios puertos en un mismo dominio), se declara un nodo de tipo
+`switch`: un **RouterOS** que hace ese papel. Sus puertos se conectan con cables a los demás
+equipos, igual que cualquier otro. El hipervisor nunca conmuta; el que conmuta es un equipo del
+laboratorio, y por tanto se puede leer, configurar y destruir como cualquier otro.
+
+**Lo que esto implica.** Un puerto declarado sin cable es un error, no una red implícita; un
+cable que une dos redes distintas es un error, porque eso es enrutar, y enrutar es un router.
+Cambiar el cableado de un invitado que ya existe no se hace en caliente: se destruye y se vuelve
+a crear, y el plan lo dice antes de tocar nada.
+
 ---
 
 ## 4. Dos clases de nodo, y cómo se llega a cada uno
@@ -421,9 +468,10 @@ decisiones.
 
 ### 4.1. Equipos de red (`type: router`, `type: switch`)
 
-Son los que **hacen la red**: routers y conmutadores. Nacen con **una pata más** en la red de
-gestión —la última, para no renumerar las interfaces declaradas— y su dirección de gestión se
-deriva del identificador.
+Son los que **hacen la red**: routers y conmutadores. **El conmutador es un RouterOS** que hace
+funciones de conmutación, no un puente del hipervisor: se declara como cualquier otro equipo y se
+conecta con cables (§3.9). Nacen con **una pata más** en la red de gestión —la última, para no
+renumerar las interfaces declaradas— y su dirección de gestión se deriva del identificador.
 
 Por ahí los alcanza **Ansible** (entrando por el servicio persistente, §3.4) y por ahí los
 observa **NetXMS**.

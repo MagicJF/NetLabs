@@ -5,10 +5,20 @@
 #              Nada de `sleep`: se sondea el estado con tope.
 # VER:         docs/diseno.md §7; AGENTS.md §3.5, §3.6
 
+# Dos caminos llegan aquí con formas distintas: el retiro de `destroy` trae el
+# recurso crudo de `/cluster/resources` (que dice `type: qemu|lxc`), y el retiro de
+# lo que sobra en `apply` trae un paso del plan (que dice `guest: qemu|lxc`). Se
+# acepta la clave que exista; `guest.guest` sobre un recurso crudo no existe y
+# revienta con AttributeError, no con un Undefined.
+- name: destroy · qué clase de invitado es
+  ansible.builtin.set_fact:
+    tipo_invitado: "{{ guest['guest'] if 'guest' in guest else guest['type'] }}"
+  changed_when: false
+
 - include_tasks: pve.yml
   vars:
     pve_method: POST
-    pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if guest.guest == 'lxc' else 'qemu' }}/{{ guest.vmid }}/status/stop"
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ tipo_invitado }}/{{ guest.vmid }}/status/stop"
     pve_do: "parar {{ guest.name }} ({{ guest.vmid }})"
     pve_status: [200, 500]
 
@@ -16,7 +26,7 @@
 - include_tasks: pve.yml
   vars:
     pve_method: GET
-    pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if guest.guest == 'lxc' else 'qemu' }}/{{ guest.vmid }}/status/current"
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ tipo_invitado }}/{{ guest.vmid }}/status/current"
     pve_do: "leer el estado de {{ guest.name }}"
     pve_until: "{{ pve_r.json.data.status == 'stopped' }}"
     pve_retries: 30
@@ -26,7 +36,7 @@
   vars:
     pve_method: DELETE
     # purge va en la ruta: la API rechaza un DELETE con cuerpo (medido).
-    pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if guest.guest == 'lxc' else 'qemu' }}/{{ guest.vmid }}?purge=1"
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ tipo_invitado }}/{{ guest.vmid }}?purge=1"
     pve_do: "borrar {{ guest.name }} ({{ guest.vmid }})"
     pve_status: [200]
 

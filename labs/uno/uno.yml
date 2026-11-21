@@ -1,18 +1,23 @@
-# El laboratorio mínimo del diseño (Fase 1, entregable 2): un router, dos redes y
-# dos puestos que toman dirección del router.
+# El laboratorio mínimo del diseño (Fase 1, entregable 2): un router y dos puestos.
+#
+# Un puente ya no es una red compartida: es un CABLE tonto entre dos puertos. El
+# nombre del puente son sus dos puntas (`rt01p01_ws01p01`), y el identificador de
+# cada nodo lleva el slot del laboratorio (slot 0 -> rt01, ws01) para que dos
+# laboratorios con la misma topología no choquen en el mismo hipervisor.
 #
 # No hay un solo número derivado: ni vmid, ni MAC, ni dirección de gestión. El
 # router nace con una pata más en la red de gestión (la última) y la dirección de
 # cada pata de laboratorio se declara por red, no por posición.
 
 lab: uno
+slot: 0                          # el sitio de este laboratorio en el hipervisor
 
 # Lo que este laboratorio puede usar. Ningún otro puede solaparse con esto, y el
 # plan lo comprueba contra lo que ya vive en el hipervisor antes de tocar nada.
 address_spaces:
   - 10.44.0.0/16
 
-# Primero las redes, después los nodos, y los nodos se refieren a ellas por nombre.
+# Planes de direcciones: cómo se numera cada red. Ya no son puentes.
 networks:
   - name: lan1
     address: 10.44.1.0/24
@@ -24,7 +29,7 @@ nodes:
     type: router
     stage: 1
     resources: {cores: 1, memory: 256, disk: 1}
-    networks: [lan1, lan2]        # net0 = lan1, net1 = lan2; la gestión va después
+    networks: [lan1, lan2]        # puerto 1 = lan1, puerto 2 = lan2; la gestión va después
     address: 10.44.1.1/24         # la dirección de su primera pata de laboratorio
     configure:
       identity: {name: rt-edge}
@@ -53,3 +58,11 @@ nodes:
     resources: {cores: 1, memory: 256, disk: 2}
     networks: [lan2]
     address: dhcp
+
+# Cada cable une dos puertos y se convierte en un puente. Es lo único que crea
+# puentes: no hay redes compartidas ni puentes por red.
+links:
+  - a: {node: edge, port: 1}
+    z: {node: pc-1, port: 1}
+  - a: {node: edge, port: 2}
+    z: {node: pc-2, port: 1}

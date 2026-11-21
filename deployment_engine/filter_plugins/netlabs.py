@@ -65,7 +65,9 @@ def _create_body(node, env, pool, ssh_public_key=None):
         "pool": pool,
         # La etiqueta lleva el rol: `/cluster/resources` sí la devuelve, así que el
         # plan reconoce sus invitados sin una llamada de configuración por cada uno.
-        "tags": f"netlabs;role={node['role']}",
+        # Una etiqueta de Proxmox no admite `=`: se separa con guion. El `=` vive
+        # en la descripción, que sí es texto libre.
+        "tags": f"netlabs;role-{node['role']}",
     }
     if node["guest"] == "lxc":
         body.update({

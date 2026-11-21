@@ -35,6 +35,7 @@
       ansible.builtin.set_fact:
         nuevos: "{{ plan.steps | selectattr('op', 'equalto', 'guest_create') | map(attribute='guest.vmid') | list }}"
         puentes: "{{ plan.steps | selectattr('op', 'equalto', 'bridge_ensure') | list }}"
+        puentes_sobrantes: "{{ plan.steps | selectattr('op', 'equalto', 'bridge_destroy') | list }}"
         sobrantes: "{{ plan.steps | selectattr('op', 'equalto', 'guest_destroy') | list }}"
 
     # --- el camino ---------------------------------------------------------
@@ -102,6 +103,34 @@
       loop: "{{ sobrantes }}"
       loop_control: {label: "{{ item.name }} ({{ item.vmid }})"}
       when: sobrantes | length > 0
+
+    # Los cables que ya no se declaran se retiran después de los invitados que
+    # sobraban: si un invitado viejo aún colgaba de un cable viejo, primero se
+    # apaga y se borra, y sólo entonces desaparece el cable.
+    - name: "apply · retirar los cables que ya no se declaran"
+      include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: DELETE
+        pve_path: "/nodes/{{ env.proxmox.node }}/network/{{ item.bridge }}"
+        pve_do: "retirar el cable {{ item.bridge }}"
+        pve_status: [200]
+      loop: "{{ puentes_sobrantes }}"
+      loop_control: {label: "{{ item.bridge }}"}
+      when: puentes_sobrantes | length > 0
+
+    - include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: PUT
+        pve_path: "/nodes/{{ env.proxmox.node }}/network"
+        pve_do: "aplicar las redes del nodo"
+        pve_status: [200]
+      when: puentes_sobrantes | length > 0
+
+    - include_tasks: ../tasks/wait_task.yml
+      vars:
+        upid: "{{ pve_r.json.data }}"
+        pve_do: "aplicar las redes del nodo"
+      when: puentes_sobrantes | length > 0
 
     # --- los invitados -----------------------------------------------------
     - name: apply · los invitados que faltan

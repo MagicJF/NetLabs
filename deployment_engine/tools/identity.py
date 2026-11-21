@@ -22,8 +22,9 @@ import re
 # (server, workstation) no la tiene y se llega a él por su router.
 TYPES = {
     "router": {"code": "rt", "guest": "qemu", "network_device": True, "routes": True},
+    "firewall": {"code": "fw", "guest": "qemu", "network_device": True, "routes": True},
     "switch": {"code": "sw", "guest": "qemu", "network_device": True, "routes": False},
-    "server": {"code": "srv", "guest": "lxc", "network_device": False, "routes": False},
+    "server": {"code": "sv", "guest": "lxc", "network_device": False, "routes": False},
     "workstation": {"code": "ws", "guest": "lxc", "network_device": False, "routes": False},
 }
 
@@ -34,9 +35,11 @@ AREAS = {
     "linux": {"identity", "services"},
 }
 
-LAB_KEYS = {"lab", "address_spaces", "networks", "nodes"}
+LAB_KEYS = {"lab", "slot", "address_spaces", "networks", "nodes", "links"}
 NODE_KEYS = {"role", "type", "stage", "after", "resources", "image", "networks", "address", "configure"}
 NETWORK_KEYS = {"name", "address"}
+LINK_KEYS = {"a", "z"}
+END_KEYS = {"node", "port"}
 
 ROLE_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
@@ -127,6 +130,17 @@ def validate(lab: dict, env: dict) -> None:
     if not isinstance(name, str) or not NAME_RE.match(name):
         raise LabError(f"el nombre del laboratorio {name!r} no vale: minúsculas, números y guiones")
 
+    # El slot es el sitio del laboratorio en el hipervisor. Va dentro del
+    # identificador de cada nodo (dos cifras: slot + ordinal), así que dos
+    # laboratorios con la misma topología no comparten el nombre de un cable.
+    # Un sufijo `_XX` no cabría: el nombre ya mide 15 caracteres.
+    slot = lab.get("slot", 0)
+    if not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot <= 9:
+        raise LabError(
+            f"el 'slot' del laboratorio {name!r} tiene que ser un entero de 0 a 9: "
+            "es la cifra que separa los nombres de dos laboratorios en el mismo hipervisor"
+        )
+
     spaces = lab.get("address_spaces") or []
     if not isinstance(spaces, list) or not spaces:
         raise LabError("'address_spaces' tiene que ser una lista con al menos un CIDR")
@@ -193,6 +207,73 @@ def validate(lab: dict, env: dict) -> None:
                     f"el nodo {node['role']!r} espera a {after!r}, que no está declarado en el laboratorio"
                 )
     _reject_stage_cycles(nodes)
+    _validate_links(lab, slot)
+
+
+def _validate_links(lab: dict, slot: int) -> None:
+    """Cada cable une dos puertos, y cada puerto del laboratorio va en un cable.
+
+    Un puente es un cable tonto: no tiene dirección, ni puerta, ni MAC. Por eso
+    la declaración no puede dejar puertos sueltos —un puerto sin cable no es una
+    red, es un olvido— ni unir dos puertos de redes distintas, que sería un
+    cable que mezcla dos planes de direcciones sin decirlo.
+    """
+    links = lab.get("links")
+    if not isinstance(links, list) or not links:
+        raise LabError(
+            "'links' tiene que ser una lista con al menos un cable: "
+            "cada cable une dos puertos y se convierte en un puente"
+        )
+    by_role = {n["role"]: n for n in lab["nodes"]}
+    used = set()
+    for i, link in enumerate(links):
+        if not isinstance(link, dict):
+            raise LabError(f"el cable {i + 1} tiene que ser un mapa con 'a' y 'z'")
+        extra = set(link) - LINK_KEYS
+        if extra:
+            raise LabError(f"clave desconocida en el cable {i + 1}: {', '.join(sorted(extra))}")
+        if set(link) != LINK_KEYS:
+            raise LabError(f"el cable {i + 1} necesita exactamente 'a' y 'z' (las dos puntas)")
+        ends = []
+        for end in ("a", "z"):
+            body = link[end]
+            if not isinstance(body, dict) or set(body) != END_KEYS:
+                raise LabError(f"la punta {end!r} del cable {i + 1} es {{node, port}}")
+            node = by_role.get(body["node"])
+            if node is None:
+                raise LabError(
+                    f"el cable {i + 1} cita el nodo {body['node']!r}, que no está declarado"
+                )
+            port = body["port"]
+            if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 99:
+                raise LabError(f"el puerto de {body['node']!r} tiene que ser un entero de 1 a 99")
+            if port > len(node["networks"]):
+                raise LabError(
+                    f"el nodo {body['node']!r} declara {len(node['networks'])} puerto(s) "
+                    f"y el cable {i + 1} pide el puerto {port}"
+                )
+            key = (body["node"], port)
+            if key in used:
+                raise LabError(
+                    f"el puerto {port} de {body['node']!r} está en dos cables: cada puerto es un cable"
+                )
+            used.add(key)
+            ends.append((node, port))
+        red_a = ends[0][0]["networks"][ends[0][1] - 1]
+        red_z = ends[1][0]["networks"][ends[1][1] - 1]
+        if red_a != red_z:
+            raise LabError(
+                f"el cable {i + 1} une {ends[0][0]['role']!r} puerto {ends[0][1]} ({red_a}) con "
+                f"{ends[1][0]['role']!r} puerto {ends[1][1]} ({red_z}): las dos puntas tienen que "
+                "estar en la misma red; si quieres unir dos redes, eso es un router, no un cable"
+            )
+    for node in lab["nodes"]:
+        for port in range(1, len(node["networks"]) + 1):
+            if (node["role"], port) not in used:
+                raise LabError(
+                    f"el puerto {port} de {node['role']!r} no está en ningún cable: "
+                    "un puente es un cable, y un puerto sin cable no tiene por dónde ir"
+                )
 
 
 def _validate_node(node: dict, networks: dict, roles: set) -> None:
@@ -383,6 +464,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     """
     validate(lab, env)
     name = lab["lab"]
+    slot = lab.get("slot", 0)
     pool = f"netlabs-lab-{name}"
     management = env["management"]
     mgmt_net = ipaddress.ip_network(management["address_space"], strict=False)
@@ -425,31 +507,49 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         assigned[node["role"]] = vmid
         taken.add(vmid)
 
+    # Los cables: cada uno es un puente tonto entre dos puertos. El nombre son
+    # sus dos puntas, y el identificador de cada nodo lleva el slot del
+    # laboratorio, así que dos laboratorios con la misma topología no chocan.
+    ordinals = _ordinals(lab, slot)
+    cables = _cables(lab, slot, ordinals)
     nodes = []
     effects = []
     steps = []
     for node in lab["nodes"]:
-        built = _build_node(node, assigned[node["role"]], name, lab, env, mgmt_net)
+        built = _build_node(node, assigned[node["role"]], name, lab, env, mgmt_net, cables)
         nodes.append(built)
         effects.append(
             f"{built['name']:<18} vmid {built['vmid']:<5} "
             f"{' '.join(i['label'] for i in built['interfaces'])}"
         )
 
-    # Puentes del laboratorio: se crean con su marca y se van con él.
-    for net in lab["networks"]:
-        bridge = _bridge_name(name, net["name"])
-        comment = f"netlabs lab={name} network={net['name']}"
+    # Un puente es un cable: ni dirección, ni puerta, ni MAC. Sólo su nombre y
+    # su marca, para que el motor sepa que es suyo y pueda retirarlo.
+    for cable in cables["links"]:
+        bridge = cable["name"]
+        comment = f"netlabs lab={name} space={cable['space']} cable={bridge}"
         exists = next((b for b in bridges if b.get("iface") == bridge), None)
         if exists is None:
             steps.append({"op": "bridge_ensure", "bridge": bridge, "comment": comment})
-            effects.append(f"crear el puente {bridge} ({net['address']}) marcado '{comment}'")
+            effects.append(f"crear el cable {bridge} ({cable['a']} <-> {cable['z']})")
         elif comment not in (exists.get("comments") or ""):
             raise LabError(
                 f"el puente {bridge} ya existe y no lleva la marca de este laboratorio "
-                f"({comment!r}): no es suyo y el motor no lo toca. Elige otro nombre de red "
-                "o retira ese puente a mano si de verdad era tuyo"
+                f"({comment!r}): no es suyo y el motor no lo toca. Si es de otro laboratorio, "
+                "cambia su 'slot'; si era tuyo, retíralo a mano"
             )
+
+    # La otra mitad de la diferencia, también para los cables: un puente que
+    # lleva la marca de este laboratorio y ya no se declara es basura suya y se
+    # retira. Uno sin marca no se toca: puede ser de otro o del propio hipervisor.
+    declarados = {c["name"] for c in cables["links"]}
+    for bridge in bridges:
+        iface = bridge.get("iface")
+        if iface in declarados or _lab_from_comment(bridge.get("comments") or "") != name:
+            continue
+        steps.append({"op": "bridge_destroy", "bridge": iface,
+                      "comment": bridge.get("comments") or ""})
+        effects.append(f"retirar el cable {iface}: lleva la marca de {name} y no se declara")
 
     if pool not in (world.get("pools") or []):
         steps.append({"op": "pool_ensure", "pool": pool})
@@ -509,18 +609,79 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     }
 
 
-def _build_node(node, vmid, lab_name, lab, env, mgmt_net) -> dict:
+def _ordinals(lab: dict, slot: int) -> dict:
+    """El identificador de cada nodo: `<slot><ordinal>` dentro de su tipo.
+
+    El ordinal es la posición entre los nodos del mismo tipo, contada desde 1.
+    Dos cifras: slot 0 y primer router -> `01`; slot 1 y primer router -> `11`.
+    Así el nombre del cable dice a qué laboratorio pertenece sin añadir sufijos
+    que no caben en los 15 caracteres de un nombre de interfaz.
+    """
+    counters = {}
+    out = {}
+    for node in lab["nodes"]:
+        code = TYPES[node["type"]]["code"]
+        counters[code] = counters.get(code, 0) + 1
+        ordinal = counters[code]
+        if ordinal > 9:
+            raise LabError(
+                f"el laboratorio {lab['lab']!r} tiene más de 9 nodos de tipo {node['type']!r}: "
+                "el identificador de dos cifras se agota (slot + ordinal)"
+            )
+        out[node["role"]] = f"{slot}{ordinal}"
+    return out
+
+
+def _endpoint(role: str, port: int, ordinals: dict, lab: dict) -> str:
+    """La punta de un cable: `<código><id>p<puerto>`, siempre 7 caracteres."""
+    kind = next(n["type"] for n in lab["nodes"] if n["role"] == role)
+    return f"{TYPES[kind]['code']}{ordinals[role]}p{port:02d}"
+
+
+def _cables(lab: dict, slot: int, ordinals: dict) -> dict:
+    """Los cables del laboratorio, con su nombre y la red que transportan.
+
+    Devuelve `{rol: {puerto: nombre}}` para que cada interfaz sepa qué puente
+    lleva, y `links` con la lista ordenada para crear los puentes.
+    """
+    by_role = {n["role"]: n for n in lab["nodes"]}
+    cidrs = {n["name"]: str(ipaddress.ip_network(n["address"], strict=False)) for n in lab["networks"]}
+    per_port = {}
+    links = []
+    for link in lab["links"]:
+        a, z = link["a"], link["z"]
+        ea = _endpoint(a["node"], a["port"], ordinals, lab)
+        ez = _endpoint(z["node"], z["port"], ordinals, lab)
+        name = f"{ea}_{ez}"
+        if len(name) > 15:
+            raise LabError(
+                f"el cable {name!r} no cabe en un nombre de interfaz (15 caracteres): "
+                "acorta los códigos de rol o usa menos nodos"
+            )
+        red = by_role[a["node"]]["networks"][a["port"] - 1]
+        per_port.setdefault(a["node"], {})[a["port"]] = name
+        per_port.setdefault(z["node"], {})[z["port"]] = name
+        # `space` es el CIDR de la red que el cable transporta, no su nombre: es
+        # lo que otro laboratorio puede leer del comentario para no pisarlo.
+        links.append({"name": name, "a": ea, "z": ez, "space": cidrs[red]})
+    return {"per_port": per_port, "links": links}
+
+
+def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
     kind = node["type"]
     code = TYPES[kind]["code"]
     networks = {n["name"]: ipaddress.ip_network(n["address"], strict=False) for n in lab["networks"]}
     interfaces = []
     for i, net_name in enumerate(node["networks"]):
+        cable = cables["per_port"][node["role"]][i + 1]
         interfaces.append({
             "index": i,
             "network": net_name,
-            "bridge": _bridge_name(lab_name, net_name),
+            "bridge": cable,
             "mac": derive_mac(vmid, i),
-            "label": f"net{i}={net_name}",
+            # La etiqueta dice el cable que de verdad lleva la tarjeta, no la red:
+            # si dijera la red, el plan mentiría sobre lo que hay en el hipervisor.
+            "label": f"net{i}={cable}",
             "address": None,
             "gateway": None,
         })
@@ -605,7 +766,9 @@ def _check_foreign_spaces(world: dict, lab: dict, env: dict) -> None:
         other = _lab_from_comment(comment)
         if not other or other == lab["lab"]:
             continue
-        cidr = bridge.get("cidr")
+        # Un puente es un cable tonto: no lleva CIDR. El espacio del otro
+        # laboratorio viaja en la marca, que es lo que se puede leer de él.
+        cidr = _space_from_comment(comment) or bridge.get("cidr")
         if not cidr:
             continue
         try:
@@ -625,6 +788,11 @@ def _lab_from_comment(comment: str):
     return match.group(1) if match else None
 
 
+def _space_from_comment(comment: str):
+    match = re.search(r"\bspace=([0-9./]+)", comment or "")
+    return match.group(1) if match else None
+
+
 def _role_from_description(description: str):
     match = re.search(r"(?:^|\s)role=([A-Za-z0-9][A-Za-z0-9_.-]*)", description)
     return match.group(1) if match else None
@@ -640,8 +808,12 @@ def _role_from_tags(tags: str):
     puede leer sin una llamada por invitado.
     """
     for tag in (tags or "").split(";"):
-        if tag.startswith("role="):
-            return tag[len("role="):]
+        # Proxmox no admite `=` en una etiqueta, así que el motor escribe
+        # `role-<rol>`; se acepta también la forma vieja `role=<rol>` para no
+        # dejar de reconocer invitados creados antes de este cambio.
+        for prefijo in ("role=", "role-"):
+            if tag.startswith(prefijo):
+                return tag[len(prefijo):]
     return None
 
 
@@ -722,19 +894,6 @@ def site(world: dict, env: dict) -> dict:
     }
 
 
-def _bridge_name(lab: str, network: str) -> str:
-    # 15 caracteres es el tope de un nombre de interfaz en Linux: un nombre que no
-    # cabe se dice, no se recorta, porque recortar dos redes distintas al mismo
-    # nombre las juntaría en silencio.
-    name = f"vmb_{lab}_{network}"
-    if len(name) > 15:
-        raise LabError(
-            f"el puente de la red {network!r} del laboratorio {lab!r} se llamaría {name!r}, "
-            "que no cabe en un nombre de interfaz (15 caracteres): acorta el laboratorio o la red"
-        )
-    return name
-
-
 # ---------------------------------------------------------------------------
 # La documentación de cada laboratorio: una región generada, comprobada
 # ---------------------------------------------------------------------------
@@ -751,6 +910,7 @@ def render_docs(lab: dict, env: dict) -> str:
     """
     validate(lab, env)
     lines = [DOC_BEGIN, "", f"## {lab['lab']}", ""]
+    lines.append(f"Slot: `{lab.get('slot', 0)}`")
     lines.append("Address spaces: " + ", ".join(f"`{s}`" for s in lab["address_spaces"]))
     lines += ["", "### Networks", "", "| network | address |", "| --- | --- |"]
     for net in lab["networks"]:
@@ -768,6 +928,10 @@ def render_docs(lab: dict, env: dict) -> str:
             f"| `{node['role']}` | {node['type']} | {node['stage']} | "
             f"{', '.join(f'`{n}`' for n in node['networks'])} | {address} | {res} |"
         )
+    lines += ["", "### Cables", "", "| bridge | a | z | network |", "| --- | --- | --- | --- |"]
+    cables = _cables(lab, lab.get("slot", 0), _ordinals(lab, lab.get("slot", 0)))
+    for cable in cables["links"]:
+        lines.append(f"| `{cable['name']}` | `{cable['a']}` | `{cable['z']}` | `{cable['space']}` |")
     areas = sorted({area for node in lab["nodes"] for area in (node.get("configure") or {})})
     if areas:
         lines += ["", "Configured areas: " + ", ".join(f"`{a}`" for a in areas) + "."]
