@@ -20,7 +20,6 @@ Configured areas: `commands`, `files`, `identity`, `packages`, `repositories`, `
 
 <!-- netlabs:end -->
 
-
 ## Lo aprendido al ejecutarlo
 
 - **El pool no puede llamarse `00_bootstrap` en Proxmox.** La API exige que el
@@ -69,4 +68,3 @@ Configured areas: `commands`, `files`, `identity`, `packages`, `repositories`, `
   `10.30.0.103:8080` (el invitado de gestión) con copia de seguridad del
   `Caddyfile`; el cambio vive fuera del repositorio, en el contenedor de Caddy.
   La consola responde en `https://netxms.matadepera.eu/nxmc/`.
-
