@@ -326,10 +326,11 @@ class Documentacion(unittest.TestCase):
 
     def test_la_documentacion_dibuja_la_topologia_y_el_cableado(self):
         texto = identity.render_docs(laboratorio(), entorno())
-        # Dos dibujos distintos: quién está en qué red y qué cable va de qué puerto a cuál.
-        self.assertIn("```mermaid\narchitecture-beta", texto)
-        self.assertIn("```mermaid\nflowchart LR", texto)
-        self.assertIn("---|p1 — p1|", texto)
+        # Dos dibujos con iconos vectoriales nativos: quién está en qué red y qué
+        # equipo va cableado con cuál. Ni uno solo fuera de `architecture-beta`.
+        self.assertEqual(texto.count("```mermaid\narchitecture-beta"), 2)
+        self.assertNotIn("flowchart", texto)
+        self.assertIn("[edge (p1, p2)]", texto)
 
 
 if __name__ == "__main__":

@@ -18,21 +18,21 @@ architecture-beta
     service n_edge(server)[edge router 10.44.1.1/24]
     service n_pc_1(server)[pc-1 workstation dhcp]
     service n_pc_2(server)[pc-2 workstation dhcp]
-    n_edge:T -- R:red_lan1
-    n_edge:B -- L:red_lan2
-    n_pc_1:R -- T:red_lan1
-    n_pc_2:L -- B:red_lan2
+    n_edge:R -- L:red_lan1
+    n_edge:R -- L:red_lan2
+    n_pc_1:R -- L:red_lan1
+    n_pc_2:R -- L:red_lan2
 ```
 
 ### Cableado (L2)
 
 ```mermaid
-flowchart LR
-    n_edge["edge router"]
-    n_pc_1["pc-1 workstation"]
-    n_pc_2["pc-2 workstation"]
-    n_edge ---|p1 — p1| n_pc_1
-    n_edge ---|p2 — p1| n_pc_2
+architecture-beta
+    service n_edge(server)[edge (p1, p2)]
+    service n_pc_1(server)[pc-1 (p1)]
+    service n_pc_2(server)[pc-2 (p1)]
+    n_edge:R -- L:n_pc_1
+    n_edge:R -- L:n_pc_2
 ```
 
 ### Networks

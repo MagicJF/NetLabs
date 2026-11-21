@@ -1228,38 +1228,33 @@ def _mermaid_topologia(lab: dict) -> list[str]:
         elif node.get("address") == "dhcp":
             papel += " dhcp"
         lineas.append(f"    service {_id(node['role'])}(server)[{node['role']} {papel}]")
-    lados = ["R", "L", "T", "B"]
-    orden = 0
     for node in lab["nodes"]:
         for net in dict.fromkeys(node.get("networks") or []):
-            lado_red = lados[orden % len(lados)]
-            lado_nodo = lados[(orden + 2) % len(lados)]
-            orden += 1
-            lineas.append(
-                f"    {_id(node['role'])}:{lado_nodo} -- {lado_red}:red_{_id(net)[2:]}"
-            )
+            lineas.append(f"    {_id(node['role'])}:R -- L:red_{_id(net)[2:]}")
     lineas.append("```")
     return lineas
 
 
 def _mermaid_cableado(lab: dict) -> list[str]:
-    """Qué cable va de qué puerto a qué puerto: el L2 tal y como se declara.
+    """Qué va con qué: el cableado tal y como se declara, en `architecture-beta`.
 
-    `architecture-beta` no admite texto en las aristas, y aquí el dato que importa
-    es justo ése (el puerto de cada punta), así que el cableado va en `flowchart`.
+    Se dibuja un equipo por nodo, con sus puertos entre paréntesis, y una arista por
+    cable. `architecture-beta` no admite texto en las aristas, así que el puerto de
+    cada punta va en la etiqueta del equipo; el emparejamiento exacto (qué puerto con
+    cuál) está en la tabla de cables, que es la que no admite interpretación.
     """
-    lineas = ["```mermaid", "flowchart LR"]
-    formas = {"router": '["{}"]', "switch": '{{"{}"}}', "firewall": '["{}"]',
-              "server": '["{}"]', "workstation": '["{}"]'}
-    for node in lab["nodes"]:
-        forma = formas.get(node["type"], '["{}"]')
-        etiqueta = f"{node['role']} {node['type']}"
-        lineas.append(f"    {_id(node['role'])}{forma.format(etiqueta)}")
+    lineas = ["```mermaid", "architecture-beta"]
+    patas: dict[str, list[int]] = {}
     for link in lab.get("links") or []:
-        a, z = link["a"], link["z"]
-        lineas.append(
-            f"    {_id(a['node'])} ---|p{a['port']} — p{z['port']}| {_id(z['node'])}"
-        )
+        for extremo in (link["a"], link["z"]):
+            patas.setdefault(extremo["node"], []).append(extremo["port"])
+    for node in lab["nodes"]:
+        suyos = sorted(set(patas.get(node["role"], [])))
+        etiqueta = f"{node['role']} (p{', p'.join(str(p) for p in suyos)})" if suyos else node["role"]
+        lineas.append(f"    service {_id(node['role'])}(server)[{etiqueta}]")
+    for link in lab.get("links") or []:
+        a, z = link["a"]["node"], link["z"]["node"]
+        lineas.append(f"    {_id(a)}:R -- L:{_id(z)}")
     lineas.append("```")
     return lineas
 
