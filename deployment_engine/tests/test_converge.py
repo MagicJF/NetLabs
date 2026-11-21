@@ -145,6 +145,16 @@ class ElInteriorLinux(unittest.TestCase):
         self.assertIn("comando", ops[0]["effect"])
         self.assertEqual(converge.linux_ops(nodo, {"commands": {"/var/lib/x/stamp": True}}), [])
 
+    def test_el_fichero_va_antes_que_el_comando(self):
+        # Un comando de inicialización lee su configuración: si el fichero aún no
+        # está escrito, arranca con la vieja o falla. El orden no es cosmético.
+        nodo = self.nodo(
+            files=[{"path": "/etc/x.conf", "content": "a=1\n"}],
+            commands=[{"run": "x init", "creates": "/var/lib/x/stamp"}],
+        )
+        ops = converge.linux_ops(nodo, {"files": {}, "commands": {}})
+        self.assertEqual([o["effect"].split()[0] for o in ops], ["fichero", "comando:"])
+
     def test_el_comando_va_antes_que_el_servicio(self):
         nodo = self.nodo(
             commands=[{"run": "x init", "creates": "/var/lib/x/stamp"}],

@@ -26,6 +26,10 @@ nodes:
           key: https://packages.netxms.org/netxms-keyring.gpg
       packages:
         - netxms-server
+        # La consola web no viene con el servidor: es un WAR de Jakarta Servlet
+        # que necesita un contenedor. Tomcat 11 está en trixie y trae el suyo.
+        - tomcat11
+        - default-jre-headless
       # El servidor no arranca sin base de datos: sin esta sección sale con
       # status=3 (NOTIMPLEMENTED) y se queda en bucle de reinicio. SQLite porque
       # es una sola máquina y no hay un motor de base de datos que mantener.
@@ -39,11 +43,20 @@ nodes:
             ## Database configuration - SQLite (single host, no DBA to maintain)
             DBDriver=sqlite.ddr
             DBName=/var/lib/netxms/netxms.db
+        # La consola tiene que saber a qué servidor hablar. Va en el classpath
+        # común de Tomcat; el servidor está en la misma máquina.
+        - path: /usr/share/tomcat11/lib/nxmc.properties
+          content: |
+            server=127.0.0.1
       # Una base de datos recién creada no tiene esquema y el servidor sale con
       # NOTIMPLEMENTED. `nxdbmgr init` lo crea una sola vez; la marca que deja
-      # (`creates`) es lo que hace que el segundo apply no lo repita.
+      # (`creates`) es lo que hace que el segundo apply no lo repita. El WAR se
+      # descarga igual: una vez, y la marca es el propio fichero.
       commands:
         - run: "systemctl stop netxms-server || true; /usr/bin/nxdbmgr init && touch /var/lib/netxms/netlabs-schema"
           creates: /var/lib/netxms/netlabs-schema
+        - run: "curl -fsSL -o /var/lib/tomcat11/webapps/nxmc.war https://netxms.com/download/releases/7.0/nxmc-7.0.4.war"
+          creates: /var/lib/tomcat11/webapps/nxmc.war
       services:
         netxms-server: true
+        tomcat11: true

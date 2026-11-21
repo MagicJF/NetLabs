@@ -478,18 +478,8 @@ def linux_ops(node: dict, current: dict) -> list[dict]:
             "effect": "paquetes: " + ", ".join(faltan),
         })
 
-    # Los comandos con `creates` son el trabajo de una sola vez (inicializar una
-    # base de datos): se ejecutan si su marca no existe y nunca más. Van después
-    # de los ficheros —la configuración tiene que estar— y antes de los servicios.
-    for comando in configure.get("commands") or []:
-        if (current.get("commands") or {}).get(comando["creates"]):
-            continue
-        ops.append({
-            "cmd": _sh(comando["run"]),
-            "effect": f"comando: {comando['creates']}",
-        })
-
-    # Los ficheros van antes que los servicios: un servicio que arranca con una
+    # Los ficheros van antes que los comandos y que los servicios: un comando de
+    # inicialización lee su configuración, y un servicio que arranca con una
     # configuración que aún no está escrita falla y se queda en bucle de reinicio.
     for fichero in configure.get("files") or []:
         esperado = _sha256(fichero["content"])
@@ -498,6 +488,17 @@ def linux_ops(node: dict, current: dict) -> list[dict]:
         ops.append({
             "cmd": _sh(_file_script(fichero)),
             "effect": f"fichero {fichero['path']}",
+        })
+
+    # Los comandos con `creates` son el trabajo de una sola vez (inicializar una
+    # base de datos, desplegar un WAR): se ejecutan si su marca no existe y nunca
+    # más. Van después de los ficheros y antes de los servicios.
+    for comando in configure.get("commands") or []:
+        if (current.get("commands") or {}).get(comando["creates"]):
+            continue
+        ops.append({
+            "cmd": _sh(comando["run"]),
+            "effect": f"comando: {comando['creates']}",
         })
 
     for service, activo in sorted((configure.get("services") or {}).items()):
