@@ -18,6 +18,13 @@ Tres consecuencias que ordenan todo lo demás:
   asignaciones es un bug: miente en cuanto alguien toca algo a mano.
 - **Lo que no se demuestra, no se ha hecho.** Cada «ya funciona» va con el comando y su salida.
 
+Y una frontera de carpetas que no se cruza: **cada carpeta de primer nivel tiene un solo dueño.**
+`deployment_engine/` es el motor y no lee `labs/`; `labs/<lab>/` sólo declara `<lab>.yml` y
+`<lab>.md`; los informes de ejecución van a `logs/`, nunca dentro del motor ni de un laboratorio;
+`netlabs.yml` en la raíz es configuración del **sitio** (nodo, almacenes, gestión), no de un
+laboratorio concreto. La raíz no guarda código. `./netlabs check` comprueba esta estructura: un
+fichero fuera de su sitio es un fallo, no una convención.
+
 ## 2. Las cuatro vías
 
 Sólo hay cuatro formas de hablar con el mundo, y cada una vive en un fichero. Si necesitas una

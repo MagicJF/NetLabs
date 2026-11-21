@@ -74,6 +74,54 @@ def comprobar_yaml() -> list[str]:
     return errores
 
 
+RAIZ_PERMITIDA = {
+    "netlabs", "netlabs.yml", "secrets.yml", "README.md", "AGENTS.md",
+    ".gitignore", ".yamllint", "deployment_engine", "labs", "docs", "logs",
+}
+MOTOR_PERMITIDO = {"playbooks", "tasks", "filter_plugins", "tools", "tests"}
+
+
+def comprobar_estructura() -> list[str]:
+    """Cada carpeta tiene un solo dueño: el motor, los laboratorios o la ejecución.
+
+    Sin esta frontera, un fichero de configuración acaba en el sitio equivocado y
+    nadie sabe si es del motor o de un laboratorio concreto. La raíz sólo guarda el
+    punto de entrada, la configuración del sitio y la documentación.
+    """
+    errores = []
+    for ruta in sorted(RAIZ.iterdir()):
+        if ruta.name.startswith(".") or ruta.name in RAIZ_PERMITIDA:
+            continue
+        errores.append(f"{ruta.name}: no está en la estructura declarada (README.md §Estructura)")
+
+    for ruta in sorted(MOTOR.iterdir()):
+        if ruta.name.startswith(".") or ruta.name in MOTOR_PERMITIDO:
+            continue
+        errores.append(f"deployment_engine/{ruta.name}: el motor sólo tiene "
+                       f"{', '.join(sorted(MOTOR_PERMITIDO))}")
+
+    for carpeta in sorted((RAIZ / "labs").iterdir()):
+        if not carpeta.is_dir():
+            errores.append(f"labs/{carpeta.name}: no es una carpeta de laboratorio")
+            continue
+        permitidos = {f"{carpeta.name}.yml", f"{carpeta.name}.md"}
+        for dentro in sorted(carpeta.iterdir()):
+            if dentro.name not in permitidos:
+                errores.append(f"labs/{carpeta.name}/{dentro.name}: un laboratorio sólo "
+                               f"declara {carpeta.name}.yml y su {carpeta.name}.md")
+        if not (carpeta / f"{carpeta.name}.yml").exists():
+            errores.append(f"labs/{carpeta.name}: falta {carpeta.name}.yml")
+
+    for ruta in sorted(RAIZ.rglob("logs")):
+        relativa = ruta.relative_to(RAIZ)
+        if not ruta.is_dir() or any(parte.startswith(".") for parte in relativa.parts):
+            continue
+        if relativa.parts[:1] != ("logs",):
+            errores.append(f"{relativa}: los informes van a logs/, no dentro "
+                           f"del motor ni de un laboratorio")
+    return errores
+
+
 def cargar_entorno():
     return yaml.load((RAIZ / "netlabs.yml").open(), Loader=_SinDuplicados)
 
@@ -176,6 +224,10 @@ def comprobar_pureza(env) -> list[str]:
         for fichero in sorted(MOTOR.rglob("*")):
             if not fichero.is_file() or fichero.suffix not in (".py", ".yml", ".yaml", ".j2"):
                 continue
+            # Las pruebas se inventan un laboratorio a propósito: su vocabulario es
+            # un fixture, no una referencia. La pureza se mide en el motor.
+            if "tests" in fichero.relative_to(MOTOR).parts:
+                continue
             texto = fichero.read_text(errors="replace")
             # El nombre del laboratorio puede ser una palabra corriente (la palabra uno
             # es un artículo): se busca donde de verdad aparecería una referencia —
@@ -216,7 +268,7 @@ def comprobar_enlaces() -> list[str]:
 
 
 def comprobar_pruebas() -> list[str]:
-    carga = unittest.defaultTestLoader.discover(str(RAIZ / "test"))
+    carga = unittest.defaultTestLoader.discover(str(RAIZ / "deployment_engine" / "tests"))
     resultado = unittest.TextTestRunner(verbosity=0, stream=open("/dev/null", "w")).run(carga)
     if resultado.wasSuccessful():
         return []
@@ -247,6 +299,7 @@ def _hay(programa: str) -> bool:
 def ejecutar() -> int:
     env = cargar_entorno()
     comprobaciones = [
+        ("estructura del repositorio", comprobar_estructura),
         ("YAML válido y sin claves duplicadas", lambda: comprobar_yaml()),
         ("declaraciones del vocabulario cerrado", lambda: comprobar_declaraciones(env)),
         ("espacios de direcciones disjuntos", lambda: comprobar_espacios(env)),

@@ -10,7 +10,7 @@
 #              ignora en silencio.
 # LÍMITES:     no sabe si un vmid está libre de verdad: se lo dice el mundo.
 #              No crea nada: devuelve pasos; ejecutarlos es tarea de Ansible.
-# VER:         docs/diseno.md §2, §5, §6; test/test_identity.py
+# VER:         docs/diseno.md §2, §5, §6; deployment_engine/tests/test_identity.py
 
 from __future__ import annotations
 

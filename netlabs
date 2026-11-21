@@ -3,7 +3,7 @@
 #              --site`, `destroy`, `docs`. Envuelve los libros de Ansible para que el
 #              informe se guarde y para abrir, mientras dura, el camino hacia la red de
 #              gestión (un reenvío SSH por router, con puerto derivado de su vmid).
-# INVARIANTES: cada verbo escribe su salida real en labs/<lab>/logs/ y devuelve el
+# INVARIANTES: cada verbo escribe su salida real en logs/<lab>/ y devuelve el
 #              código de Ansible: un verde aquí es el verde de la ejecución, no una
 #              interpretación.
 #              Los reenvíos se cierran siempre, incluso si Ansible falla.
@@ -38,10 +38,9 @@ def entorno():
 
 
 def log_de(verbo: str, lab: str | None) -> pathlib.Path:
-    if lab:
-        carpeta = RAIZ / "labs" / lab / "logs"
-    else:
-        carpeta = RAIZ / "deployment_engine" / "logs"
+    # Un solo sitio para la ejecución: `logs/<lab>/` o `logs/site/`. Ni el motor ni
+    # los laboratorios guardan nada suyo: lo que se ejecuta no es estado declarado.
+    carpeta = RAIZ / "logs" / (lab or "site")
     carpeta.mkdir(parents=True, exist_ok=True)
     sello = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
     return carpeta / f"{verbo}-{sello}.log"

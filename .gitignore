@@ -1,7 +1,7 @@
 secrets.yml
 
-# estado de ejecución y artefactos
-labs/*/logs/
+# estado de ejecución: los informes viven en logs/ y nunca se suben
+logs/
 *.retry
 .ansible/
 
@@ -9,6 +9,3 @@ labs/*/logs/
 __pycache__/
 *.pyc
 .venv/
-
-# informes de ejecución del motor
-deployment_engine/logs/

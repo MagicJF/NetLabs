@@ -9,7 +9,7 @@
 #              Ninguna llamada depende de la posición en una lista: las interfaces se
 #              citan por el nombre que el motor les dio (etherN), no por índice leído.
 # LÍMITES:     no sabe si el interior responde; si no responde, el plan no se ejecuta.
-# VER:         docs/diseno.md §2.12-§2.13, §4.4, §6; test/test_converge.py
+# VER:         docs/diseno.md §2.12-§2.13, §4.4, §6; deployment_engine/tests/test_converge.py
 
 from __future__ import annotations
 

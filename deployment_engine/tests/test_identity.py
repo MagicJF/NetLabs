@@ -13,7 +13,7 @@ import unittest
 
 import yaml
 
-RAIZ = pathlib.Path(__file__).resolve().parent.parent
+RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ / "deployment_engine" / "tools"))
 
 import identity  # noqa: E402
