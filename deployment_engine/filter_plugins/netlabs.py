@@ -126,6 +126,7 @@ class FilterModule:
             "netlabs_bootstrap": lambda node, env, secret: converge.bootstrap_script(node, env, secret),
             "netlabs_bootstrap_path": lambda node: _create_command(node, None),
             "netlabs_ros_reads": lambda node: list(converge.ROS_READS),
+            "netlabs_ros_clave": lambda node, secrets: converge.ros_clave(node, secrets),
             "netlabs_ros_ops": lambda node, current, secret: converge.ros_ops(node, current, secret),
             "netlabs_linux_ops": lambda node, current, credenciales=None: converge.linux_ops(node, current, credenciales),
             "netlabs_linux_probe": lambda node: converge.linux_probe(node),

@@ -205,5 +205,30 @@ class ElInteriorLinux(unittest.TestCase):
         self.assertIn("systemctl restart x", ops[0]["cmd"][2])
 
 
+class LaClaveDelRouter(unittest.TestCase):
+    """El laboratorio nombra la credencial; el valor vive en secrets.yml."""
+
+    def nodo(self, password_from="secrets.routeros_clave"):
+        nodo = router()
+        nodo["configure"] = {"users": [{"name": "admin", "password_from": password_from}]}
+        return nodo
+
+    def test_la_clave_sale_del_nombre_que_declara_el_laboratorio(self):
+        self.assertEqual(
+            converge.ros_clave(self.nodo(), {"routeros_clave": "s3cr3t"}), "s3cr3t"
+        )
+
+    def test_sin_usuarios_declarados_se_usa_la_clave_del_sitio(self):
+        self.assertEqual(converge.ros_clave(router(), {"routeros_clave": "s3cr3t"}), "s3cr3t")
+
+    def test_un_nombre_que_no_esta_en_secrets_es_un_fallo_con_el_nombre_delante(self):
+        with self.assertRaisesRegex(converge.LabError, "routeros_clave"):
+            converge.ros_clave(self.nodo(), {"otra_cosa": "x"})
+
+    def test_una_clave_vacia_no_se_toma_por_buena(self):
+        with self.assertRaisesRegex(converge.LabError, "routeros_clave"):
+            converge.ros_clave(self.nodo(), {"routeros_clave": ""})
+
+
 if __name__ == "__main__":
     unittest.main()

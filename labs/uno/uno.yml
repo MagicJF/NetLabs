@@ -40,7 +40,7 @@ nodes:
         - {network: lan1, pool: 10.44.1.100-10.44.1.199, gateway: 10.44.1.1}
         - {network: lan2, pool: 10.44.2.100-10.44.2.199, gateway: 10.44.2.1}
       users:
-        - {name: admin, password_from: secrets.routeros_password}
+        - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
 
   - role: pc-1

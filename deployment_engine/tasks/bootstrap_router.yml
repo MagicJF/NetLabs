@@ -32,7 +32,7 @@
     pve_path: "/nodes/{{ env.proxmox.node }}/qemu/{{ guest.vmid }}/agent/file-write"
     pve_body:
       file: "{{ guest | netlabs_bootstrap_path }}"
-      content: "{{ guest | netlabs_bootstrap(env, secrets.routeros_clave) | b64encode }}"
+      content: "{{ guest | netlabs_bootstrap(env, guest | netlabs_ros_clave(secrets)) | b64encode }}"
       encode: 0
     pve_do: "escribir el arranque de {{ guest.name }}"
     # El cierre del fichero se anuncia con timeout aunque el fichero llegue entero.

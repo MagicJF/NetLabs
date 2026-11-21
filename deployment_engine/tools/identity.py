@@ -34,6 +34,11 @@ TYPES = {
                 "control": True},
 }
 
+# El único secreto del sitio que un laboratorio puede nombrar para el administrador
+# de un RouterOS: dice el nombre, nunca el valor. `converge.ros_clave` lo resuelve
+# contra secrets.yml y falla si no está.
+ROS_SECRET = "secrets.routeros_clave"
+
 # Las áreas de configuración que el motor entiende, por clase de equipo. Una clave
 # fuera de su lista es un error con mensaje (§2.13), no una nota al pie.
 AREAS = {
@@ -575,10 +580,10 @@ def _validate_area(role: str, area: str, body, networks: dict) -> None:
         for item in body:
             if not isinstance(item, dict) or set(item) != {"name", "password_from"}:
                 raise LabError(f"cada usuario de {role!r} es {{name, password_from}}")
-            if item["password_from"] != "secrets.routeros_password":
+            if item["password_from"] != ROS_SECRET:
                 raise LabError(
                     f"el usuario {item['name']!r} de {role!r} solo puede tomar la clave de "
-                    "`secrets.routeros_password`: una clave escrita en el laboratorio no se admite"
+                    f"`{ROS_SECRET}`: una clave escrita en el laboratorio no se admite"
                 )
 
 

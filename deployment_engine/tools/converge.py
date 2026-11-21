@@ -19,7 +19,7 @@ import ipaddress
 import os
 import shlex
 
-from identity import LabError, TYPES
+from identity import LabError, ROS_SECRET, TYPES
 
 # Las áreas de RouterOS que el motor sabe leer por REST. Son las mismas que valida
 # identity.AREAS["routeros"]: una lectura de más es una dependencia de más.
@@ -69,7 +69,7 @@ def management_interface(node: dict) -> str:
 # Arranque del router: el único script que se escribe por el agente
 # ---------------------------------------------------------------------------
 
-def bootstrap_script(node: dict, env: dict, routeros_password: str) -> str:
+def bootstrap_script(node: dict, env: dict, routeros_clave: str) -> str:
     """El script que deja al router con dirección de gestión. Una sola vez, al nacer.
 
     Quita el cliente de direcciones que el CHR trae de fábrica en su primera pata
@@ -96,7 +96,7 @@ def bootstrap_script(node: dict, env: dict, routeros_password: str) -> str:
         # la dirección es lo que no puede perderse — y la clave la pone la puerta
         # REST, que sí corre con la política completa del admin.
         ':do {/user set [find where name="%s"] password="%s"} on-error={:put "clave pendiente: la pone REST"}'
-        % (username, _quote(routeros_password)),
+        % (username, _quote(routeros_clave)),
         ':put "netlabs bootstrap done"',
         "",
     ])
@@ -116,7 +116,7 @@ def _quote(text: str) -> str:
 # RouterOS: comparar lo declarado con lo leído y decir qué falta
 # ---------------------------------------------------------------------------
 
-def ros_ops(node: dict, current: dict, routeros_password: str) -> list[dict]:
+def ros_ops(node: dict, current: dict, routeros_clave: str) -> list[dict]:
     """Las llamadas REST que llevan el router de lo que hay a lo declarado.
 
     `current` es lo que devolvieron las lecturas de ROS_READS. Cada llamada lleva
@@ -159,7 +159,7 @@ def ros_ops(node: dict, current: dict, routeros_password: str) -> list[dict]:
     if "dhcp_server" in configure:
         ops += _dhcp_ops(node, configure["dhcp_server"], current)
     if "users" in configure:
-        ops += _user_ops(configure["users"], current.get("users") or [], routeros_password)
+        ops += _user_ops(configure["users"], current.get("users") or [], routeros_clave)
     return ops
 
 
@@ -271,7 +271,28 @@ def _is_declared_network(node: dict, cidr: str) -> bool:
     return any(str(ipaddress.ip_network(n["address"])) == cidr for n in node["networks"])
 
 
-def _user_ops(declarados: list, actuales: list, routeros_password: str) -> list[dict]:
+def ros_clave(node: dict, secrets: dict) -> str:
+    """La clave del router, resuelta desde el nombre que declara el laboratorio.
+
+    El laboratorio escribe `password_from: secrets.routeros_clave`, no la clave.
+    Aquí se convierte ese nombre en el valor de secrets.yml: si el nombre no
+    apunta a nada, es un fallo del sitio y se dice, no se sigue con una clave
+    vacía que fallaría luego en el login sin explicar por qué.
+    """
+    users = (node.get("configure") or {}).get("users") or [{"password_from": ROS_SECRET}]
+    nombre = str(users[0].get("password_from", ROS_SECRET))
+    clave_del_sitio = nombre.removeprefix("secrets.")
+    valor = (secrets or {}).get(clave_del_sitio)
+    if not isinstance(valor, str) or not valor:
+        raise LabError(
+            f"{node.get('name') or node.get('role')} toma la clave de {nombre!r} y "
+            f"secrets.yml no tiene {clave_del_sitio!r}: se declara por su nombre y el "
+            "valor vive en secrets.yml"
+        )
+    return valor
+
+
+def _user_ops(declarados: list, actuales: list, routeros_clave: str) -> list[dict]:
     """Sólo se da de alta; la clave no se puede leer, así que no se comprueba.
 
     Reaplicarla en cada pasada haría `changed` en la segunda, que es justo lo que no
@@ -282,7 +303,7 @@ def _user_ops(declarados: list, actuales: list, routeros_password: str) -> list[
     for user in declarados:
         if user["name"] not in existentes:
             ops.append({"method": "PUT", "path": "/rest/user",
-                        "body": {"name": user["name"], "password": routeros_password,
+                        "body": {"name": user["name"], "password": routeros_clave,
                                  "group": "full"},
                         "effect": f"usuario {user['name']}"})
     return ops

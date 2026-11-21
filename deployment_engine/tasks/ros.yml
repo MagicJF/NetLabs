@@ -3,8 +3,16 @@
 # INVARIANTES: se lee el interior antes de escribir; lo que se escribe son las
 #              llamadas que calcula `netlabs_ros_ops`, nunca una lista escrita a mano.
 #              El área declarada es la frontera: dentro se quita lo que sobra, fuera no
-#              se entra.
+#              se entra. La clave NO se escribe aquí: se resuelve del nombre que
+#              declara el laboratorio (`password_from`) contra secrets.yml.
 # VER:         docs/diseno.md §4.4, §6
+
+# El laboratorio nombra la credencial; el valor vive en secrets.yml. Se resuelve una
+# vez por router: si el nombre no apunta a ninguna clave, se para aquí con el nombre
+# delante, en vez de fallar más tarde en el login sin decir de dónde salía.
+- name: "RouterOS · resolver la clave declarada para {{ router.name }}"
+  ansible.builtin.set_fact:
+    ros_clave: "{{ router | netlabs_ros_clave(secrets) }}"
 
 # La clave del router no puede ponerla el script de arranque: el agente ejecuta con
 # una política sin `sensitive` y `/user set` falla con "not enough permissions (9)"
@@ -15,7 +23,7 @@
     url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}/rest/system/identity"
     method: GET
     url_username: "{{ ros_user }}"
-    url_password: "{{ secrets.routeros_clave }}"
+    url_password: "{{ ros_clave }}"
     force_basic_auth: true
     status_code: [200, 401]
     timeout: 30
@@ -36,7 +44,7 @@
     url_password: ""
     force_basic_auth: true
     body_format: json
-    body: {password: "{{ secrets.routeros_clave }}"}
+    body: {password: "{{ ros_clave }}"}
     # Al cambiar su propia clave, RouterOS cierra la sesión y responde 400
     # "Session closed" aunque el cambio sí se aplicó (medido).
     status_code: [200, 204, 400]
@@ -48,7 +56,7 @@
     url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}/rest/system/identity"
     method: GET
     url_username: "{{ ros_user }}"
-    url_password: "{{ secrets.routeros_clave }}"
+    url_password: "{{ ros_clave }}"
     force_basic_auth: true
     status_code: [200, 401]
     timeout: 30
@@ -72,7 +80,7 @@
     url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_lectura }}"
     method: GET
     url_username: "{{ ros_user }}"
-    url_password: "{{ secrets.routeros_clave }}"
+    url_password: "{{ ros_clave }}"
     force_basic_auth: true
     status_code: [200]
     timeout: 30
@@ -94,7 +102,7 @@
 
 - name: "RouterOS · calcular la diferencia de {{ router.name }}"
   ansible.builtin.set_fact:
-    ros_ops: "{{ router | netlabs_ros_ops(ros_current, secrets.routeros_clave) }}"
+    ros_ops: "{{ router | netlabs_ros_ops(ros_current, ros_clave) }}"
 
 - name: "RouterOS · enseñar la diferencia de {{ router.name }}"
   ansible.builtin.debug:
@@ -106,7 +114,7 @@
     url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_op.path }}"
     method: "{{ ros_op.method }}"
     url_username: "{{ ros_user }}"
-    url_password: "{{ secrets.routeros_clave }}"
+    url_password: "{{ ros_clave }}"
     force_basic_auth: true
     body_format: json
     body: "{{ ros_op.body | default(omit) }}"
@@ -126,7 +134,7 @@
     url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}/rest/ip/address"
     method: GET
     url_username: "{{ ros_user }}"
-    url_password: "{{ secrets.routeros_clave }}"
+    url_password: "{{ ros_clave }}"
     force_basic_auth: true
     status_code: [200]
     timeout: 30
