@@ -1,0 +1,25 @@
+# PROPÓSITO:   comprobar que un puesto tomó dirección del router, sin dormir a ciegas:
+#              se sondea su tabla de interfaces por la API con un tope.
+# INVARIANTES: el sondeo pasa por la puerta (`pve.yml`). Si el tope se agota, se para
+#              con el nombre del puesto: un laboratorio con un puesto mudo no es verde.
+# VER:         AGENTS.md §2, §3.5
+
+- name: "PVE · esperar la dirección de {{ guest.name }}"
+  include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: "/nodes/{{ env.proxmox.node }}/lxc/{{ guest.vmid }}/interfaces"
+    pve_do: "leer las interfaces de {{ guest.name }}"
+    pve_status: [200]
+    pve_return_content: true
+    pve_until: "{{ (pve_r.content | default('')) is search('\"inet\"') }}"
+    pve_retries: "{{ pve_lease_intentos | default(30) }}"
+    pve_delay: 4
+
+- name: "{{ guest.name }} se quedó sin dirección"
+  ansible.builtin.assert:
+    that: (pve_r.content | default('')) is search('"inet"')
+    fail_msg: >-
+      {{ guest.name }} ({{ guest.vmid }}) no tiene dirección después de esperar: el
+      router no le sirvió una concesión. No se sigue con un laboratorio donde un
+      puesto no habla.

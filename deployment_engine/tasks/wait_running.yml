@@ -1,29 +1,26 @@
 # PROPÓSITO:   esperar a que un invitado esté arrancado de verdad, sondeando su
 #              estado por la API con un tope.
-# INVARIANTES: si el tope se agota, se para con el estado que leyó.
-# VER:         AGENTS.md §3.5
+# INVARIANTES: el sondeo pasa por la puerta (`pve.yml`), no por un `uri` suelto: una
+#              sola puerta al hipervisor. Si el tope se agota, se para con el estado
+#              que leyó.
+# VER:         AGENTS.md §2, §3.5
 
 - name: "PVE · esperar a que {{ guest.name }} esté arrancado"
-  ansible.builtin.uri:
-    url: "https://{{ secrets.pve_nodo }}:{{ secrets.pve_puerto }}/api2/json/nodes/{{ env.proxmox.node }}/{{ 'lxc' if guest.guest == 'lxc' else 'qemu' }}/{{ guest.vmid }}/status/current"  # yamllint disable-line rule:line-length
-    method: GET
-    headers:
-      Authorization: "PVEAPIToken={{ secrets.pve_token_id }}={{ secrets.pve_token_secreto }}"
-    validate_certs: "{{ env.proxmox.verify_tls }}"
-    status_code: [200]
-    timeout: 30
-  register: pve_estado
-  until: pve_estado.json.data.status == 'running'
-  retries: "{{ pve_estado_intentos | default(45) }}"
-  delay: 2
-  changed_when: false
-  failed_when: false
+  include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if guest.guest == 'lxc' else 'qemu' }}/{{ guest.vmid }}/status/current"
+    pve_do: "leer el estado de {{ guest.name }}"
+    pve_status: [200, 500]
+    pve_until: "{{ pve_r.json.data.status | default('') == 'running' }}"
+    pve_retries: "{{ pve_estado_intentos | default(45) }}"
+    pve_delay: 2
 
 - name: "{{ guest.name }} no llegó a arrancar"
   ansible.builtin.assert:
     that:
-      - pve_estado.json.data.status | default('') == 'running'
+      - pve_r.json.data.status | default('') == 'running'
     fail_msg: >-
       {{ guest.name }} ({{ guest.vmid }}) sigue en estado
-      {{ pve_estado.json.data.status | default('desconocido') }} después de esperar.
+      {{ pve_r.json.data.status | default('desconocido') }} después de esperar.
       El motor no sigue con un invitado que no está en pie.

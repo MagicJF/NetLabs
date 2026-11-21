@@ -1,29 +1,25 @@
 # PROPÓSITO:   esperar a una tarea del hipervisor sin dormir a ciegas: se sondea su
 #              estado con un tope y, si el tope se agota, es un fallo.
-# INVARIANTES: el tope se declara siempre; no hay `sleep` fijo.
-# VER:         AGENTS.md §3.5
+# INVARIANTES: el sondeo pasa por la puerta (`pve.yml`), no por un `uri` suelto.
+#              El tope se declara siempre; no hay `sleep` fijo.
+# VER:         AGENTS.md §2, §3.5
 
 - name: "PVE · esperar a la tarea {{ pve_do | default('') }}"
-  ansible.builtin.uri:
-    url: "https://{{ secrets.pve_nodo }}:{{ secrets.pve_puerto }}/api2/json/nodes/{{ env.proxmox.node }}/tasks/{{ upid | urlencode }}/status"
-    method: GET
-    headers:
-      Authorization: "PVEAPIToken={{ secrets.pve_token_id }}={{ secrets.pve_token_secreto }}"
-    validate_certs: "{{ env.proxmox.verify_tls }}"
-    status_code: [200]
-    timeout: 30
-  register: pve_tarea
-  until: pve_tarea.json.data.status == 'stopped'
-  retries: "{{ pve_tarea_intentos | default(60) }}"
-  delay: 2
-  changed_when: false
+  include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: "/nodes/{{ env.proxmox.node }}/tasks/{{ upid | urlencode }}/status"
+    pve_do: "leer la tarea {{ pve_do | default('') }}"
+    pve_until: "{{ pve_r.json.data.status | default('') == 'stopped' }}"
+    pve_retries: "{{ pve_tarea_intentos | default(60) }}"
+    pve_delay: 2
 
 - name: la tarea del hipervisor terminó mal
   ansible.builtin.assert:
     that:
-      - pve_tarea.json.data.exitstatus is defined
-      - pve_tarea.json.data.exitstatus == 'OK'
+      - pve_r.json.data.exitstatus is defined
+      - pve_r.json.data.exitstatus == 'OK'
     fail_msg: >-
-      La API dijo {{ pve_tarea.json.data.exitstatus | default('sin estado') }} al
+      La API dijo {{ pve_r.json.data.exitstatus | default('sin estado') }} al
       {{ pve_do | default('ejecutar la tarea') }}. La salida de la tarea está en el
       informe del hipervisor; el motor no sigue a ciegas.

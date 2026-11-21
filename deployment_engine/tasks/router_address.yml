@@ -1,0 +1,26 @@
+# PROPÓSITO:   leer del agente si un router ya tiene puesta su dirección de gestión.
+#              Es una lectura: no escribe nada y no cambia el mundo.
+# INVARIANTES: si el agente no contesta, se da por NO configurado: el arranque se
+#              reintenta y es él quien decide con la lectura posterior.
+# VER:         docs/diseno.md §4.5; AGENTS.md §7
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: "/nodes/{{ env.proxmox.node }}/qemu/{{ guest.vmid }}/agent/network-get-interfaces"
+    pve_do: "leer las interfaces de {{ guest.name }}"
+    # 500 y 596: el agente no contesta todavía o el invitado no está en pie. No es
+    # un fallo de la puerta: es la respuesta que hace falta para decidir.
+    pve_status: [200, 500, 596]
+    pve_return_content: true
+
+- name: "{{ guest.name }}: ¿ya tiene su dirección de gestión?"
+  ansible.builtin.set_fact:
+    routers_con_direccion: >-
+      {{ routers_con_direccion | default([]) +
+         ([guest.vmid]
+          if (pve_r.status == 200 and
+              (pve_r.json.data.result | default([]) | map(attribute='ip-addresses', default=[])
+               | flatten | map(attribute='ip-address', default='')
+               | select('equalto', guest.mgmt_address) | list | length > 0))
+          else []) }}

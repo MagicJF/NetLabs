@@ -35,13 +35,14 @@
       ansible.builtin.set_fact:
         nuevos: "{{ plan.steps | selectattr('op', 'equalto', 'guest_create') | map(attribute='guest.vmid') | list }}"
         puentes: "{{ plan.steps | selectattr('op', 'equalto', 'bridge_ensure') | list }}"
+        sobrantes: "{{ plan.steps | selectattr('op', 'equalto', 'guest_destroy') | list }}"
 
     # --- el camino ---------------------------------------------------------
     - name: apply · el camino hacia la gestión tiene que estar abierto
       ansible.builtin.command:
         argv: [ssh, -i, "{{ clave }}", -p, "{{ puerto }}", -o, BatchMode=yes,
                -o, StrictHostKeyChecking=no, -o, "UserKnownHostsFile=/dev/null",
-               -o, ConnectTimeout=8, root@127.0.0.1, true]
+               -o, ConnectTimeout=8, root@127.0.0.1, "true"]
       register: camino
       changed_when: false
       failed_when: false
@@ -88,6 +89,20 @@
         pve_do: "aplicar las redes del nodo"
       when: puentes | length > 0
 
+    # --- lo que sobra ------------------------------------------------------
+    # Primero se retira lo que la declaración no pide: si un invitado viejo ocupa el
+    # nombre o la dirección de uno nuevo, crear antes que retirar choca. Y si el
+    # retiro falla, es mejor saberlo antes de haber creado nada.
+    # El título no puede citar `item`: ansible lo plantilla antes del bucle y deja
+    # un error de plantilla en el nombre de la tarea. El nombre va en el `label`.
+    - name: "apply · retirar lo que sobra en el pool"
+      include_tasks: ../tasks/destroy_guest.yml
+      vars:
+        guest: "{{ item }}"
+      loop: "{{ sobrantes }}"
+      loop_control: {label: "{{ item.name }} ({{ item.vmid }})"}
+      when: sobrantes | length > 0
+
     # --- los invitados -----------------------------------------------------
     - name: apply · los invitados que faltan
       include_tasks: ../tasks/create_guest.yml
@@ -106,13 +121,24 @@
       when: item.vmid not in nuevos
 
     # --- el router ---------------------------------------------------------
+    # El arranque no es cosa de "recién creado": un router que perdió su dirección
+    # —o que nació con el arranque a medias— sigue sin red. Se pregunta al agente
+    # si ya la tiene; sólo se arranca al que no. Preguntar es una lectura; arrancar
+    # es una escritura, y por eso el segundo apply no escribe.
+    - name: apply · ¿los routers ya tienen su dirección de gestión?
+      include_tasks: ../tasks/router_address.yml
+      loop: "{{ plan.nodes | selectattr('management') | list }}"
+      loop_control: {label: "{{ item.name }}"}
+      vars:
+        guest: "{{ item }}"
+
     - name: apply · el arranque de los routers
       include_tasks: ../tasks/bootstrap_router.yml
       loop: "{{ plan.nodes | selectattr('management') | list }}"
       loop_control: {label: "{{ item.name }}"}
       vars:
         guest: "{{ item }}"
-      when: item.vmid in nuevos
+      when: item.vmid not in (routers_con_direccion | default([]))
 
     # --- el interior del router, por REST ---------------------------------
     - name: apply · el interior de los routers
@@ -124,32 +150,15 @@
         ros_user: "{{ (item.configure.users | default([{'name': 'admin'}]))[0].name }}"
 
     # --- los puestos toman dirección --------------------------------------
-    - name: "PVE · leer la dirección que tomó {{ item.name }}"
-      ansible.builtin.uri:
-        url: "https://{{ secrets.pve_nodo }}:{{ secrets.pve_puerto }}/api2/json/nodes/{{ env.proxmox.node }}/lxc/{{ item.vmid }}/interfaces"
-        method: GET
-        headers:
-          Authorization: "PVEAPIToken={{ secrets.pve_token_id }}={{ secrets.pve_token_secreto }}"
-        validate_certs: "{{ env.proxmox.verify_tls }}"
-        status_code: [200]
-        timeout: 30
-      register: leases
+    - name: "apply · la dirección de cada puesto"
+      include_tasks: ../tasks/check_lease.yml
+      vars:
+        guest: "{{ puesto }}"
       loop: "{{ plan.nodes | rejectattr('management') | list }}"
-      loop_control: {label: "{{ item.name }}"}
-      until: (leases.content | default('')) is search('"inet"')
-      retries: 30
-      delay: 4
-      changed_when: false
-      failed_when: false
-
-    - name: apply · un puesto se quedó sin dirección
-      ansible.builtin.assert:
-        that: (item.content | default('')) is search('"inet"')
-        fail_msg: >-
-          {{ item.item.name }} no tiene dirección después de esperar: el router no le
-          sirvió una concesión. No se sigue con un laboratorio donde un puesto no habla.
-      loop: "{{ leases.results }}"
-      loop_control: {label: "{{ item.item.name }}"}
+      # El nombre del bucle no puede ser `item`: el fichero incluido usa `item` y
+      # éste lo pisaría. Y el nombre de la tarea no puede citar `item` antes de
+      # existir: ansible lo intenta y deja un error de plantilla en el título.
+      loop_control: {loop_var: puesto, label: "{{ puesto.name }}"}
 
     - name: apply · el laboratorio está desplegado
       ansible.builtin.debug:

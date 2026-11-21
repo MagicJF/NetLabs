@@ -89,6 +89,33 @@ class ElPlan(unittest.TestCase):
         self.assertEqual([s for s in segundo["steps"]
                           if s["op"] in ("guest_create", "pool_ensure", "bridge_ensure", "guest_start")], [])
 
+    def test_plan_reconoce_sus_invitados_por_la_etiqueta_sin_descripcion(self):
+        # `/cluster/resources` no devuelve la descripción: si el plan sólo mirara
+        # ahí, cada apply crearía un juego nuevo de invitados. La etiqueta sí vuelve.
+        viejos = [{"vmid": 210, "name": "rt-edge", "type": "qemu", "pool": "netlabs-lab-uno",
+                   "description": "", "tags": "netlabs;role=edge", "status": "running"}]
+        plan = identity.plan(mundo(guests=viejos), laboratorio(), entorno())
+        self.assertEqual({n["role"]: n["vmid"] for n in plan["nodes"]}["edge"], 210)
+        # El router que ya vive no se vuelve a crear; los puestos que faltan, sí.
+        self.assertEqual([s["guest"]["role"] for s in plan["steps"] if s["op"] == "guest_create"],
+                         ["pc-1", "pc-2"])
+
+    def test_un_mundo_ya_convergido_no_da_ningun_paso(self):
+        # Si el plan emite "asegurar" para lo que ya está, el segundo apply nunca
+        # puede decir "nada que hacer" y la cuenta deja de ser honesta. El mundo se
+        # construye con la salida del propio motor: lo que el plan pide, ya hecho.
+        lab, env = laboratorio(), entorno()
+        primero = identity.plan(mundo(), lab, env)
+        pool = primero["pool"]
+        guests = [{"vmid": n["vmid"], "name": n["name"], "type": n["guest"],
+                   "pool": pool, "status": "running", "tags": f"netlabs;role={n['role']}"}
+                  for n in primero["nodes"]]
+        bridges = [{"iface": s["bridge"], "comments": s["comment"]}
+                   for s in primero["steps"] if s["op"] == "bridge_ensure"]
+        plan = identity.plan(mundo(guests=guests, bridges=bridges, pools=[pool]), lab, env)
+        self.assertEqual(plan["steps"], [])
+        self.assertEqual([e for e in plan["effects"] if e not in primero["effects"]], [])
+
     def test_plan_es_determinista(self):
         self.assertEqual(identity.plan(mundo(used=[100]), laboratorio(), entorno()),
                          identity.plan(mundo(used=[100]), laboratorio(), entorno()))

@@ -26,11 +26,16 @@
     - name: plan · nada que hacer
       ansible.builtin.debug:
         msg: "El mundo ya es lo declarado: el segundo apply no escribe."
-      when: plan.steps | selectattr('op', 'in', ['pool_ensure', 'bridge_ensure', 'guest_create', 'guest_start']) | list | length == 0
+      # La cuenta incluye lo que sobra: un plan que sólo mira lo que falta diría
+      # "nada que hacer" con invitados de más dentro del pool.
+      when: plan.steps | length == 0
 
     - name: guardar el plan para quien lo ejecute
       ansible.builtin.copy:
         content: "{{ plan | to_nice_json }}"
         dest: "{{ netlabs_plan_out }}"
         mode: "0600"
+      # El plan es un artefacto local, no un cambio en el mundo: `plan` no escribe
+      # nada en el hipervisor. Decir `changed` aquí ensuciaría la cuenta honesta.
+      changed_when: false
       when: netlabs_plan_out is defined

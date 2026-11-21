@@ -35,14 +35,30 @@ PREFIX = "netlabs-"
 # i es ether<i>, y la de gestión es la última. No es un número de un laboratorio: es
 # cómo se llama lo que el propio motor creó.
 def interface_of(node: dict, network: str) -> str | None:
-    for index, name in enumerate(node["networks"]):
-        if name == network:
-            return f"ether{index}"
+    """La pata que lleva una red de laboratorio, contada como la cuenta el router.
+
+    Se recorre `interfaces` (que sí trae el índice de la tarjeta) y se numera desde
+    1: `net0` de la API es `ether1` de RouterOS. Contar por `networks` daría ether0
+    y, peor, devolvería None cuando la lista son dicts y no nombres.
+    """
+    for iface in node["interfaces"]:
+        if iface.get("network") == network:
+            return f"ether{iface['index'] + 1}"
     return None
 
 
 def management_interface(node: dict) -> str:
-    return f"ether{len(node['networks'])}"
+    """La pata de gestión es la que no tiene red de laboratorio: la ÚLTIMA.
+
+    Se busca en la lista de interfaces, no se cuenta `networks`: la lista de redes
+    del laboratorio no incluye la pata de gestión, así que contar por ahí deja el
+    nombre una pata corto (ether2 donde el motor creó ether3) y la dirección acaba
+    en una red de laboratorio en vez de en la OOB.
+    """
+    for iface in node["interfaces"]:
+        if iface.get("network") is None:
+            return f"ether{iface['index'] + 1}"
+    raise LabError(f"el nodo {node['role']!r} no tiene pata de gestión declarada")
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +87,12 @@ def bootstrap_script(node: dict, env: dict, routeros_password: str) -> str:
         f"/ip address add address={mgmt}/16 interface={management_interface(node)}",
         ':if ([:len [/user find where name="%s"]] = 0) do={/user add name="%s" group=full}'
         % (username, username),
-        '/user set [find where name="%s"] password="%s"' % (username, _quote(routeros_password)),
+        # El agente ejecuta con una política sin `sensitive`: `/user set` falla con
+        # "not enough permissions (9)" (medido). Se intenta sin abortar el script —
+        # la dirección es lo que no puede perderse — y la clave la pone la puerta
+        # REST, que sí corre con la política completa del admin.
+        ':do {/user set [find where name="%s"] password="%s"} on-error={:put "clave pendiente: la pone REST"}'
+        % (username, _quote(routeros_password)),
         ':put "netlabs bootstrap done"',
         "",
     ])
@@ -107,7 +128,7 @@ def ros_ops(node: dict, current: dict, routeros_password: str) -> list[dict]:
         actual = (current.get("identity") or {}).get("name")
         deseado = configure["identity"]["name"]
         if actual != deseado:
-            ops.append({"method": "PATCH", "path": "/rest/system/identity",
+            ops.append({"method": "POST", "path": "/rest/system/identity/set",
                         "body": {"name": deseado},
                         "effect": f"identidad del router -> {deseado}"})
 
@@ -116,10 +137,13 @@ def ros_ops(node: dict, current: dict, routeros_password: str) -> list[dict]:
         for nombre, activo in sorted(configure["services"].items()):
             servicio = servicios.get(nombre)
             if servicio is None:
-                ops.append({"method": "POST", "path": "/rest/ip/service",
-                            "body": {"name": nombre, "disabled": "no" if activo else "yes"},
-                            "effect": f"servicio {nombre} al alta"})
-                continue
+                # Los servicios de RouterOS son fijos: no se crean, se encienden o se
+                # apagan. Un nombre que no existe es una errata en el laboratorio, y se
+                # dice en vez de inventar un servicio que el router no tiene.
+                raise LabError(
+                    f"el servicio {nombre!r} no existe en el router: los servicios son "
+                    f"fijos. Los que hay: {', '.join(sorted(servicios))}"
+                )
             esta_deshabilitado = str(servicio.get("disabled", "false")).lower() in ("true", "yes")
             if activo == esta_deshabilitado:
                 ops.append({"method": "PATCH", "path": f"/rest/ip/service/{servicio['.id']}",
@@ -144,7 +168,7 @@ def _address_ops(node: dict, deseadas: list, actuales: list) -> list[dict]:
     for iface, direcciones in deseadas_por_pata.items():
         for direccion in direcciones:
             if not any(a.get("interface") == iface and a.get("address") == direccion for a in actuales):
-                ops.append({"method": "POST", "path": "/rest/ip/address",
+                ops.append({"method": "PUT", "path": "/rest/ip/address",
                             "body": {"address": direccion, "interface": iface},
                             "effect": f"dirección {direccion} en {iface}"})
     for actual in actuales:
@@ -179,7 +203,7 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
         deseados_red.add(_network_cidr(node, red))
 
         if nombre not in pools:
-            ops.append({"method": "POST", "path": "/rest/ip/pool",
+            ops.append({"method": "PUT", "path": "/rest/ip/pool",
                         "body": {"name": nombre, "ranges": rango},
                         "effect": f"margen de direcciones {rango} ({nombre})"})
         elif pools[nombre].get("ranges") != rango:
@@ -188,7 +212,7 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
                         "effect": f"margen de direcciones {rango} ({nombre})"})
 
         if nombre not in servidores:
-            ops.append({"method": "POST", "path": "/rest/ip/dhcp-server",
+            ops.append({"method": "PUT", "path": "/rest/ip/dhcp-server",
                         "body": {"name": nombre, "interface": iface,
                                  "address-pool": nombre, "disabled": "no"},
                         "effect": f"servidor de direcciones en {iface} ({nombre})"})
@@ -201,7 +225,7 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
 
         cidr = _network_cidr(node, red)
         if cidr not in redes:
-            ops.append({"method": "POST", "path": "/rest/ip/dhcp-server/network",
+            ops.append({"method": "PUT", "path": "/rest/ip/dhcp-server/network",
                         "body": {"address": cidr, "gateway": gateway},
                         "effect": f"red servida {cidr} por {gateway}"})
         elif redes[cidr].get("gateway") != gateway:
@@ -253,7 +277,7 @@ def _user_ops(declarados: list, actuales: list, routeros_password: str) -> list[
     ops = []
     for user in declarados:
         if user["name"] not in existentes:
-            ops.append({"method": "POST", "path": "/rest/user",
+            ops.append({"method": "PUT", "path": "/rest/user",
                         "body": {"name": user["name"], "password": routeros_password,
                                  "group": "full"},
                         "effect": f"usuario {user['name']}"})

@@ -394,10 +394,19 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     used = set(int(v) for v in (world.get("used_vmids") or []))
     mine = {g["vmid"]: g for g in guests if g.get("pool") == pool}
     by_role = {}
-    for guest in mine.values():
-        role = _role_from_description(guest.get("description") or "")
-        if role:
+    sobra = []
+    # El nombre se deriva del rol (`<código>-<rol>`), así que un invitado que nació
+    # antes de que el motor escribiera la etiqueta se reconoce igual por su nombre.
+    # Sin ese respaldo, cada apply de un laboratorio viejo crearía un juego nuevo.
+    nombres = {f"{TYPES[n['type']]['code']}-{n['role']}": n["role"] for n in lab["nodes"]}
+    roles = {n["role"] for n in lab["nodes"]}
+    for guest in sorted(mine.values(), key=lambda g: int(g["vmid"])):
+        role = _role_of(guest) or nombres.get(guest.get("name") or "")
+        if role in roles and role not in by_role:
             by_role[role] = guest
+        else:
+            # Duplicado del mismo rol o invitado que la declaración no pide: sobra.
+            sobra.append(guest)
 
     # Un rol que ya vive en el pool conserva su vmid: si no, el segundo apply
     # movería el invitado en vez de no hacer nada.
@@ -446,6 +455,24 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         steps.append({"op": "pool_ensure", "pool": pool})
         effects.append(f"crear el pool {pool}")
 
+    # Lo que sobra en el pool: la otra mitad de la diferencia. Sin esta cuenta, un
+    # apply tras otro deja juegos de invitados viejos dentro del laboratorio.
+    for guest in sobra:
+        steps.append({
+            "op": "guest_destroy",
+            "vmid": int(guest["vmid"]),
+            "name": guest.get("name"),
+            # Misma forma que un nodo del plan: `type` es la clase de equipo y
+            # `guest` el tipo de invitado del hipervisor. Así el retiro usa el mismo
+            # fichero que `destroy` sin traducir claves.
+            "type": guest.get("type"),
+            "guest": guest.get("type"),
+        })
+        effects.append(
+            f"retirar {guest.get('name')} ({guest['vmid']}): está en {pool} y la "
+            "declaración no lo pide"
+        )
+
     for built in nodes:
         existing = by_role.get(built["role"])
         if existing is None:
@@ -459,7 +486,9 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
             if existing.get("status") != "running":
                 steps.append({"op": "guest_start", "vmid": built["vmid"]})
                 effects.append(f"arrancar {built['name']} ({built['vmid']})")
-        steps.append({"op": "guest_ensure", "guest": built})
+        # Un invitado que ya está como debe no genera paso: un plan lleno de
+        # "asegurar" que no cambian nada diría que hay trabajo donde no lo hay, y
+        # el segundo apply dejaría de poder decir "nada que hacer".
 
     if any(s["op"] == "guest_create" for s in steps):
         effects.append("cada invitado nuevo se arranca y se espera a que responda (sin dormir a ciegas)")
@@ -471,6 +500,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         "effects": effects,
         "steps": steps,
         "stages": sorted({n["stage"] for n in nodes}),
+        "surplus": [int(g["vmid"]) for g in sobra],
         "tunnel_forwards": [
             {"vmid": n["vmid"], "role": n["role"], "address": n["mgmt_address"]}
             for n in nodes
@@ -598,6 +628,28 @@ def _lab_from_comment(comment: str):
 def _role_from_description(description: str):
     match = re.search(r"(?:^|\s)role=([A-Za-z0-9][A-Za-z0-9_.-]*)", description)
     return match.group(1) if match else None
+
+
+def _role_from_tags(tags: str):
+    """El rol que el motor escribió en las etiquetas del invitado.
+
+    `/cluster/resources` NO devuelve la descripción (medido), pero SÍ las etiquetas.
+    Leer el rol de ahí es lo que hace que el segundo `apply` reconozca sus propios
+    invitados en vez de crear un juego nuevo cada pasada. La descripción sigue
+    siendo la marca legible para un humano; las etiquetas son la marca que el motor
+    puede leer sin una llamada por invitado.
+    """
+    for tag in (tags or "").split(";"):
+        if tag.startswith("role="):
+            return tag[len("role="):]
+    return None
+
+
+def _role_of(guest: dict):
+    """El rol de un invitado: primero la etiqueta, luego la descripción."""
+    return _role_from_tags(guest.get("tags") or "") or _role_from_description(
+        guest.get("description") or ""
+    )
 
 
 def _ids_of(guests) -> set:

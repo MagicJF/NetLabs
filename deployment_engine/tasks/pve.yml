@@ -21,7 +21,18 @@
     validate_certs: "{{ env.proxmox.verify_tls }}"
     status_code: "{{ pve_status | default([200, 201]) }}"
     timeout: 120
+    # Sólo las lecturas del agente necesitan el cuerpo; el resto no lo pide.
+    return_content: "{{ pve_return_content | default(omit) }}"
   register: pve_r
+  # Sondeo opcional: quien llama pide una condición (`pve_until`) y un tope
+  # (`pve_retries`); la puerta reintenta la MISMA llamada hasta que se cumple. Sin
+  # esto, un `until` sobre un `include_tasks` no es válido (medido: `delay` no es
+  # atributo de TaskInclude) y el sondeo acabaría fuera de la puerta.
+  # Sin delimitadores: `until` ya evalúa su expresión, y envolverla en {{ }} está
+  # deprecado (se retira en ansible-core 2.23).
+  until: pve_until | default(true)
+  retries: "{{ pve_retries | default(1) }}"
+  delay: "{{ pve_delay | default(2) }}"
   # Una lectura no cambia nada; una escritura sí. Es lo que hace honesto el `changed`
   # del segundo apply.
   changed_when: pve_method != 'GET'

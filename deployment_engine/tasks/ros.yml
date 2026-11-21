@@ -6,18 +6,82 @@
 #              se entra.
 # VER:         docs/diseno.md §4.4, §6
 
+# La clave del router no puede ponerla el script de arranque: el agente ejecuta con
+# una política sin `sensitive` y `/user set` falla con "not enough permissions (9)"
+# (medido). La pone aquí la primera sesión REST, que corre con la política completa.
+# Sólo se toca cuando la clave del secreto NO entra: si ya entra, no se escribe nada.
+- name: "RouterOS · comprobar la clave de {{ router.name }}"
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}/rest/system/identity"
+    method: GET
+    url_username: "{{ ros_user }}"
+    url_password: "{{ secrets.routeros_clave }}"
+    force_basic_auth: true
+    status_code: [200, 401]
+    timeout: 30
+  register: ros_login
+  changed_when: false
+  # El arranque acaba de mover la dirección de gestión: el REST puede tardar unos
+  # segundos en contestar. Se sondea con tope, no se da por caído al primer intento.
+  failed_when: false
+  until: ros_login.status in [200, 401]
+  retries: 20
+  delay: 3
+
+- name: "RouterOS · poner la clave inicial de {{ router.name }}"
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}/rest/user/*1"
+    method: PATCH
+    url_username: "{{ ros_user }}"
+    url_password: ""
+    force_basic_auth: true
+    body_format: json
+    body: {password: "{{ secrets.routeros_clave }}"}
+    # Al cambiar su propia clave, RouterOS cierra la sesión y responde 400
+    # "Session closed" aunque el cambio sí se aplicó (medido).
+    status_code: [200, 204, 400]
+    timeout: 30
+  when: ros_login.status == 401
+
+- name: "RouterOS · la clave del secreto tiene que entrar en {{ router.name }}"
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}/rest/system/identity"
+    method: GET
+    url_username: "{{ ros_user }}"
+    url_password: "{{ secrets.routeros_clave }}"
+    force_basic_auth: true
+    status_code: [200, 401]
+    timeout: 30
+  register: ros_login_ok
+  changed_when: false
+  failed_when: false
+  until: ros_login_ok.status in [200, 401]
+  retries: 10
+  delay: 3
+
+- name: "RouterOS · sin la clave del secreto no se entra: se para"
+  ansible.builtin.assert:
+    that: ros_login_ok.status == 200
+    fail_msg: >-
+      {{ ros_user }} no entra en {{ router.name }} con la clave del secreto
+      (HTTP {{ ros_login_ok.status | default('sin respuesta') }}). El arranque no
+      pudo ponerla y el motor no sigue por un camino que no puede autenticar.
+
 - name: "RouterOS · leer el interior de {{ router.name }}"
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ item }}"
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_lectura }}"
     method: GET
     url_username: "{{ ros_user }}"
     url_password: "{{ secrets.routeros_clave }}"
     force_basic_auth: true
     status_code: [200]
     timeout: 30
+  # El nombre del bucle no puede ser `item`: este fichero se incluye con un `item`
+  # del llamante y el bucle interno lo pisaría (el `router` se volvería una cadena).
   loop: "{{ router | netlabs_ros_reads }}"
   loop_control:
-    label: "{{ item }}"
+    loop_var: ros_lectura
+    label: "{{ ros_lectura }}"
   register: ros_lecturas
   changed_when: false
 
@@ -39,18 +103,23 @@
 
 - name: "RouterOS · escribir en {{ router.name }}"
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ item.path }}"
-    method: "{{ item.method }}"
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_op.path }}"
+    method: "{{ ros_op.method }}"
     url_username: "{{ ros_user }}"
     url_password: "{{ secrets.routeros_clave }}"
     force_basic_auth: true
     body_format: json
-    body: "{{ item.body | default(omit) }}"
+    body: "{{ ros_op.body | default(omit) }}"
     status_code: [200, 201, 204]
     timeout: 30
   loop: "{{ ros_ops }}"
   loop_control:
-    label: "{{ item.effect }}"
+    loop_var: ros_op
+    label: "{{ ros_op.effect }}"
+  # Sólo se emite una llamada cuando hay diferencia, así que cada una es un cambio
+  # de verdad. El módulo `uri` no lo marca por su cuenta y el `changed` del apply
+  # tiene que decir la verdad: si escribió, cambió.
+  changed_when: ros_op.method != 'GET'
 
 - name: "RouterOS · comprobar que lo declarado está de verdad en {{ router.name }}"
   ansible.builtin.uri:

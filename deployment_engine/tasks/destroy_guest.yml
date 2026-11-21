@@ -1,0 +1,36 @@
+# PROPÓSITO:   retirar un invitado que sobra dentro del pool del laboratorio: pararlo,
+#              esperar a que pare, borrarlo con purge y esperar a que desaparezca.
+# INVARIANTES: sólo se llama con un invitado que ya está dentro del pool del
+#              laboratorio (lo decide el plan); aquí no se busca nada por nombre.
+#              Nada de `sleep`: se sondea el estado con tope.
+# VER:         docs/diseno.md §7; AGENTS.md §3.5, §3.6
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: POST
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if guest.guest == 'lxc' else 'qemu' }}/{{ guest.vmid }}/status/stop"
+    pve_do: "parar {{ guest.name }} ({{ guest.vmid }})"
+    pve_status: [200, 500]
+
+# El sondeo vive en la puerta: `until` sobre un `include_tasks` no es válido (medido).
+- include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if guest.guest == 'lxc' else 'qemu' }}/{{ guest.vmid }}/status/current"
+    pve_do: "leer el estado de {{ guest.name }}"
+    pve_until: "{{ pve_r.json.data.status == 'stopped' }}"
+    pve_retries: 30
+    pve_delay: 2
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: DELETE
+    # purge va en la ruta: la API rechaza un DELETE con cuerpo (medido).
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if guest.guest == 'lxc' else 'qemu' }}/{{ guest.vmid }}?purge=1"
+    pve_do: "borrar {{ guest.name }} ({{ guest.vmid }})"
+    pve_status: [200]
+
+- include_tasks: wait_task.yml
+  vars:
+    upid: "{{ pve_r.json.data }}"
+    pve_do: "borrar {{ guest.name }}"

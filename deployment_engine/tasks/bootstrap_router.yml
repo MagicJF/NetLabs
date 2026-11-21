@@ -8,24 +8,19 @@
 # VER:         docs/diseno.md §4.5; AGENTS.md §7
 
 - name: "PVE · esperar a que el agente de {{ guest.name }} conteste"
-  ansible.builtin.uri:
-    url: "https://{{ secrets.pve_nodo }}:{{ secrets.pve_puerto }}/api2/json/nodes/{{ env.proxmox.node }}/qemu/{{ guest.vmid }}/agent/ping"
-    method: POST
-    headers:
-      Authorization: "PVEAPIToken={{ secrets.pve_token_id }}={{ secrets.pve_token_secreto }}"
-    validate_certs: "{{ env.proxmox.verify_tls }}"
-    status_code: [200, 500, 501, 595, 596]
-    timeout: 30
-  register: agente
-  until: agente.status == 200
-  retries: "{{ agente_intentos | default(60) }}"
-  delay: 3
-  changed_when: false
-  failed_when: false
+  include_tasks: pve.yml
+  vars:
+    pve_method: POST
+    pve_path: "/nodes/{{ env.proxmox.node }}/qemu/{{ guest.vmid }}/agent/ping"
+    pve_do: "llamar al agente de {{ guest.name }}"
+    pve_status: [200, 500, 501, 595, 596]
+    pve_until: "{{ pve_r.status == 200 }}"
+    pve_retries: "{{ agente_intentos | default(60) }}"
+    pve_delay: 3
 
 - name: "{{ guest.name }} no tiene agente: la puerta de arranque está cerrada"
   ansible.builtin.assert:
-    that: agente.status == 200
+    that: pve_r.status == 200
     fail_msg: >-
       El agente de {{ guest.name }} ({{ guest.vmid }}) no contestó. Sin agente no se
       arranca: la consola es la puerta de emergencia, no el camino normal, y el motor
@@ -45,9 +40,12 @@
 
 - name: "{{ guest.name }}: el fichero de arranque no llegó entero"
   ansible.builtin.assert:
-    that: "'guest-file-close' in (pve_r.content | default('')) or pve_r.status == 200"
+    that: >-
+      'guest-file-close' in ((pve_r['json']['message'] | default('')) ~ ' ' ~ (pve_r['msg'] | default('')))
+      or pve_r['status'] == 200
     fail_msg: >-
-      La API no respondió con el aviso conocido de cierre del fichero: {{ pve_r.content }}.
+      La API no respondió con el aviso conocido de cierre del fichero:
+      {{ pve_r['json']['message'] | default(pve_r['msg'] | default('')) }}.
 
 - include_tasks: pve.yml
   vars:
@@ -59,26 +57,27 @@
     pve_status: [200]
 
 - name: "PVE · leer la dirección de gestión de {{ guest.name }}"
-  ansible.builtin.uri:
-    url: "https://{{ secrets.pve_nodo }}:{{ secrets.pve_puerto }}/api2/json/nodes/{{ env.proxmox.node }}/qemu/{{ guest.vmid }}/agent/network-get-interfaces"
-    method: GET
-    headers:
-      Authorization: "PVEAPIToken={{ secrets.pve_token_id }}={{ secrets.pve_token_secreto }}"
-    validate_certs: "{{ env.proxmox.verify_tls }}"
-    status_code: [200, 500]
-    timeout: 30
-  register: interfaces
-  until: >-
-    interfaces.status == 200 and
-    (guest.mgmt_address in (interfaces.content | default('')))
-  retries: 20
-  delay: 3
-  changed_when: false
-  failed_when: false
+  include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: "/nodes/{{ env.proxmox.node }}/qemu/{{ guest.vmid }}/agent/network-get-interfaces"
+    pve_do: "leer las interfaces de {{ guest.name }}"
+    pve_status: [200, 500]
+    # Sin esto, `content` no vuelve y la aserción nunca puede pasar (medido).
+    pve_return_content: true
+    pve_until: >-
+      {{ pve_r.status == 200 and
+         (pve_r.json.data.result | default([]) | map(attribute='ip-addresses', default=[]) | flatten
+          | map(attribute='ip-address', default='') | select('equalto', guest.mgmt_address) | list | length > 0) }}
+    pve_retries: 20
+    pve_delay: 3
 
 - name: "{{ guest.name }} no tomó su dirección de gestión"
   ansible.builtin.assert:
-    that: interfaces.status == 200 and guest.mgmt_address in (interfaces.content | default(''))
+    that: >-
+      pve_r.status == 200 and
+      (pve_r.json.data.result | default([]) | map(attribute='ip-addresses', default=[]) | flatten
+       | map(attribute='ip-address', default='') | select('equalto', guest.mgmt_address) | list | length > 0)
     fail_msg: >-
       Se ejecutó el arranque y el agente no ve {{ guest.mgmt_address }} en
       {{ guest.name }}. El router no está en la red de gestión: no se sigue.
