@@ -33,6 +33,8 @@ ROS_READS = (
     "/rest/user",
     "/rest/snmp",
     "/rest/snmp/community",
+    "/rest/interface/bridge",
+    "/rest/interface/bridge/port",
 )
 
 PREFIX = "netlabs-"
@@ -131,8 +133,9 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
     resuelve en secrets.yml; sólo lectura y restringida a la gestión.
     """
     ops: list[dict] = []
-
     configure = node.get("configure") or {}
+    if node.get("type") == "switch":
+        ops += _switch_ops(node, current)
     if not configure:
         return ops
 
@@ -235,6 +238,44 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
             ops.append({"method": "PATCH", "path": f"/rest/snmp/community/{otra['.id']}",
                         "body": {"disabled": "yes"},
                         "effect": f"apagar comunidad SNMP {otra.get('name')!r} (abierta o sin uso)"})
+    return ops
+
+
+def _switch_ops(node: dict, current: dict) -> list[dict]:
+    """Un switch no enruta: junta sus patas de laboratorio en un solo puente.
+
+    La pata de gestión (la última) queda fuera del puente: si entrara, el switch
+    sería un cable entre la red de gestión y el laboratorio, que es justo lo que
+    el diseño prohíbe. El puente se llama por la red, no por el equipo: dos
+    switches del mismo laboratorio no comparten puente dentro de su RouterOS.
+    """
+    red = node["networks"][0]["name"]
+    nombre = f"{PREFIX}{red}"
+    ops: list[dict] = []
+
+    puentes = {b.get("name") for b in current.get("bridges") or []}
+    if nombre not in puentes:
+        ops.append({"method": "PUT", "path": "/rest/interface/bridge",
+                    "body": {"name": nombre, "protocol-mode": "none"},
+                    "effect": f"puente {nombre} (sin STP: no hay bucles que romper)"})
+
+    puertos = current.get("bridge_ports") or []
+    puestas = {(p.get("bridge"), p.get("interface")) for p in puertos}
+    deseadas = {(nombre, f"ether{i + 1}") for i in range(len(node["networks"]))}
+    for _, interfaz in sorted(deseadas):
+        if (nombre, interfaz) not in puestas:
+            ops.append({"method": "PUT", "path": "/rest/interface/bridge/port",
+                        "body": {"bridge": nombre, "interface": interfaz},
+                        "effect": f"{interfaz} al puente {nombre}"})
+
+    # Dentro del puente, lo que sobra se quita: una pata de gestión metida a mano
+    # dejaría el laboratorio colgando de la red OOB.
+    for puerto in puertos:
+        if puerto.get("bridge") == nombre and \
+                (puerto.get("bridge"), puerto.get("interface")) not in deseadas:
+            ops.append({"method": "DELETE",
+                        "path": f"/rest/interface/bridge/port/{puerto['.id']}",
+                        "effect": f"sacar {puerto.get('interface')} del puente {nombre}"})
     return ops
 
 

@@ -9,7 +9,7 @@
   vars:
     pve_method: GET
     pve_path: "/nodes/{{ env.proxmox.node }}/tasks/{{ upid | urlencode }}/status"
-    pve_do: "leer la tarea {{ pve_do | default('') }}"
+    pve_do: "leer el estado de la tarea {{ upid }}"
     pve_until: "{{ pve_r.json.data.status | default('') == 'stopped' }}"
     pve_retries: "{{ pve_tarea_intentos | default(60) }}"
     pve_delay: 2

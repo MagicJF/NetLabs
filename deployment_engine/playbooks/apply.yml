@@ -195,7 +195,7 @@
       include_tasks: ../tasks/check_lease.yml
       vars:
         guest: "{{ puesto }}"
-      loop: "{{ plan.nodes | rejectattr('management') | rejectattr('control') | list }}"
+      loop: "{{ plan.nodes | rejectattr('management') | rejectattr('control', 'defined') | list }}"
       # El nombre del bucle no puede ser `item`: el fichero incluido usa `item` y
       # éste lo pisaría. Y el nombre de la tarea no puede citar `item` antes de
       # existir: ansible lo intenta y deja un error de plantilla en el título.

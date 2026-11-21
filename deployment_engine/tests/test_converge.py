@@ -305,5 +305,54 @@ class LaObservabilidadDelRouter(unittest.TestCase):
             converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave", {}, self.CIDR)
 
 
+class ElSwitchConmuta(unittest.TestCase):
+    """El switch mete sus patas de laboratorio en un puente y deja fuera la de gestión."""
+
+    def nodo(self):
+        return {
+            "role": "sw-1", "type": "switch",
+            "networks": [{"name": "lan"}, {"name": "lan"}],
+            "interfaces": [
+                {"index": 0, "network": "lan"},
+                {"index": 1, "network": "lan"},
+                {"index": 2, "network": None},
+            ],
+            "configure": {},
+        }
+
+    def test_crea_el_puente_y_mete_solo_las_patas_de_laboratorio(self):
+        ops = converge.ros_ops(self.nodo(), {"bridges": [], "bridge_ports": []}, "clave", {}, None)
+        self.assertEqual([(o["method"], o["path"]) for o in ops], [
+            ("PUT", "/rest/interface/bridge"),
+            ("PUT", "/rest/interface/bridge/port"),
+            ("PUT", "/rest/interface/bridge/port"),
+        ])
+        self.assertEqual({o["body"]["interface"] for o in ops[1:]}, {"ether1", "ether2"})
+        self.assertEqual(ops[0]["body"]["name"], "netlabs-lan")
+
+    def test_si_ya_esta_no_escribe_nada(self):
+        actual = {
+            "bridges": [{"name": "netlabs-lan"}],
+            "bridge_ports": [
+                {".id": "*1", "bridge": "netlabs-lan", "interface": "ether1"},
+                {".id": "*2", "bridge": "netlabs-lan", "interface": "ether2"},
+            ],
+        }
+        self.assertEqual(converge.ros_ops(self.nodo(), actual, "clave", {}, None), [])
+
+    def test_una_pata_de_gestion_metida_en_el_puente_se_saca(self):
+        actual = {
+            "bridges": [{"name": "netlabs-lan"}],
+            "bridge_ports": [
+                {".id": "*1", "bridge": "netlabs-lan", "interface": "ether1"},
+                {".id": "*2", "bridge": "netlabs-lan", "interface": "ether2"},
+                {".id": "*3", "bridge": "netlabs-lan", "interface": "ether3"},
+            ],
+        }
+        ops = converge.ros_ops(self.nodo(), actual, "clave", {}, None)
+        self.assertEqual([(o["method"], o["path"]) for o in ops],
+                         [("DELETE", "/rest/interface/bridge/port/*3")])
+
+
 if __name__ == "__main__":
     unittest.main()

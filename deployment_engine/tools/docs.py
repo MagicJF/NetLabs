@@ -46,9 +46,16 @@ def escribir(nombre: str, env: dict, comprobar: bool = False) -> int:
     if identity.DOC_BEGIN in texto and identity.DOC_END in texto:
         antes, resto = texto.split(identity.DOC_BEGIN, 1)
         _, despues = resto.split(identity.DOC_END, 1)
-        nuevo = antes + generado + despues
+        # Entre la marca y la prosa va UNA línea en blanco: si se deja lo que hubiera,
+        # cada pasada de `docs` añade una más y la página engorda sin que se note.
+        despues = despues.lstrip("\n")
+        nuevo = antes + generado + ("\n" + despues if despues else "")
     else:
         nuevo = texto.rstrip() + "\n\n" + generado
+
+    # La página termina en un solo salto de línea: si no, cada pasada de `docs` deja
+    # una línea en blanco más al final y el fichero crece sin que nadie lo note.
+    nuevo = nuevo.rstrip("\n") + "\n"
 
     if comprobar:
         if nuevo != texto:

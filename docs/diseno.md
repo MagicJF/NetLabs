@@ -122,6 +122,13 @@ verde.
 *Evita:* el despliegue que tarda de más porque durmió, el que mira antes de tiempo y el proceso
 que se queda parado sin decir por qué.
 
+**La condición se escribe para que pueda fallar.** «El puesto tiene dirección» es una IPv4 en una
+interfaz que no sea `lo`, no la palabra `inet` en cualquier parte de la respuesta: el bucle local
+siempre la lleva y una comprobación así nunca falla —y una comprobación que no puede fallar no
+comprueba nada—. Si el puesto arrancó antes de que su router sirviera DHCP y se quedó mudo, el
+motor lo **reinicia una vez** (una reparación acotada, visible en el informe) y vuelve a sondear;
+si aun así no hay dirección, el `apply` para con su nombre.
+
 ### 2.6. Nunca para en silencio, nunca sigue de largo
 
 Un paso que no puede cumplirse **para y dice qué falta y cómo se arregla**. No hay «continuar
@@ -476,6 +483,15 @@ renumerar las interfaces declaradas— y su dirección de gestión se deriva del
 Por ahí los alcanza **Ansible** (entrando por el servicio persistente, §3.4) y por ahí los
 observa **NetXMS**.
 Es su plano de gestión; su tráfico de datos no pasa por ahí.
+
+**Un switch, dentro, es un puente.** El motor no le pone direcciones de laboratorio (no declara
+`address`) y converge su interior a un único `/interface/bridge` llamado `netlabs-<red>` con una
+sola entrada por cada pata de laboratorio; la pata de gestión queda **fuera** del puente, porque
+si entrara el switch sería un cable entre la red de gestión y el laboratorio. El puente va sin STP
+(`protocol-mode: none`): no hay bucles que romper en un cableado declarado, y un protocolo que no
+se declara no se enciende. Todas sus patas tienen que ser de la **misma red** —un switch que une
+dos redes está enrutando— y por eso el mismo tipo no admite la red repetida que un router sí
+prohíbe.
 
 ### 4.2. Nodos finales (`type: server`, `type: workstation`)
 

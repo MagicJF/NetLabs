@@ -170,6 +170,20 @@ class ElPlan(unittest.TestCase):
                 self.assertTrue(all(i["network"] is not None for i in node["interfaces"]))
 
 
+class ElSwitch(unittest.TestCase):
+    """Un switch reparte el cable dentro de UN dominio; no enruta ni lleva IP de laboratorio."""
+
+    def test_sus_patas_de_laboratorio_van_a_un_solo_dominio(self):
+        plan = identity.plan(mundo(), laboratorio("dos"), entorno())
+        switch = next(n for n in plan["nodes"] if n["role"] == "nucleo")
+        self.assertEqual([i["network"] for i in switch["interfaces"]], ["lan", "lan", None])
+        self.assertIsNone(switch["address"])
+        self.assertIsNone(switch["interfaces"][0]["address"])
+        # La pata de gestión queda fuera del puente, pero se deriva como la del router.
+        self.assertEqual(switch["interfaces"][-1]["bridge"], "vmbr30")
+        self.assertTrue(switch["mgmt_address"].startswith("10.30."))
+
+
 class Rechazos(unittest.TestCase):
     CASOS = [
         (lambda l: l.update(extra=1), "clave desconocida"),
@@ -190,6 +204,11 @@ class Rechazos(unittest.TestCase):
             password_from="secrets.otra"), "solo puede tomar la clave"),
         (lambda l: l["nodes"][0]["configure"]["addresses"][0].update(
             network="lan9"), "que no existe"),
+        # Un router con dos patas en la misma red estaría conmutando; eso es un switch.
+        (lambda l: l["nodes"][0].update(networks=["lan1", "lan1"]), "no conmuta"),
+        (lambda l: l["nodes"][1].update(type="switch", networks=["lan1", "lan2"]),
+         "un solo dominio de difusión"),
+        (lambda l: l["nodes"][1].update(address=None), "no declara 'address'"),
     ]
 
     def test_rechaza_lo_que_no_entiende(self):
@@ -304,6 +323,13 @@ class Documentacion(unittest.TestCase):
     def test_la_documentacion_generada_es_estable(self):
         self.assertEqual(identity.render_docs(laboratorio(), entorno()),
                          identity.render_docs(laboratorio(), entorno()))
+
+    def test_la_documentacion_dibuja_la_topologia_y_el_cableado(self):
+        texto = identity.render_docs(laboratorio(), entorno())
+        # Dos dibujos distintos: quién está en qué red y qué cable va de qué puerto a cuál.
+        self.assertIn("```mermaid\narchitecture-beta", texto)
+        self.assertIn("```mermaid\nflowchart LR", texto)
+        self.assertIn("---|p1 — p1|", texto)
 
 
 if __name__ == "__main__":

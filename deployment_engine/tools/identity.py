@@ -424,13 +424,24 @@ def _validate_node(node: dict, networks: dict, roles: set) -> None:
                 f"el nodo {role!r} usa la red {net!r}, que no está declarada en 'networks' "
                 f"({', '.join(sorted(networks)) or 'ninguna'})"
             )
-    if kind in ("router", "switch") and len(set(nets)) != len(nets):
-        raise LabError(f"el nodo {role!r} declara una red repetida: cada pata es una interfaz")
+    if kind in ("router", "firewall") and len(set(nets)) != len(nets):
+        raise LabError(
+            f"el nodo {role!r} declara una red repetida: un router enruta, no conmuta. "
+            "Para varias patas en la misma red, declara un switch"
+        )
+    if kind == "switch" and len(set(nets)) != 1:
+        raise LabError(
+            f"el nodo {role!r} es un switch y declara {len(set(nets))} redes: un switch es "
+            "un solo dominio de difusión; para unir dos redes, un router"
+        )
 
     address = node.get("address")
     if address is None:
-        raise LabError(f"el nodo {role!r} no declara 'address' (un CIDR o 'dhcp')")
-    if address == "dhcp":
+        # Un equipo de red no lleva dirección de laboratorio: su gestión se deriva
+        # del vmid y va por la pata OOB. Sólo un puesto o un servidor declaran una.
+        if not TYPES[kind]["network_device"]:
+            raise LabError(f"el nodo {role!r} no declara 'address' (un CIDR o 'dhcp')")
+    elif address == "dhcp":
         if TYPES[kind]["network_device"]:
             raise LabError(
                 f"el nodo {role!r} es un equipo de red y no puede pedir dirección: "
@@ -917,8 +928,8 @@ def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
             "label": f"net{index}=oob({address})",
         })
 
-    address = node["address"]
-    static = None if address == "dhcp" else str(ipaddress.ip_interface(address))
+    address = node.get("address")
+    static = None if address in (None, "dhcp") else str(ipaddress.ip_interface(address))
     # Un puesto con dirección fija sale por la puerta que declara el router de su red;
     # si nadie la declara, la primera del rango. Se deriva, no se pide.
     if static and not TYPES[kind]["network_device"]:
@@ -942,7 +953,7 @@ def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
         "interfaces": interfaces,
         "management": management,
         "mgmt_address": str(derive_management(vmid, env["management"]["address_space"])) if management else None,
-        "address": static or "dhcp",
+        "address": static or ("dhcp" if address == "dhcp" else None),
         "networks": [{"name": n, "address": str(networks[n])} for n in node["networks"]],
         "configure": node.get("configure") or {},
     }
@@ -1194,6 +1205,65 @@ def _render_control_docs(lab: dict, env: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _id(role: str) -> str:
+    """Un identificador que Mermaid acepte: letras, cifras y guion bajo."""
+    limpio = "".join(c if c.isalnum() else "_" for c in role)
+    return f"n_{limpio}"
+
+
+def _mermaid_topologia(lab: dict) -> list[str]:
+    """Quién está en qué red y quién es su puerta: la topología, no el cableado.
+
+    Una nube por red declarada y un equipo por nodo; cada nodo cuelga de todas las
+    redes en las que tiene pata. Con `architecture-beta` los iconos son vectores
+    nativos y el dibujo no depende de una fuente.
+    """
+    lineas = ["```mermaid", "architecture-beta"]
+    for net in lab["networks"]:
+        lineas.append(f"    service red_{_id(net['name'])[2:]}(cloud)[{net['name']} {net['address']}]")
+    for node in lab["nodes"]:
+        papel = node["type"]
+        if node.get("address") and node["address"] != "dhcp":
+            papel += f" {node['address']}"
+        elif node.get("address") == "dhcp":
+            papel += " dhcp"
+        lineas.append(f"    service {_id(node['role'])}(server)[{node['role']} {papel}]")
+    lados = ["R", "L", "T", "B"]
+    orden = 0
+    for node in lab["nodes"]:
+        for net in dict.fromkeys(node.get("networks") or []):
+            lado_red = lados[orden % len(lados)]
+            lado_nodo = lados[(orden + 2) % len(lados)]
+            orden += 1
+            lineas.append(
+                f"    {_id(node['role'])}:{lado_nodo} -- {lado_red}:red_{_id(net)[2:]}"
+            )
+    lineas.append("```")
+    return lineas
+
+
+def _mermaid_cableado(lab: dict) -> list[str]:
+    """Qué cable va de qué puerto a qué puerto: el L2 tal y como se declara.
+
+    `architecture-beta` no admite texto en las aristas, y aquí el dato que importa
+    es justo ése (el puerto de cada punta), así que el cableado va en `flowchart`.
+    """
+    lineas = ["```mermaid", "flowchart LR"]
+    formas = {"router": '["{}"]', "switch": '{{"{}"}}', "firewall": '["{}"]',
+              "server": '["{}"]', "workstation": '["{}"]'}
+    for node in lab["nodes"]:
+        forma = formas.get(node["type"], '["{}"]')
+        etiqueta = f"{node['role']} {node['type']}"
+        lineas.append(f"    {_id(node['role'])}{forma.format(etiqueta)}")
+    for link in lab.get("links") or []:
+        a, z = link["a"], link["z"]
+        lineas.append(
+            f"    {_id(a['node'])} ---|p{a['port']} — p{z['port']}| {_id(z['node'])}"
+        )
+    lineas.append("```")
+    return lineas
+
+
 def render_docs(lab: dict, env: dict) -> str:
     """La región generada de la página del laboratorio, desde la declaración.
 
@@ -1206,6 +1276,10 @@ def render_docs(lab: dict, env: dict) -> str:
     lines = [DOC_BEGIN, "", f"## {lab['lab']}"]
     lines.append(f"Slot: {lab.get('slot', 0)}")
     lines.append("Address spaces: " + ", ".join(f"`{s}`" for s in lab["address_spaces"]))
+    lines += ["", "### Topología", ""]
+    lines += _mermaid_topologia(lab)
+    lines += ["", "### Cableado (L2)", ""]
+    lines += _mermaid_cableado(lab)
     lines += ["", "### Networks", "", "| network | address |", "| --- | --- |"]
     for net in lab["networks"]:
         lines.append(f"| `{net['name']}` | `{net['address']}` |")
