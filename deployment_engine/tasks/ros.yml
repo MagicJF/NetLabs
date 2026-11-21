@@ -98,11 +98,11 @@
     ros_current: >-
       {{ dict(ros_claves | zip(ros_lecturas.results | map(attribute='json') | list)) }}
   vars:
-    ros_claves: [identity, addresses, pools, dhcp_servers, dhcp_networks, services, users]
+    ros_claves: [identity, addresses, pools, dhcp_servers, dhcp_networks, services, users, snmp, snmp_community]
 
 - name: "RouterOS · calcular la diferencia de {{ router.name }}"
   ansible.builtin.set_fact:
-    ros_ops: "{{ router | netlabs_ros_ops(ros_current, ros_clave) }}"
+    ros_ops: "{{ router | netlabs_ros_ops(ros_current, ros_clave, secrets, env.management.address_space) }}"
 
 - name: "RouterOS · enseñar la diferencia de {{ router.name }}"
   ansible.builtin.debug:

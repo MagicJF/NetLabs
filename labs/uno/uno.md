@@ -31,7 +31,7 @@ Address spaces: `10.44.0.0/16`
 | `rt01p01_ws01p01` | `rt01p01` | `ws01p01` | `10.44.1.0/24` |
 | `rt01p02_ws02p01` | `rt01p02` | `ws02p01` | `10.44.2.0/24` |
 
-Configured areas: `addresses`, `dhcp_server`, `identity`, `services`, `users`.
+Configured areas: `addresses`, `dhcp_server`, `identity`, `services`, `snmp`, `users`.
 
 <!-- netlabs:end -->
 

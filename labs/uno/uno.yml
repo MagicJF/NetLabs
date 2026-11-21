@@ -42,6 +42,9 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
+      # SNMP se declara como cualquier otra área: el laboratorio dice si lo quiere y
+      # nombra la comunidad; el valor vive en secrets.yml (read-only, sólo gestión).
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
 
   - role: pc-1
     type: workstation

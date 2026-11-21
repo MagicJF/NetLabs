@@ -230,5 +230,80 @@ class LaClaveDelRouter(unittest.TestCase):
             converge.ros_clave(self.nodo(), {"routeros_clave": ""})
 
 
+class LaObservabilidadDelRouter(unittest.TestCase):
+    """El área `snmp` es del laboratorio: si no está, el motor no toca el servicio."""
+
+    CIDR = "10.30.0.0/16"
+    SECRETOS = {"snmp_comunidad": "lab-ro"}
+    AREA = {"enabled": True, "community_from": "secrets.snmp_comunidad"}
+
+    def nodo(self, area=None):
+        nodo = router()
+        nodo["configure"] = {} if area is None else {"snmp": area}
+        return nodo
+
+    def actual(self, enabled="false", comunidades=None):
+        return {
+            "snmp": {"enabled": enabled},
+            "snmp_community": comunidades if comunidades is not None else [
+                {".id": "*0", "name": "public", "addresses": "::/0",
+                 "read-access": "true", "write-access": "false"},
+            ],
+        }
+
+    def test_sin_area_snmp_el_motor_no_toca_el_servicio(self):
+        self.assertEqual(
+            converge.ros_ops(self.nodo(), self.actual(), "clave", self.SECRETOS, self.CIDR), []
+        )
+
+    def test_enciende_snmp_y_sustituye_la_comunidad_abierta(self):
+        ops = converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave",
+                               self.SECRETOS, self.CIDR)
+        caminos = [(o["method"], o["path"]) for o in ops]
+        self.assertIn(("POST", "/rest/snmp/set"), caminos)
+        self.assertIn(("PUT", "/rest/snmp/community"), caminos)
+        self.assertIn(("PATCH", "/rest/snmp/community/*0"), caminos)
+        creada = next(o for o in ops if o["path"] == "/rest/snmp/community")
+        self.assertEqual(creada["body"]["addresses"], self.CIDR)
+        self.assertEqual(creada["body"]["read-access"], "yes")
+        self.assertEqual(creada["body"]["write-access"], "no")
+        # RouterOS no deja borrar la comunidad `default`: se apaga.
+        apagada = next(o for o in ops if o["path"] == "/rest/snmp/community/*0")
+        self.assertEqual(apagada["body"], {"disabled": "yes"})
+
+    def test_si_ya_esta_no_escribe_nada(self):
+        actual = self.actual(enabled="true", comunidades=[
+            {".id": "*1", "name": "lab-ro", "addresses": self.CIDR,
+             "read-access": "true", "write-access": "false"},
+        ])
+        self.assertEqual(
+            converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR), []
+        )
+
+    def test_una_comunidad_propia_abierta_se_restringe(self):
+        actual = self.actual(enabled="true", comunidades=[
+            {".id": "*1", "name": "lab-ro", "addresses": "::/0",
+             "read-access": "true", "write-access": "true"},
+        ])
+        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR)
+        self.assertEqual(len(ops), 1)
+        self.assertEqual(ops[0]["method"], "PATCH")
+        self.assertEqual(ops[0]["body"], {"addresses": self.CIDR, "write-access": "no"})
+
+    def test_el_lab_puede_declararlo_apagado(self):
+        ops = converge.ros_ops(self.nodo({"enabled": False}), self.actual(enabled="true"),
+                               "clave", self.SECRETOS, self.CIDR)
+        self.assertEqual([(o["method"], o["body"]) for o in ops],
+                         [("POST", {"enabled": "no"})])
+
+    def test_sin_red_de_gestion_no_se_inventa_una_comunidad_abierta(self):
+        with self.assertRaisesRegex(converge.LabError, "red de gestión"):
+            converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave", self.SECRETOS, None)
+
+    def test_una_comunidad_que_no_esta_en_secrets_es_un_fallo(self):
+        with self.assertRaisesRegex(converge.LabError, "snmp_comunidad"):
+            converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave", {}, self.CIDR)
+
+
 if __name__ == "__main__":
     unittest.main()

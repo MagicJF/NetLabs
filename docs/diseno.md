@@ -601,11 +601,17 @@ Tres vías, cada una en un fichero del motor:
   nodo, con la contraseña del fichero de secretos (§10).
 
 Lo configurable se declara por **áreas**, nombradas con el vocabulario de la API del equipo
-(`identity`, `addresses`, `routes`, `dhcp_server`, `services`, `users`). Un área declarada se
+(`identity`, `addresses`, `routes`, `dhcp_server`, `services`, `users`, `snmp`). Un área declarada se
 converge entera; un área ausente se deja intacta. Todas las áreas y sus claves caben en **una
 tabla que se lee de una sentada**; si un laboratorio necesita algo que no está, se añade la
 primitiva al motor **con su prueba**, no se abre una puerta genérica del tipo «ejecuta esta
 orden» ni se permite un caso especial por laboratorio.
+
+El área `snmp` enciende el servicio y mantiene una comunidad de **sólo lectura, restringida a la
+red de gestión**: el laboratorio dice `enabled` y nombra la comunidad (`community_from`), y el
+valor se resuelve en `secrets.yml`. Sin el área, el motor no toca el servicio; es lo que permite
+a NetXMS leer nombre, interfaces, rutas y tabla ARP del router, y de ahí lo que cuelga de sus
+redes (§3.4).
 
 El área que abre el laboratorio al plano de gestión (permitir el cruce desde la red de gestión
 hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.

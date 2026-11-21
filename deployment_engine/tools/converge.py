@@ -31,6 +31,8 @@ ROS_READS = (
     "/rest/ip/dhcp-server/network",
     "/rest/ip/service",
     "/rest/user",
+    "/rest/snmp",
+    "/rest/snmp/community",
 )
 
 PREFIX = "netlabs-"
@@ -116,17 +118,28 @@ def _quote(text: str) -> str:
 # RouterOS: comparar lo declarado con lo leído y decir qué falta
 # ---------------------------------------------------------------------------
 
-def ros_ops(node: dict, current: dict, routeros_clave: str) -> list[dict]:
+def ros_ops(node: dict, current: dict, routeros_clave: str,
+            secrets: dict | None = None, mgmt_cidr: str | None = None) -> list[dict]:
     """Las llamadas REST que llevan el router de lo que hay a lo declarado.
 
     `current` es lo que devolvieron las lecturas de ROS_READS. Cada llamada lleva
     `effect`, la frase que el humano lee en el plan: si un cambio no se puede
     explicar en una frase, no se hace.
+
+    SNMP es un área declarada (`snmp: {enabled, community_from}`); sin ella el
+    motor no toca el servicio. La comunidad se nombra en el laboratorio y se
+    resuelve en secrets.yml; sólo lectura y restringida a la gestión.
     """
     ops: list[dict] = []
+
     configure = node.get("configure") or {}
     if not configure:
         return ops
+
+    area_snmp = configure.get("snmp")
+    if area_snmp is not None:
+        ops += _snmp_ops(current.get("snmp") or {}, current.get("snmp_community") or [],
+                         area_snmp, secrets, mgmt_cidr)
 
     if "identity" in configure:
         actual = (current.get("identity") or {}).get("name")
@@ -160,6 +173,68 @@ def ros_ops(node: dict, current: dict, routeros_clave: str) -> list[dict]:
         ops += _dhcp_ops(node, configure["dhcp_server"], current)
     if "users" in configure:
         ops += _user_ops(configure["users"], current.get("users") or [], routeros_clave)
+    return ops
+
+
+def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
+              secrets: dict | None, mgmt_cidr: str | None) -> list[dict]:
+    """El área `snmp` de un laboratorio: servicio encendido y una comunidad de lectura.
+
+    NetXMS no puede sacar el nombre, las interfaces ni las tablas de rutas y ARP de un
+    CHR sin SNMP; con él, el router se convierte en la fuente de lo que cuelga de sus
+    redes. El laboratorio decide si se enciende; el motor deriva lo que no se declara
+    (sólo lectura, y sólo desde la red de gestión).
+    """
+    encendido_ahora = str(ajustes.get("enabled", "")).lower() in ("true", "yes")
+    if not area["enabled"]:
+        if encendido_ahora:
+            return [{"method": "POST", "path": "/rest/snmp/set",
+                     "body": {"enabled": "no"},
+                     "effect": "SNMP apagado (el laboratorio no lo declara encendido)"}]
+        return []
+
+    comunidad = secreto(secrets or {}, area["community_from"].removeprefix("secrets."))
+    if len(comunidad) > 32 or any(c.isspace() for c in comunidad):
+        raise LabError(
+            f"la comunidad SNMP de secrets.yml no vale: entre 1 y 32 caracteres, sin espacios"
+        )
+    if not mgmt_cidr:
+        raise LabError("falta la red de gestión para restringir la comunidad SNMP")
+
+    ops: list[dict] = []
+    if not encendido_ahora:
+        ops.append({"method": "POST", "path": "/rest/snmp/set",
+                    "body": {"enabled": "yes"},
+                    "effect": "SNMP encendido"})
+
+    propia = next((c for c in comunidades if c.get("name") == comunidad), None)
+    if propia is None:
+        ops.append({"method": "PUT", "path": "/rest/snmp/community",
+                    "body": {"name": comunidad, "addresses": mgmt_cidr,
+                             "read-access": "yes", "write-access": "no"},
+                    "effect": f"comunidad SNMP de sólo lectura, desde {mgmt_cidr}"})
+    else:
+        cambios: dict = {}
+        if propia.get("addresses") != mgmt_cidr:
+            cambios["addresses"] = mgmt_cidr
+        if str(propia.get("read-access", "")).lower() not in ("true", "yes"):
+            cambios["read-access"] = "yes"
+        if str(propia.get("write-access", "")).lower() in ("true", "yes"):
+            cambios["write-access"] = "no"
+        if cambios:
+            ops.append({"method": "PATCH", "path": f"/rest/snmp/community/{propia['.id']}",
+                        "body": cambios,
+                        "effect": f"comunidad SNMP -> {mgmt_cidr} (sólo lectura)"})
+
+    # Dentro del área, lo que sobra se apaga: RouterOS no deja borrar la comunidad
+    # `default` (responde 400), y una `public` abierta a ::/0 es justo lo que no
+    # queremos que quede viva en un equipo del laboratorio.
+    for otra in comunidades:
+        if otra.get("name") != comunidad and \
+                str(otra.get("disabled", "")).lower() not in ("true", "yes"):
+            ops.append({"method": "PATCH", "path": f"/rest/snmp/community/{otra['.id']}",
+                        "body": {"disabled": "yes"},
+                        "effect": f"apagar comunidad SNMP {otra.get('name')!r} (abierta o sin uso)"})
     return ops
 
 
@@ -269,6 +344,17 @@ def _network_cidr(node: dict, network: str) -> str:
 
 def _is_declared_network(node: dict, cidr: str) -> bool:
     return any(str(ipaddress.ip_network(n["address"])) == cidr for n in node["networks"])
+
+
+def secreto(secrets: dict, nombre: str) -> str:
+    """El valor de un secreto del sitio, por su nombre. Ausente o vacío es un fallo."""
+    valor = (secrets or {}).get(nombre)
+    if not isinstance(valor, str) or not valor:
+        raise LabError(
+            f"secrets.yml no tiene {nombre!r} o está vacío: la credencial se nombra, "
+            "el valor vive en secrets.yml"
+        )
+    return valor
 
 
 def ros_clave(node: dict, secrets: dict) -> str:

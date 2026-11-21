@@ -38,11 +38,13 @@ TYPES = {
 # de un RouterOS: dice el nombre, nunca el valor. `converge.ros_clave` lo resuelve
 # contra secrets.yml y falla si no está.
 ROS_SECRET = "secrets.routeros_clave"
+# La comunidad SNMP tampoco se escribe en el laboratorio: se nombra y se resuelve.
+SNMP_SECRET = "secrets.snmp_comunidad"
 
 # Las áreas de configuración que el motor entiende, por clase de equipo. Una clave
 # fuera de su lista es un error con mensaje (§2.13), no una nota al pie.
 AREAS = {
-    "routeros": {"identity", "addresses", "routes", "dhcp_server", "services", "users"},
+    "routeros": {"identity", "addresses", "routes", "dhcp_server", "services", "users", "snmp"},
     "linux": {"identity", "repositories", "packages", "files", "commands", "services"},
 }
 
@@ -585,6 +587,22 @@ def _validate_area(role: str, area: str, body, networks: dict) -> None:
                     f"el usuario {item['name']!r} de {role!r} solo puede tomar la clave de "
                     f"`{ROS_SECRET}`: una clave escrita en el laboratorio no se admite"
                 )
+    elif area == "snmp":
+        if not isinstance(body, dict):
+            raise LabError(f"el área 'snmp' de {role!r} tiene que ser un mapa")
+        sobran = set(body) - {"enabled", "community_from"}
+        if sobran:
+            raise LabError(
+                f"el área 'snmp' de {role!r} no entiende {', '.join(sorted(sobran))}: "
+                "es {enabled, community_from}"
+            )
+        if not isinstance(body.get("enabled"), bool):
+            raise LabError(f"el área 'snmp' de {role!r} declara 'enabled' sí o no")
+        if body["enabled"] and body.get("community_from") != SNMP_SECRET:
+            raise LabError(
+                f"la comunidad SNMP de {role!r} solo puede tomar el nombre de `{SNMP_SECRET}`: "
+                "la comunidad se nombra, no se escribe en el laboratorio"
+            )
 
 
 def _require_list(role: str, area: str, body) -> None:
