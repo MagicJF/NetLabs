@@ -1,0 +1,11 @@
+secrets.yml
+
+# estado de ejecución y artefactos
+labs/*/logs/
+*.retry
+.ansible/
+
+# python
+__pycache__/
+*.pyc
+.venv/
