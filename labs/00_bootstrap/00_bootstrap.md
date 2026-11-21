@@ -49,6 +49,21 @@ Configured areas: `commands`, `files`, `identity`, `packages`, `repositories`, `
   los comandos: `nxdbmgr init` lee `/etc/netxmsd.conf` para saber dónde está
   la base de datos. Con el orden inverso funcionó por casualidad —el fichero
   ya estaba de un `apply` anterior— y habría fallado en una máquina nueva.
+- **`nxdbmgr set-user-password` lee la clave de `/dev/tty`, no de la entrada
+  estándar.** Con `printf ... | nxdbmgr set-user-password admin` contesta
+  `Cannot read password`; con `script` los dos prompts se pisan y sale
+  `Passwords do not match`. La base de datos además está bloqueada mientras el
+  servidor corre. El ayudante `/usr/local/sbin/netlabs-netxms-password` da un
+  pseudo-terminal, para el servidor antes y lo vuelve a arrancar; la clave
+  entra por `stdin` y nunca por la línea de órdenes.
+- **La marca de una credencial se escribe con `&&` en la misma línea.** Puesto
+  en una línea nueva, `sh` lo lee como principio de instrucción y aborta con
+  `Syntax error: && unexpected`: el comando se aplica pero la marca no queda, y
+  el siguiente `apply` lo repite para siempre.
+- **La clave del administrador vive en `secrets.yml`**, en
+  `credenciales.netxms`, y el laboratorio sólo la referencia por su nombre
+  (`secret: netxms`). La marca guarda el sha256 de la clave: si cambia en
+  `secrets.yml`, el siguiente `apply` la aplica; si no, no escribe nada.
 - **El 502 era del proxy, no del invitado.** Caddy apuntaba a
   `10.10.10.254:8080`, una dirección que ya no responde. Se cambió a
   `10.30.0.103:8080` (el invitado de gestión) con copia de seguridad del

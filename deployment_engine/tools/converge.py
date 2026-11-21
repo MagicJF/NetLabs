@@ -318,6 +318,9 @@ done
 for c in {commands}; do
   if [ -e "$c" ]; then echo "CMD:$c:1"; else echo "CMD:$c:0"; fi
 done
+for s in {stamps}; do
+  if [ -f "$s" ]; then echo "STAMP:$s:$(cat "$s")"; else echo "STAMP:$s:-"; fi
+done
 true
 """
 
@@ -333,9 +336,13 @@ def linux_probe(node: dict) -> str:
     paquetes = " ".join(configure.get("packages") or [])
     servicios = " ".join(sorted((configure.get("services") or {}).keys()))
     ficheros = " ".join(f["path"] for f in configure.get("files") or [])
-    comandos = " ".join(c["creates"] for c in configure.get("commands") or [])
+    comandos = " ".join(c["creates"] for c in configure.get("commands") or [] if "creates" in c)
+    # Una marca de credencial guarda la huella de la clave, nunca la clave: así el
+    # sondeo puede comparar sin que el secreto salga del fichero de secretos.
+    marcas = " ".join(c["stamp"] for c in configure.get("commands") or [] if "stamp" in c)
     return LINUX_STATE_SCRIPT.format(
-        packages=paquetes, services=servicios, files=ficheros, commands=comandos
+        packages=paquetes, services=servicios, files=ficheros, commands=comandos,
+        stamps=marcas,
     )
 
 
@@ -349,7 +356,7 @@ def linux_state(text: str) -> dict:
     import base64
 
     state = {"hostname": "", "packages": {}, "services": {}, "repositories": {},
-             "files": {}, "commands": {}}
+             "files": {}, "commands": {}, "stamps": {}}
     for linea in (text or "").splitlines():
         if linea.startswith("HOST:"):
             state["hostname"] = linea[5:].strip()
@@ -374,6 +381,10 @@ def linux_state(text: str) -> dict:
             resto = linea[4:]
             ruta, _, valor = resto.rpartition(":")
             state["commands"][ruta] = valor.strip() == "1"
+        elif linea.startswith("STAMP:"):
+            resto = linea[6:]
+            ruta, _, huella = resto.rpartition(":")
+            state["stamps"][ruta] = huella.strip()
     return state
 
 
@@ -445,7 +456,26 @@ def linux_probe_cmd(node: dict) -> list:
     return _sh(linux_probe(node))
 
 
-def linux_ops(node: dict, current: dict) -> list[dict]:
+def _credencial(credenciales: dict, nombre: str) -> str:
+    """El valor de una credencial declarada en `secrets.yml`.
+
+    Se admite la forma corta (`nombre: clave`) y la larga (`nombre: {usuario,
+    clave}`): el motor sólo necesita la clave, el usuario lo lee quien entra.
+    """
+    if not credenciales or nombre not in credenciales:
+        raise LabError(
+            f"la credencial {nombre!r} no está en secrets.yml: una clave no se "
+            "escribe en el laboratorio, se declara por su nombre"
+        )
+    valor = credenciales[nombre]
+    if isinstance(valor, dict):
+        valor = valor.get("clave")
+    if not isinstance(valor, str) or not valor:
+        raise LabError(f"la credencial {nombre!r} de secrets.yml no tiene 'clave'")
+    return valor
+
+
+def linux_ops(node: dict, current: dict, credenciales: dict | None = None) -> list[dict]:
     """La diferencia entre lo declarado y lo que hay dentro de un Linux.
 
     El área es la frontera: se tocan identidad, repositorios, paquetes y
@@ -494,11 +524,34 @@ def linux_ops(node: dict, current: dict) -> list[dict]:
     # base de datos, desplegar un WAR): se ejecutan si su marca no existe y nunca
     # más. Van después de los ficheros y antes de los servicios.
     for comando in configure.get("commands") or []:
-        if (current.get("commands") or {}).get(comando["creates"]):
+        if "creates" in comando:
+            if (current.get("commands") or {}).get(comando["creates"]):
+                continue
+            ops.append({
+                "cmd": _sh(comando["run"]),
+                "effect": f"comando: {comando['creates']}",
+            })
             continue
+        # Una credencial se converge por su huella: si la marca guarda el sha256
+        # de la clave declarada, no hay nada que escribir. Si cambia la clave en
+        # secrets.yml, la huella cambia y el comando se vuelve a ejecutar. El
+        # valor nunca viaja en el comando: se pasa por la entrada estándar.
+        nombre = comando["secret"]
+        huella = _sha256(_credencial(credenciales or {}, nombre))
+        if (current.get("stamps") or {}).get(comando["stamp"]) == huella:
+            continue
+        # La marca sólo se escribe si el comando salió bien: si falla, el
+        # siguiente apply lo vuelve a intentar en vez de dar por hecho un
+        # cambio que no ocurrió.
+        # El `&&` va en la misma línea que el final del comando: en una línea
+        # nueva, `sh` lo lee como principio de instrucción y aborta con
+        # «Syntax error: && unexpected».
+        script = (comando["run"].rstrip() + " && "
+                  f"printf '%s' {shlex.quote(huella)} > {shlex.quote(comando['stamp'])}")
         ops.append({
-            "cmd": _sh(comando["run"]),
-            "effect": f"comando: {comando['creates']}",
+            "cmd": _sh(script),
+            "effect": f"credencial {nombre}",
+            "secret": nombre,
         })
 
     for service, activo in sorted((configure.get("services") or {}).items()):

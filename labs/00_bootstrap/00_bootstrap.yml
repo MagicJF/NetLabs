@@ -48,6 +48,51 @@ nodes:
         - path: /usr/share/tomcat11/lib/nxmc.properties
           content: |
             server=127.0.0.1
+        # `nxdbmgr set-user-password` lee la clave de /dev/tty, no de la entrada
+        # estándar: sin un pseudo-terminal contesta «Cannot read password». Este
+        # ayudante se lo da. La clave entra por stdin y no aparece en `ps`.
+        - path: /usr/local/sbin/netlabs-netxms-password
+          mode: '0755'
+          content: |
+            #!/usr/bin/env python3
+            """Cambia la clave de un usuario de NetXMS sin terminal interactiva."""
+            import os, pty, select, sys, time
+
+            usuario = sys.argv[1] if len(sys.argv) > 1 else "admin"
+            clave = sys.stdin.readline().rstrip("\n").encode()
+            if not clave:
+                sys.exit("sin clave en la entrada estándar")
+
+            pid, fd = pty.fork()
+            if pid == 0:
+                os.execv("/usr/bin/nxdbmgr", ["nxdbmgr", "set-user-password", usuario])
+
+            salida = b""
+            enviadas = 0
+            final = time.time() + 60
+            while time.time() < final:
+                listos, _, _ = select.select([fd], [], [], 0.5)
+                if fd in listos:
+                    try:
+                        trozo = os.read(fd, 4096)
+                    except OSError:
+                        break
+                    if not trozo:
+                        break
+                    salida += trozo
+                    texto = salida.lower()
+                    if enviadas == 0 and b"new password" in texto:
+                        os.write(fd, clave + b"\n")
+                        enviadas = 1
+                        time.sleep(0.3)
+                    elif enviadas == 1 and b"confirm password" in texto:
+                        os.write(fd, clave + b"\n")
+                        enviadas = 2
+                        time.sleep(0.3)
+            _, estado = os.waitpid(pid, 0)
+            sys.stdout.write(salida.decode("utf-8", "replace"))
+            bien = b"changed successfully" in salida
+            sys.exit(0 if bien and os.WIFEXITED(estado) and os.WEXITSTATUS(estado) == 0 else 1)
       # Una base de datos recién creada no tiene esquema y el servidor sale con
       # NOTIMPLEMENTED. `nxdbmgr init` lo crea una sola vez; la marca que deja
       # (`creates`) es lo que hace que el segundo apply no lo repita. El WAR se
@@ -57,6 +102,16 @@ nodes:
           creates: /var/lib/netxms/netlabs-schema
         - run: "curl -fsSL -o /var/lib/tomcat11/webapps/nxmc.war https://netxms.com/download/releases/7.0/nxmc-7.0.4.war"
           creates: /var/lib/tomcat11/webapps/nxmc.war
+        # La clave del administrador no se escribe aquí: se declara por su
+        # nombre (`netxms`) y el motor la lee de secrets.yml. La marca guarda su
+        # huella: si cambia la clave en secrets.yml, el siguiente apply la
+        # aplica; si no, no escribe nada. El servidor tiene que estar parado
+        # porque la base de datos queda bloqueada mientras corre.
+        # El script termina con un test, no con `exit`: el motor encadena la
+        # escritura de la marca con `&&`, y un `exit` la dejaría sin ejecutar.
+        - run: "systemctl stop netxms-server; sleep 1; /usr/local/sbin/netlabs-netxms-password admin; rc=$?; systemctl start netxms-server; [ $rc -eq 0 ]"
+          stamp: /var/lib/netxms/netlabs-admin-password
+          secret: netxms
       services:
         netxms-server: true
         tomcat11: true

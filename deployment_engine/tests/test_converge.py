@@ -163,6 +163,39 @@ class ElInteriorLinux(unittest.TestCase):
         ops = converge.linux_ops(nodo, {"commands": {}, "services": {"x": "inactive"}})
         self.assertEqual([o["effect"].split()[0] for o in ops], ["comando:", "servicio"])
 
+    def test_una_credencial_se_converge_por_la_huella_de_la_clave(self):
+        # La clave nunca viaja en el comando: se lee de secrets.yml por su
+        # nombre y lo que se compara con la marca es su sha256.
+        nodo = self.nodo(commands=[{
+            "run": "cambiar admin", "stamp": "/var/lib/x/clave", "secret": "netxms",
+        }])
+        credenciales = {"netxms": {"usuario": "admin", "clave": "s3cr3t"}}
+        ops = converge.linux_ops(nodo, {"stamps": {}}, credenciales)
+        self.assertEqual(len(ops), 1)
+        self.assertEqual(ops[0]["secret"], "netxms")
+        self.assertIn("credencial netxms", ops[0]["effect"])
+        self.assertNotIn("s3cr3t", ops[0]["cmd"][2])
+        huella = __import__("hashlib").sha256(b"s3cr3t").hexdigest()
+        self.assertIn(huella, ops[0]["cmd"][2])
+
+    def test_la_credencial_ya_aplicada_no_escribe(self):
+        nodo = self.nodo(commands=[{
+            "run": "cambiar admin", "stamp": "/var/lib/x/clave", "secret": "netxms",
+        }])
+        huella = __import__("hashlib").sha256(b"s3cr3t").hexdigest()
+        credenciales = {"netxms": {"usuario": "admin", "clave": "s3cr3t"}}
+        self.assertEqual(
+            converge.linux_ops(nodo, {"stamps": {"/var/lib/x/clave": huella}}, credenciales),
+            [],
+        )
+
+    def test_una_credencial_que_no_esta_en_secrets_es_un_fallo(self):
+        nodo = self.nodo(commands=[{
+            "run": "cambiar admin", "stamp": "/var/lib/x/clave", "secret": "netxms",
+        }])
+        with self.assertRaises(converge.LabError):
+            converge.linux_ops(nodo, {"stamps": {}}, {})
+
     def test_un_servicio_que_arranca_se_reinicia_no_solo_se_arranca(self):
         nodo = self.nodo(services={"x": True})
         ops = converge.linux_ops(nodo, {"services": {"x": "activating"}})

@@ -22,7 +22,13 @@
           '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no',
           '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR']
          + interior_proxy + [interior_destino] + comando }}
+    # La clave de una credencial viaja por la entrada estándar, nunca por la
+    # línea de órdenes: así no aparece en `ps` ni en el informe. El resto de
+    # operaciones recibe una entrada vacía y no lee nada.
+    stdin: "{{ interior_secreto | default('') }}"
   register: interior
+  # Una tarea que toca una clave no imprime su salida.
+  no_log: "{{ (interior_secreto | default('')) | length > 0 }}"
   # Una lectura no cambia nada; una escritura sí, y decirlo es lo que permite
   # comprobar que el segundo apply no escribe: si `changed` no es cero, quedó
   # una decisión tomada por accidente.

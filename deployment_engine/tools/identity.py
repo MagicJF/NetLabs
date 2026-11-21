@@ -544,16 +544,26 @@ def _validate_area(role: str, area: str, body, networks: dict) -> None:
     elif area == "commands":
         _require_list(role, area, body)
         for item in body:
-            if not isinstance(item, dict) or set(item) != {"run", "creates"}:
+            if not isinstance(item, dict):
+                raise LabError(f"cada comando de {role!r} tiene que ser un mapa")
+            # Dos formas, y sólo dos: un trabajo de una sola vez (`creates`) o una
+            # credencial (`stamp` + `secret`). La segunda guarda la huella de la
+            # clave, no la clave, y la lee de secrets.yml por su nombre.
+            if set(item) == {"run", "creates"}:
+                if not isinstance(item["creates"], str) or not item["creates"].startswith("/"):
+                    raise LabError(f"la ruta 'creates' del comando de {role!r} tiene que ser absoluta")
+            elif set(item) == {"run", "stamp", "secret"}:
+                if not isinstance(item["stamp"], str) or not item["stamp"].startswith("/"):
+                    raise LabError(f"la ruta 'stamp' del comando de {role!r} tiene que ser absoluta")
+                if not isinstance(item["secret"], str) or not item["secret"]:
+                    raise LabError(f"el campo 'secret' del comando de {role!r} tiene que ser texto no vacío")
+            else:
                 raise LabError(
-                    f"cada comando de {role!r} es {{run, creates}}: sin 'creates' no hay "
-                    "forma de saber si ya se ejecutó y se lanzaría en cada apply"
+                    f"cada comando de {role!r} es {{run, creates}} o {{run, stamp, secret}}: "
+                    "sin marca se lanzaría en cada apply"
                 )
-            for key in ("run", "creates"):
-                if not isinstance(item[key], str) or not item[key]:
-                    raise LabError(f"el campo {key!r} del comando de {role!r} tiene que ser texto no vacío")
-            if not item["creates"].startswith("/"):
-                raise LabError(f"la ruta 'creates' del comando de {role!r} tiene que ser absoluta")
+            if not isinstance(item["run"], str) or not item["run"]:
+                raise LabError(f"el campo 'run' del comando de {role!r} tiene que ser texto no vacío")
     elif area == "services":
         if not isinstance(body, dict):
             raise LabError(f"el área 'services' de {role!r} tiene que ser un mapa")

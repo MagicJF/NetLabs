@@ -27,7 +27,10 @@
 
 - name: "interior · lo que hay que escribir"
   ansible.builtin.set_fact:
-    linux_ops: "{{ linux_nodo | netlabs_linux_ops(linux_actual) }}"
+    # Las credenciales viven en secrets.yml y se leen por su nombre: el
+    # laboratorio nunca lleva una clave escrita. Si el laboratorio no declara
+    # ninguna, el mapa llega vacío y nada cambia.
+    linux_ops: "{{ linux_nodo | netlabs_linux_ops(linux_actual, secrets.credenciales | default({})) }}"
   when: linux_nodo.configure is defined
 
 - name: "interior · {{ linux_ops | length }} cambio(s) en {{ linux_descripcion | default(objetivo) }}"
@@ -41,6 +44,14 @@
     interior_descripcion: "interior · {{ linux_op.effect }}"
     interior_salto: "{{ linux_nodo.name != env.management.guest }}"
     interior_escribe: true
+    # Una operación que lleva credencial recibe su clave por la entrada
+    # estándar, nunca por la línea de órdenes: así no aparece en `ps` ni en el
+    # informe. El resto de operaciones no recibe nada.
+    interior_secreto: >-
+      {{ (secrets.credenciales[linux_op.secret].clave
+          if secrets.credenciales[linux_op.secret] is mapping
+          else secrets.credenciales[linux_op.secret])
+         if linux_op.secret is defined else '' }}
     comando: "{{ linux_op.cmd }}"
   loop: "{{ linux_ops }}"
   loop_control: {loop_var: linux_op, label: "{{ linux_op.effect }}"}
