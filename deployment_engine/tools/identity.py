@@ -26,16 +26,25 @@ TYPES = {
     "switch": {"code": "sw", "guest": "qemu", "network_device": True, "routes": False},
     "server": {"code": "sv", "guest": "lxc", "network_device": False, "routes": False},
     "workstation": {"code": "ws", "guest": "lxc", "network_device": False, "routes": False},
+    # Un nodo de control no vive en una topología: es el servicio persistente que
+    # observa y abre el camino. Su única pata está en la red de gestión y su
+    # dirección se deriva del vmid, igual que la del servicio de gestión. No es
+    # un equipo de red ni un puesto: no tiene cables ni recibe DHCP.
+    "control": {"code": "nx", "guest": "lxc", "network_device": False, "routes": False,
+                "control": True},
 }
 
 # Las áreas de configuración que el motor entiende, por clase de equipo. Una clave
 # fuera de su lista es un error con mensaje (§2.13), no una nota al pie.
 AREAS = {
     "routeros": {"identity", "addresses", "routes", "dhcp_server", "services", "users"},
-    "linux": {"identity", "services"},
+    "linux": {"identity", "repositories", "packages", "files", "commands", "services"},
 }
 
-LAB_KEYS = {"lab", "slot", "address_spaces", "networks", "nodes", "links"}
+LAB_KEYS = {"lab", "kind", "slot", "address_spaces", "networks", "nodes", "links"}
+# Un laboratorio de control no dibuja una topología: declara el servicio que
+# observa el resto. Su único nodo vive en la red de gestión y no tiene cables.
+KINDS = {"topology", "control"}
 NODE_KEYS = {"role", "type", "stage", "after", "resources", "image", "networks", "address", "configure"}
 NETWORK_KEYS = {"name", "address"}
 LINK_KEYS = {"a", "z"}
@@ -43,6 +52,10 @@ END_KEYS = {"node", "port"}
 
 ROLE_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
+# Un laboratorio de control es el servicio persistente: se llama por su nombre de
+# siempre (`00_bootstrap`), que puede empezar por cifra y llevar guion bajo. Un
+# laboratorio de topología sigue con el vocabulario de siempre.
+CONTROL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
 
 
 class LabError(Exception):
@@ -122,6 +135,13 @@ def validate(lab: dict, env: dict) -> None:
             f"clave desconocida en la declaración: {', '.join(sorted(unknown))}. "
             f"Se admite: {', '.join(sorted(LAB_KEYS))}"
         )
+    kind = lab.get("kind", "topology")
+    if kind not in KINDS:
+        raise LabError(f"el laboratorio declara 'kind' {kind!r}, que no existe. Se admite: {', '.join(sorted(KINDS))}")
+    if kind == "control":
+        _validate_control(lab, env)
+        return
+
     for key in ("lab", "networks", "nodes"):
         if key not in lab:
             raise LabError(f"la declaración no tiene '{key}', y sin eso no hay laboratorio")
@@ -208,6 +228,94 @@ def validate(lab: dict, env: dict) -> None:
                 )
     _reject_stage_cycles(nodes)
     _validate_links(lab, slot)
+
+
+def _validate_control(lab: dict, env: dict) -> None:
+    """Un laboratorio de control: el servicio persistente, sin topología.
+
+    No declara espacios ni cables porque no dibuja una red: su nodo vive en la
+    red de gestión, que no pertenece a ningún laboratorio. Su nombre es el del
+    servicio de siempre (`00_bootstrap`), y su nodo se llama por su rol.
+    """
+    name = lab["lab"]
+    if not isinstance(name, str) or not CONTROL_NAME_RE.match(name):
+        raise LabError(
+            f"el nombre del laboratorio de control {name!r} no vale: minúsculas, "
+            "números, guiones y guion bajo, empezando por letra o cifra"
+        )
+    for key in ("address_spaces", "networks", "links"):
+        if key in lab:
+            raise LabError(
+                f"el laboratorio de control {name!r} no declara '{key}': no dibuja una "
+                "topología; su nodo vive en la red de gestión"
+            )
+    nodes = lab.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        raise LabError("'nodes' tiene que ser una lista con al menos un nodo")
+    if len(nodes) > 1:
+        raise LabError(
+            f"el laboratorio de control {name!r} declara {len(nodes)} nodos: un laboratorio "
+            "de control es el servicio persistente, y hay uno"
+        )
+    roles = set()
+    for node in nodes:
+        _validate_control_node(node, roles)
+        roles.add(node["role"])
+
+
+def _validate_control_node(node: dict, roles: set) -> None:
+    if not isinstance(node, dict):
+        raise LabError(f"un nodo tiene que ser un mapa, y hay {node!r}")
+    extra = set(node) - NODE_KEYS
+    if extra:
+        raise LabError(f"clave desconocida en el nodo {node.get('role')!r}: {', '.join(sorted(extra))}")
+    for key in ("role", "type", "stage"):
+        if key not in node:
+            raise LabError(f"el nodo {node.get('role')!r} no tiene '{key}', y es obligatorio")
+    role = node["role"]
+    if not isinstance(role, str) or not ROLE_RE.match(role):
+        raise LabError(f"el rol {role!r} no vale: minúsculas, números y guiones, empezando por letra")
+    if role in roles:
+        raise LabError(f"el rol {role!r} está declarado dos veces: es el contrato de referencia")
+    if node["type"] != "control":
+        raise LabError(
+            f"el nodo {role!r} de un laboratorio de control declara tipo {node['type']!r}: "
+            "sólo se admite 'control'"
+        )
+    if not isinstance(node["stage"], int) or isinstance(node["stage"], bool) or node["stage"] < 1:
+        raise LabError(f"el nodo {role!r} tiene que declarar 'stage' como entero >= 1")
+    if "networks" in node:
+        raise LabError(
+            f"el nodo {role!r} no declara 'networks': su única pata es la red de gestión"
+        )
+    address = node.get("address", "management")
+    if address != "management":
+        raise LabError(
+            f"el nodo {role!r} tiene 'address' {address!r}: en un laboratorio de control la "
+            "dirección se deriva del vmid en la red de gestión"
+        )
+    resources = node.get("resources") or {}
+    if not isinstance(resources, dict):
+        raise LabError(f"'resources' del nodo {role!r} tiene que ser un mapa")
+    unknown = set(resources) - {"cores", "memory", "disk"}
+    if unknown:
+        raise LabError(f"recurso desconocido en {role!r}: {', '.join(sorted(unknown))}")
+    for key, value in resources.items():
+        if not isinstance(value, int) or value <= 0:
+            raise LabError(f"el recurso {key!r} del nodo {role!r} tiene que ser un entero positivo")
+    if "image" in node and not isinstance(node["image"], str):
+        raise LabError(f"'image' del nodo {role!r} tiene que ser texto")
+    configure = node.get("configure") or {}
+    if not isinstance(configure, dict):
+        raise LabError(f"'configure' del nodo {role!r} tiene que ser un mapa de áreas")
+    for area in configure:
+        if area not in AREAS["linux"]:
+            raise LabError(
+                f"el nodo {role!r} declara el área {area!r}, que no existe para su tipo. "
+                f"Se admite: {', '.join(sorted(AREAS['linux']))}"
+            )
+    for area, body in configure.items():
+        _validate_area(role, area, body, {})
 
 
 def _validate_links(lab: dict, slot: int) -> None:
@@ -400,6 +508,52 @@ def _validate_area(role: str, area: str, body, networks: dict) -> None:
                 raise LabError(f"el margen {item['pool']!r} de {role!r} no es 'inicio-fin'") from exc
             if start > end or not start in networks[item["network"]] or not end in networks[item["network"]]:
                 raise LabError(f"el margen {item['pool']!r} de {role!r} no cae dentro de {item['network']}")
+    elif area == "repositories":
+        _require_list(role, area, body)
+        for item in body:
+            if not isinstance(item, dict) or set(item) not in (
+                {"name", "url", "suite", "components"},
+                {"name", "url", "suite", "components", "key"},
+            ):
+                raise LabError(
+                    f"cada repositorio de {role!r} es {{name, url, suite, components, key?}}"
+                )
+            for key in ("name", "url", "suite", "components"):
+                if not isinstance(item[key], str) or not item[key]:
+                    raise LabError(f"el campo {key!r} del repositorio de {role!r} tiene que ser texto no vacío")
+            if "key" in item and (not isinstance(item["key"], str) or not item["key"]):
+                raise LabError(f"la 'key' del repositorio de {role!r} tiene que ser una URL")
+    elif area == "packages":
+        _require_list(role, area, body)
+        for item in body:
+            if not isinstance(item, str) or not item:
+                raise LabError(f"cada paquete de {role!r} tiene que ser un nombre no vacío")
+    elif area == "files":
+        _require_list(role, area, body)
+        for item in body:
+            if not isinstance(item, dict) or set(item) not in (
+                {"path", "content"}, {"path", "content", "mode"}
+            ):
+                raise LabError(f"cada fichero de {role!r} es {{path, content, mode?}}")
+            if not isinstance(item["path"], str) or not item["path"].startswith("/"):
+                raise LabError(f"la ruta de un fichero de {role!r} tiene que ser absoluta")
+            if not isinstance(item["content"], str):
+                raise LabError(f"el contenido de {item['path']!r} de {role!r} tiene que ser texto")
+            if "mode" in item and (not isinstance(item["mode"], str) or not item["mode"]):
+                raise LabError(f"el 'mode' de {item['path']!r} de {role!r} tiene que ser texto octal")
+    elif area == "commands":
+        _require_list(role, area, body)
+        for item in body:
+            if not isinstance(item, dict) or set(item) != {"run", "creates"}:
+                raise LabError(
+                    f"cada comando de {role!r} es {{run, creates}}: sin 'creates' no hay "
+                    "forma de saber si ya se ejecutó y se lanzaría en cada apply"
+                )
+            for key in ("run", "creates"):
+                if not isinstance(item[key], str) or not item[key]:
+                    raise LabError(f"el campo {key!r} del comando de {role!r} tiene que ser texto no vacío")
+            if not item["creates"].startswith("/"):
+                raise LabError(f"la ruta 'creates' del comando de {role!r} tiene que ser absoluta")
     elif area == "services":
         if not isinstance(body, dict):
             raise LabError(f"el área 'services' de {role!r} tiene que ser un mapa")
@@ -465,11 +619,17 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     validate(lab, env)
     name = lab["lab"]
     slot = lab.get("slot", 0)
-    pool = f"netlabs-lab-{name}"
+    control = lab.get("kind", "topology") == "control"
+    # Un laboratorio de control no vive en un pool de laboratorio: su pool se
+    # llama como él, porque es un servicio del sitio y no una topología
+    # desechable. El prefijo `lab-` no es decorativo: la API de Proxmox exige que
+    # el nombre de un pool empiece por letra, y `00_bootstrap` no lo hace.
+    pool = f"lab-{name}" if control else f"netlabs-lab-{name}"
     management = env["management"]
     mgmt_net = ipaddress.ip_network(management["address_space"], strict=False)
 
-    _check_foreign_spaces(world, lab, env)
+    if not control:
+        _check_foreign_spaces(world, lab, env)
 
     guests = world.get("guests") or []
     bridges = world.get("bridges") or []
@@ -480,7 +640,11 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     # El nombre se deriva del rol (`<código>-<rol>`), así que un invitado que nació
     # antes de que el motor escribiera la etiqueta se reconoce igual por su nombre.
     # Sin ese respaldo, cada apply de un laboratorio viejo crearía un juego nuevo.
-    nombres = {f"{TYPES[n['type']]['code']}-{n['role']}": n["role"] for n in lab["nodes"]}
+    if control:
+        # El nodo de control se llama por su rol: es un servicio con nombre propio.
+        nombres = {n["role"]: n["role"] for n in lab["nodes"]}
+    else:
+        nombres = {f"{TYPES[n['type']]['code']}-{n['role']}": n["role"] for n in lab["nodes"]}
     roles = {n["role"] for n in lab["nodes"]}
     for guest in sorted(mine.values(), key=lambda g: int(g["vmid"])):
         role = _role_of(guest) or nombres.get(guest.get("name") or "")
@@ -511,12 +675,15 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     # sus dos puntas, y el identificador de cada nodo lleva el slot del
     # laboratorio, así que dos laboratorios con la misma topología no chocan.
     ordinals = _ordinals(lab, slot)
-    cables = _cables(lab, slot, ordinals)
+    cables = _cables(lab, slot, ordinals) if not control else {"per_port": {}, "links": []}
     nodes = []
     effects = []
     steps = []
     for node in lab["nodes"]:
-        built = _build_node(node, assigned[node["role"]], name, lab, env, mgmt_net, cables)
+        if control:
+            built = _build_control_node(node, assigned[node["role"]], name, env, mgmt_net)
+        else:
+            built = _build_node(node, assigned[node["role"]], name, lab, env, mgmt_net, cables)
         nodes.append(built)
         effects.append(
             f"{built['name']:<18} vmid {built['vmid']:<5} "
@@ -592,6 +759,26 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
 
     if any(s["op"] == "guest_create" for s in steps):
         effects.append("cada invitado nuevo se arranca y se espera a que responda (sin dormir a ciegas)")
+
+    # El interior de un nodo de control se converge por SSH, no por REST: su
+    # configuración es la de un Linux normal (repositorios, paquetes, servicios).
+    # Es un paso, no una nota al margen: el plan no puede leer el interior sin
+    # entrar, así que no sabe si hay diferencia. Decir "nada que hacer" cuando
+    # queda un interior por converger sería la mentira que este fichero evita.
+    # La idempotencia la sostiene el apply: si el interior ya es lo declarado,
+    # `linux_ops` no devuelve ninguna orden y no se escribe nada.
+    for built in nodes:
+        if built.get("control") and (built.get("configure") or {}):
+            steps.append({
+                "op": "interior_converge",
+                "vmid": built["vmid"],
+                "role": built["role"],
+                "address": built["mgmt_address"],
+            })
+            effects.append(
+                f"converger el interior de {built['name']} ({built['mgmt_address']}): "
+                "repositorios, paquetes y servicios"
+            )
 
     return {
         "lab": name,
@@ -724,6 +911,48 @@ def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
         "mgmt_address": str(derive_management(vmid, env["management"]["address_space"])) if management else None,
         "address": static or "dhcp",
         "networks": [{"name": n, "address": str(networks[n])} for n in node["networks"]],
+        "configure": node.get("configure") or {},
+    }
+
+
+def _build_control_node(node, vmid, lab_name, env, mgmt_net) -> dict:
+    """El nodo de control: una sola pata en la red de gestión y nombre de servicio.
+
+    Se llama por su rol, no por `<código>-<rol>`: es el servicio que ya existía
+    antes de que hubiera motor, y renombrarlo en caliente no es una opción. Su
+    MAC y su dirección se derivan del vmid, igual que las del resto.
+    """
+    management = env["management"]
+    address = derive_management(vmid, management["address_space"])
+    prefix = ipaddress.ip_network(management["address_space"], strict=False).prefixlen
+    resources = node.get("resources") or {}
+    return {
+        "role": node["role"],
+        "type": node["type"],
+        "guest": TYPES[node["type"]]["guest"],
+        "vmid": vmid,
+        "name": node["role"],
+        "description": f"netlabs lab={lab_name} role={node['role']}",
+        "stage": node["stage"],
+        "after": node.get("after") or [],
+        "cores": resources.get("cores", 1),
+        "memory": resources.get("memory", 512),
+        "disk": resources.get("disk", 8),
+        "image": node.get("image"),
+        "interfaces": [{
+            "index": 0,
+            "network": None,
+            "bridge": management["bridge"],
+            "mac": derive_mac(vmid, 0),
+            "address": f"{address}/{prefix}",
+            "gateway": management["gateway"],
+            "label": f"net0=oob({address})",
+        }],
+        "management": False,
+        "control": True,
+        "mgmt_address": str(address),
+        "address": f"{address}/{prefix}",
+        "networks": [],
         "configure": node.get("configure") or {},
     }
 
@@ -864,12 +1093,14 @@ def site(world: dict, env: dict) -> dict:
         vmid = int(existing["vmid"])
         address = derive_management(vmid, management["address_space"])
     return {
-        "role": "netxms",
+        # El rol y el nombre salen de netlabs.yml: el motor no sabe qué servicio
+        # corre dentro, sólo que hay un invitado de gestión que abre el camino.
+        "role": management["guest"],
         "type": "control",
         "guest": "lxc",
         "vmid": vmid,
         "name": management["guest"],
-        "description": "netlabs site=management role=netxms",
+        "description": f"netlabs site=management role={management['guest']}",
         "stage": 1,
         "after": [],
         "cores": management["cores"],
@@ -902,6 +1133,34 @@ DOC_BEGIN = "<!-- netlabs:begin -- generado por `./netlabs docs`; no se edita a 
 DOC_END = "<!-- netlabs:end -->"
 
 
+def _render_control_docs(lab: dict, env: dict) -> str:
+    """La página de un laboratorio de control: un servicio, no una topología.
+
+    No hay cables ni redes que dibujar, así que la tabla sería una mentira con
+    columnas vacías. Se dice lo que el laboratorio es: qué nodo, en qué red vive y
+    qué áreas convergerá dentro.
+    """
+    management = env["management"]
+    lines = [DOC_BEGIN, "", f"## {lab['lab']}", ""]
+    lines.append("Tipo: control (servicio persistente del sitio, sin topología).")
+    lines.append(f"Red: `{management['bridge']}` (`{management['address_space']}`), la de gestión.")
+    lines.append("")
+    lines += ["### Nodes", "", "| role | type | stage | address | resources |",
+              "| --- | --- | --- | --- | --- |"]
+    for node in sorted(lab["nodes"], key=lambda n: n["role"]):
+        resources = node.get("resources") or {}
+        res = ", ".join(f"{k}={v}" for k, v in sorted(resources.items())) or "—"
+        lines.append(
+            f"| `{node['role']}` | {node['type']} | {node['stage']} | "
+            f"management (derived) | {res} |"
+        )
+    areas = sorted({area for node in lab["nodes"] for area in (node.get("configure") or {})})
+    if areas:
+        lines += ["", "Configured areas: " + ", ".join(f"`{a}`" for a in areas) + "."]
+    lines += ["", DOC_END]
+    return "\n".join(lines) + "\n"
+
+
 def render_docs(lab: dict, env: dict) -> str:
     """La región generada de la página del laboratorio, desde la declaración.
 
@@ -909,8 +1168,10 @@ def render_docs(lab: dict, env: dict) -> str:
     un documento que los clavara mentiría en el siguiente despliegue.
     """
     validate(lab, env)
-    lines = [DOC_BEGIN, "", f"## {lab['lab']}", ""]
-    lines.append(f"Slot: `{lab.get('slot', 0)}`")
+    if lab.get("kind", "topology") == "control":
+        return _render_control_docs(lab, env)
+    lines = [DOC_BEGIN, "", f"## {lab['lab']}"]
+    lines.append(f"Slot: {lab.get('slot', 0)}")
     lines.append("Address spaces: " + ", ".join(f"`{s}`" for s in lab["address_spaces"]))
     lines += ["", "### Networks", "", "| network | address |", "| --- | --- |"]
     for net in lab["networks"]:

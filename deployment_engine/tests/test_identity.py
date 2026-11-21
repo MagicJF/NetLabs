@@ -257,6 +257,42 @@ class Rechazos(unittest.TestCase):
             identity.plan(mundo(guests=viejos), laboratorio(), entorno())
 
 
+class ElPlanDeControl(unittest.TestCase):
+    """Un laboratorio de control adopta un invitado que ya existía; no lo crea."""
+
+    def test_control_adopta_el_invitado_por_su_nombre_y_su_pool(self):
+        viejos = [{"vmid": 102, "name": "netxms", "type": "lxc", "pool": "lab-00_bootstrap",
+                   "description": "netlabs lab=00_bootstrap role=netxms", "status": "running"}]
+        plan = identity.plan(mundo(guests=viejos, pools=["lab-00_bootstrap"]),
+                             laboratorio("00_bootstrap"), entorno())
+        self.assertEqual(plan["pool"], "lab-00_bootstrap")
+        self.assertEqual([n["vmid"] for n in plan["nodes"]], [102])
+        # Adoptar no es crear: ningún paso de creación ni de arranque.
+        self.assertEqual([s["op"] for s in plan["steps"]], ["interior_converge"])
+
+    def test_control_sin_pool_ni_invitado_crea_el_que_falta(self):
+        plan = identity.plan(mundo(), laboratorio("00_bootstrap"), entorno())
+        self.assertEqual([s["op"] for s in plan["steps"]],
+                         ["pool_ensure", "guest_create", "interior_converge"])
+
+    def test_control_declara_la_convergencia_de_su_interior(self):
+        # El plan no puede leer el interior sin entrar, así que lo declara como
+        # paso pendiente: decir "nada que hacer" con un interior sin converger
+        # sería una mentira, y el segundo apply no podría distinguirse del primero.
+        plan = identity.plan(mundo(), laboratorio("00_bootstrap"), entorno())
+        paso = next(s for s in plan["steps"] if s["op"] == "interior_converge")
+        self.assertEqual(paso["role"], "netxms")
+        # Mundo vacío: el menor vmid libre es el 100 y su dirección se deriva de él.
+        self.assertEqual(paso["address"], "10.30.0.101")
+        self.assertTrue([e for e in plan["effects"] if "converger el interior" in e])
+
+    def test_control_no_dibuja_cables_ni_redes(self):
+        plan = identity.plan(mundo(), laboratorio("00_bootstrap"), entorno())
+        self.assertEqual(plan["tunnel_forwards"], [])
+        self.assertFalse([s for s in plan["steps"] if s["op"].startswith("bridge")])
+        self.assertEqual(plan["nodes"][0]["networks"], [])
+
+
 class Documentacion(unittest.TestCase):
     def test_la_documentacion_generada_no_lleva_nada_derivado(self):
         texto = identity.render_docs(laboratorio(), entorno())

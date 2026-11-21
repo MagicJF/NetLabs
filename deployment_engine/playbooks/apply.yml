@@ -178,12 +178,24 @@
         router: "{{ item }}"
         ros_user: "{{ (item.configure.users | default([{'name': 'admin'}]))[0].name }}"
 
+    # --- el interior de los nodos de control, por SSH ----------------------
+    # Un nodo de control no tiene router ni DHCP: su interior se converge por SSH
+    # con la misma puerta que usa el resto del motor. Sólo se escribe la diferencia.
+    - name: "apply · el interior de los nodos de control"
+      include_tasks: ../tasks/linux_interior.yml
+      loop: "{{ plan.nodes | selectattr('control', 'defined') | selectattr('control') | list }}"
+      loop_control: {loop_var: linux_nodo, label: "{{ linux_nodo.name }}"}
+      vars:
+        objetivo: "{{ linux_nodo.mgmt_address }}"
+        linux_descripcion: "{{ linux_nodo.name }}"
+      when: linux_nodo.configure | default({}) | length > 0
+
     # --- los puestos toman dirección --------------------------------------
     - name: "apply · la dirección de cada puesto"
       include_tasks: ../tasks/check_lease.yml
       vars:
         guest: "{{ puesto }}"
-      loop: "{{ plan.nodes | rejectattr('management') | list }}"
+      loop: "{{ plan.nodes | rejectattr('management') | rejectattr('control') | list }}"
       # El nombre del bucle no puede ser `item`: el fichero incluido usa `item` y
       # éste lo pisaría. Y el nombre de la tarea no puede citar `item` antes de
       # existir: ansible lo intenta y deja un error de plantilla en el título.

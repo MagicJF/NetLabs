@@ -13,7 +13,11 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import ipaddress
+import os
+import shlex
 
 from identity import LabError, TYPES
 
@@ -288,17 +292,233 @@ def _user_ops(declarados: list, actuales: list, routeros_password: str) -> list[
 # Interior Linux: identidad y servicios, sin inventar vocabulario
 # ---------------------------------------------------------------------------
 
-def linux_ops(node: dict, current_hostname: str) -> list[dict]:
+LINUX_STATE_SCRIPT = """\
+echo "HOST:$(hostname)"
+for p in {packages}; do
+  if dpkg-query -W -f='${{Status}}' "$p" 2>/dev/null | grep -q 'install ok installed'; then
+    echo "PKG:$p:1"
+  else
+    echo "PKG:$p:0"
+  fi
+done
+for s in {services}; do
+  echo "SVC:$s:$(systemctl is-active "$s" 2>/dev/null || true)"
+done
+for f in /etc/apt/sources.list.d/*.list; do
+  [ -e "$f" ] || continue
+  echo "REPO:$(basename "$f" .list):$(base64 -w0 < "$f")"
+done
+for f in {files}; do
+  if [ -f "$f" ]; then
+    echo "FILE:$f:$(sha256sum "$f" | cut -d' ' -f1)"
+  else
+    echo "FILE:$f:-"
+  fi
+done
+for c in {commands}; do
+  if [ -e "$c" ]; then echo "CMD:$c:1"; else echo "CMD:$c:0"; fi
+done
+true
+"""
+
+
+def linux_probe(node: dict) -> str:
+    """El sondeo que se ejecuta por SSH para leer el interior de un Linux.
+
+    Pregunta sólo por lo declarado: los paquetes que el nodo pide y los servicios
+    que toca. Un paquete que no se declara no se consulta, porque el motor no
+    tiene por qué saber qué hay dentro de un huésped que no es suyo.
+    """
+    configure = node.get("configure") or {}
+    paquetes = " ".join(configure.get("packages") or [])
+    servicios = " ".join(sorted((configure.get("services") or {}).keys()))
+    ficheros = " ".join(f["path"] for f in configure.get("files") or [])
+    comandos = " ".join(c["creates"] for c in configure.get("commands") or [])
+    return LINUX_STATE_SCRIPT.format(
+        packages=paquetes, services=servicios, files=ficheros, commands=comandos
+    )
+
+
+def linux_state(text: str) -> dict:
+    """El estado de un interior Linux, leído de la salida del sondeo.
+
+    El sondeo es un script `sh` que el motor ejecuta por SSH y que imprime una
+    línea por hecho: `HOST:`, `PKG:`, `SVC:` y `REPO:`. Se parsea aquí, en Python
+    puro, para que la comparación se pruebe sin hipervisor.
+    """
+    import base64
+
+    state = {"hostname": "", "packages": {}, "services": {}, "repositories": {},
+             "files": {}, "commands": {}}
+    for linea in (text or "").splitlines():
+        if linea.startswith("HOST:"):
+            state["hostname"] = linea[5:].strip()
+        elif linea.startswith("PKG:"):
+            _, nombre, valor = linea.split(":", 2)
+            state["packages"][nombre] = valor.strip() == "1"
+        elif linea.startswith("SVC:"):
+            _, nombre, valor = linea.split(":", 2)
+            state["services"][nombre] = valor.strip()
+        elif linea.startswith("REPO:"):
+            _, nombre, valor = linea.split(":", 2)
+            try:
+                state["repositories"][nombre] = base64.b64decode(valor.strip()).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001 - una línea rota no debe tumbar el plan
+                state["repositories"][nombre] = ""
+        elif linea.startswith("FILE:"):
+            # La ruta puede llevar `:`, así que se parte por el último separador.
+            resto = linea[5:]
+            ruta, _, huella = resto.rpartition(":")
+            state["files"][ruta] = huella.strip()
+        elif linea.startswith("CMD:"):
+            resto = linea[4:]
+            ruta, _, valor = resto.rpartition(":")
+            state["commands"][ruta] = valor.strip() == "1"
+    return state
+
+
+def _repo_line(repo: dict) -> str:
+    """La línea de `sources.list.d` que representa un repositorio declarado."""
+    signed = f" [signed-by=/etc/apt/keyrings/{repo['name']}.gpg]" if repo.get("key") else ""
+    return f"deb{signed} {repo['url']} {repo['suite']} {repo['components']}"
+
+
+def _repo_script(repo: dict) -> str:
+    """El script que deja el repositorio puesto. Sólo se ejecuta si difiere."""
+    lineas = [
+        "set -e",
+        "install -d /etc/apt/keyrings",
+        "export DEBIAN_FRONTEND=noninteractive",
+        "command -v curl >/dev/null 2>&1 || "
+        "{ apt-get update -qq && apt-get install -y -qq --no-install-recommends "
+        "curl ca-certificates gnupg; }",
+    ]
+    if repo.get("key"):
+        lineas.append(
+            f"curl -fsSL {repo['key']} -o /etc/apt/keyrings/{repo['name']}.gpg"
+        )
+    lineas.append(
+        f"printf '%s\\n' {shlex.quote(_repo_line(repo))} > "
+        f"/etc/apt/sources.list.d/{repo['name']}.list"
+    )
+    lineas.append("apt-get update -qq")
+    return "\n".join(lineas)
+
+
+def _sha256(content: str) -> str:
+    """La huella del contenido declarado, que es lo que se compara con el fichero."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _file_script(fichero: dict) -> str:
+    """El script que deja un fichero con su contenido exacto.
+
+    El contenido viaja en base64: entrecomillarlo a mano rompe con cualquier
+    apóstrofo, salto de línea o `$` que lleve dentro, y un fichero de
+    configuración los lleva. Base64 no tiene ninguno de esos caracteres.
+    """
+    payload = base64.b64encode(fichero["content"].encode("utf-8")).decode("ascii")
+    ruta = shlex.quote(fichero["path"])
+    lineas = [
+        "set -e",
+        f"install -d {shlex.quote(os.path.dirname(fichero['path']))}",
+        f"printf '%s' {shlex.quote(payload)} | base64 -d > {ruta}",
+    ]
+    if fichero.get("mode"):
+        lineas.append(f"chmod {shlex.quote(fichero['mode'])} {ruta}")
+    return "\n".join(lineas)
+
+
+def _sh(script: str) -> list:
+    """Un script como argv para `ssh <host> sh -c ...`.
+
+    SSH pega los argumentos con espacios y el shell remoto los vuelve a partir:
+    sin comillas, un script de varias palabras llega hecho trizas y `sh -c` se
+    queda con la primera. Por eso el script viaja entrecomillado con `shlex.quote`,
+    que es lo mismo que hace el shell al recibirlo.
+    """
+    return ["sh", "-c", shlex.quote(script)]
+
+
+def linux_probe_cmd(node: dict) -> list:
+    """El sondeo listo para ejecutarse: el script, ya entrecomillado."""
+    return _sh(linux_probe(node))
+
+
+def linux_ops(node: dict, current: dict) -> list[dict]:
+    """La diferencia entre lo declarado y lo que hay dentro de un Linux.
+
+    El área es la frontera: se tocan identidad, repositorios, paquetes y
+    servicios. Nada más. Cada operación lleva su comando y su efecto legible; si
+    no hay diferencia, no hay operación y el segundo apply no cambia nada.
+    """
     ops = []
     configure = node.get("configure") or {}
-    if "identity" in configure and configure["identity"]["name"] != current_hostname:
-        ops.append({"cmd": ["hostnamectl", "set-hostname", configure["identity"]["name"]],
-                    "effect": f"nombre del equipo -> {configure['identity']['name']}"})
+    current = current or {}
+    paquetes_ahora = current.get("packages") or {}
+    servicios_ahora = current.get("services") or {}
+    repos_ahora = current.get("repositories") or {}
+
+    # El repositorio primero: un paquete que sólo está en un repo nuevo no se
+    # puede instalar antes de que el repo esté puesto.
+    for repo in configure.get("repositories") or []:
+        esperado = _repo_line(repo) + "\n"
+        if (repos_ahora.get(repo["name"]) or "").strip() != esperado.strip():
+            ops.append({
+                "cmd": _sh(_repo_script(repo)),
+                "effect": f"repositorio {repo['name']} -> {repo['url']} {repo['suite']}",
+            })
+
+    faltan = [p for p in configure.get("packages") or [] if not paquetes_ahora.get(p)]
+    if faltan:
+        ops.append({
+            "cmd": _sh("export DEBIAN_FRONTEND=noninteractive; "
+                       "apt-get install -y -qq --no-install-recommends "
+                       + " ".join(faltan)),
+            "effect": "paquetes: " + ", ".join(faltan),
+        })
+
+    # Los comandos con `creates` son el trabajo de una sola vez (inicializar una
+    # base de datos): se ejecutan si su marca no existe y nunca más. Van después
+    # de los ficheros —la configuración tiene que estar— y antes de los servicios.
+    for comando in configure.get("commands") or []:
+        if (current.get("commands") or {}).get(comando["creates"]):
+            continue
+        ops.append({
+            "cmd": _sh(comando["run"]),
+            "effect": f"comando: {comando['creates']}",
+        })
+
+    # Los ficheros van antes que los servicios: un servicio que arranca con una
+    # configuración que aún no está escrita falla y se queda en bucle de reinicio.
+    for fichero in configure.get("files") or []:
+        esperado = _sha256(fichero["content"])
+        if (current.get("files") or {}).get(fichero["path"]) == esperado:
+            continue
+        ops.append({
+            "cmd": _sh(_file_script(fichero)),
+            "effect": f"fichero {fichero['path']}",
+        })
+
     for service, activo in sorted((configure.get("services") or {}).items()):
-        comando = (["systemctl", "enable", "--now", service] if activo
-                   else ["systemctl", "disable", "--now", service])
+        quiere = "active" if activo else "inactive"
+        tiene = servicios_ahora.get(service, "unknown")
+        if tiene == quiere:
+            continue
+        # `restart` y no `start`: un servicio que ya está en bucle de reinicio por
+        # una configuración mala no vuelve a leerla con un `start`; con `restart`
+        # sí, y es lo que hace que la convergencia se note.
+        comando = _sh(
+            f"systemctl enable {service} && systemctl restart {service}" if activo
+            else f"systemctl disable --now {service}"
+        )
         ops.append({"cmd": comando,
                     "effect": f"servicio {service} {'al alta' if activo else 'de baja'}",
                     "check": ["systemctl", "is-active", service],
-                    "want": "active" if activo else "inactive"})
+                    "want": quiere})
+
+    identidad = (configure.get("identity") or {}).get("name")
+    if identidad and identidad != current.get("hostname"):
+        ops.append({"cmd": ["hostnamectl", "set-hostname", identidad],
+                    "effect": f"nombre del equipo -> {identidad}"})
     return ops

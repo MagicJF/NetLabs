@@ -23,7 +23,10 @@ management:
   bridge: vmbr30
   address_space: 10.30.0.0/16
   gateway: 10.30.0.1
-  pool: netlabs-site
+  # El invitado de gestión vive en el pool del laboratorio de control que lo
+  # declara (`lab-00_bootstrap`); la API de Proxmox no admite un pool que empiece
+  # por cifra, así que el prefijo `lab-` es obligatorio.
+  pool: lab-00_bootstrap
   guest: netxms
   cores: 2
   memory: 4096

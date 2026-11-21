@@ -127,6 +127,9 @@ class FilterModule:
             "netlabs_bootstrap_path": lambda node: _create_command(node, None),
             "netlabs_ros_reads": lambda node: list(converge.ROS_READS),
             "netlabs_ros_ops": lambda node, current, secret: converge.ros_ops(node, current, secret),
-            "netlabs_linux_ops": lambda node, hostname: converge.linux_ops(node, hostname),
+            "netlabs_linux_ops": lambda node, current: converge.linux_ops(node, current),
+            "netlabs_linux_probe": lambda node: converge.linux_probe(node),
+            "netlabs_linux_probe_cmd": lambda node: converge.linux_probe_cmd(node),
+            "netlabs_linux_state": lambda text: converge.linux_state(text),
             "netlabs_tunnel_port": lambda vmid: identity.tunnel_port(int(vmid)),
         }

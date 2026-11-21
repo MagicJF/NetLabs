@@ -1,0 +1,47 @@
+# PROPÓSITO:   converger el interior de un nodo Linux: repositorios, paquetes y
+#              servicios. Es la otra mitad de tasks/interior_ssh.yml: aquel lee, éste
+#              compara y escribe sólo la diferencia.
+# INVARIANTES: primero se lee el estado real por SSH; si no responde, no se escribe
+#              nada. Cada escritura está condicionada a la diferencia calculada: la
+#              segunda pasada no lanza ningún comando.
+#              El interior se toca por la puerta de siempre: SSH a su dirección con el
+#              salto hecho por el servicio de gestión.
+# VER:         docs/diseno.md §4.3, §4.4; deployment_engine/tools/converge.py
+
+# El sondeo pregunta sólo por lo declarado. Se ejecuta como `sh -c <script>`: argv
+# evita que el shell del hipervisor interprete el script antes de tiempo.
+- name: "interior · leer el estado de {{ linux_descripcion | default(objetivo) }}"
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "interior · leer el estado"
+    # El túnel aterriza en el invitado de gestión: si el que se converge es ése,
+    # no hay salto que hacer (ver interior_ssh.yml).
+    interior_salto: "{{ linux_nodo.name != env.management.guest }}"
+    comando: "{{ linux_nodo | netlabs_linux_probe_cmd }}"
+  when: linux_nodo.configure is defined
+
+- name: "interior · la diferencia entre lo declarado y lo que hay"
+  ansible.builtin.set_fact:
+    linux_actual: "{{ interior.stdout | default('') | netlabs_linux_state }}"
+  when: linux_nodo.configure is defined
+
+- name: "interior · lo que hay que escribir"
+  ansible.builtin.set_fact:
+    linux_ops: "{{ linux_nodo | netlabs_linux_ops(linux_actual) }}"
+  when: linux_nodo.configure is defined
+
+- name: "interior · {{ linux_ops | length }} cambio(s) en {{ linux_descripcion | default(objetivo) }}"
+  ansible.builtin.debug:
+    msg: "{{ linux_ops | map(attribute='effect') | list }}"
+  when: linux_ops | length > 0
+
+- name: "interior · escribir la diferencia"
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "interior · {{ linux_op.effect }}"
+    interior_salto: "{{ linux_nodo.name != env.management.guest }}"
+    interior_escribe: true
+    comando: "{{ linux_op.cmd }}"
+  loop: "{{ linux_ops }}"
+  loop_control: {loop_var: linux_op, label: "{{ linux_op.effect }}"}
+  when: linux_ops | length > 0

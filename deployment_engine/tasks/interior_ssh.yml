@@ -5,17 +5,28 @@
 #              Una lectura no cambia nada (`changed_when: false`).
 # VER:         docs/diseno.md §4.3
 
+# El túnel aterriza EN el servicio de gestión. Cuando el interior que se converge es
+# ese mismo servicio, saltar hacia su propia dirección es un SSH que se abre a sí
+# mismo y sshd lo corta con `stdio forwarding failed`: se entra directo por el túnel,
+# sin `-W`. Cuando el interior es otro invitado, el salto sí hace falta.
 - name: "SSH · {{ interior_descripcion | default(objetivo) }}"
+  vars:
+    interior_destino: "{{ 'root@' ~ objetivo if interior_salto | default(true) | bool else 'root@127.0.0.1' }}"
+    interior_proxy: >-
+      {{ [] if not interior_salto | default(true) | bool else
+         ['-o', 'ProxyCommand=ssh -i ' ~ clave ~ ' -p ' ~ puerto | string ~
+               ' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -W %h:%p root@127.0.0.1'] }}
   ansible.builtin.command:
     argv: >-
       {{ ['ssh', '-i', clave, '-p', puerto | string,
           '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no',
-          '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR',
-          '-o', 'ProxyCommand=ssh -i ' ~ clave ~ ' -p ' ~ puerto | string ~
-                ' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -W %h:%p root@127.0.0.1',
-          'root@' ~ objetivo] + comando }}
+          '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR']
+         + interior_proxy + [interior_destino] + comando }}
   register: interior
-  changed_when: false
+  # Una lectura no cambia nada; una escritura sí, y decirlo es lo que permite
+  # comprobar que el segundo apply no escribe: si `changed` no es cero, quedó
+  # una decisión tomada por accidente.
+  changed_when: "{{ interior_escribe | default(false) | bool }}"
 
 - name: "SSH · lo que dijo {{ objetivo }}"
   ansible.builtin.debug:

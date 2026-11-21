@@ -177,6 +177,10 @@ def comprobar_slots(env) -> list[str]:
     errores = []
     vistos = {}
     for nombre, (ruta, lab) in laboratorios().items():
+        # Un laboratorio de control no dibuja cables: no tiene puertos ni puentes,
+        # así que su slot no nombra nada y no puede colisionar con nadie.
+        if lab.get("kind", "topology") == "control":
+            continue
         slot = lab.get("slot", 0)
         if not isinstance(slot, int) or not 0 <= slot <= 9:
             errores.append(f"{ruta.relative_to(RAIZ)}: slot {slot!r} fuera de 0-9")

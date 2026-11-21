@@ -98,5 +98,69 @@ class LaDiferencia(unittest.TestCase):
         self.assertEqual(ops[0]["path"], "/rest/ip/service/*2")
 
 
+class ElInteriorLinux(unittest.TestCase):
+    """Un nodo de control declara su interior: repos, paquetes, ficheros, servicios."""
+
+    def nodo(self, **configure):
+        return {"role": "netxms", "type": "control", "configure": configure}
+
+    def test_un_fichero_que_coincide_no_se_escribe(self):
+        nodo = self.nodo(files=[{"path": "/etc/x.conf", "content": "a=1\n"}])
+        huella = converge._sha256("a=1\n")
+        ops = converge.linux_ops(nodo, {"files": {"/etc/x.conf": huella}})
+        self.assertEqual(ops, [])
+
+    def test_un_fichero_que_falta_se_escribe(self):
+        nodo = self.nodo(files=[{"path": "/etc/x.conf", "content": "a=1\n"}])
+        ops = converge.linux_ops(nodo, {"files": {"/etc/x.conf": "-"}})
+        self.assertEqual(len(ops), 1)
+        self.assertIn("/etc/x.conf", ops[0]["effect"])
+        # El contenido viaja en base64: un `$` o un apóstrofo no rompen el comando.
+        self.assertIn("base64 -d", ops[0]["cmd"][2])
+
+    def test_el_sondeo_pregunta_por_los_ficheros_declarados(self):
+        nodo = self.nodo(files=[{"path": "/etc/x.conf", "content": "a=1\n"}])
+        self.assertIn("/etc/x.conf", converge.linux_probe(nodo))
+
+    def test_el_estado_lee_la_huella_de_cada_fichero(self):
+        texto = "FILE:/etc/x.conf:abc123\nFILE:/etc/y.conf:-\n"
+        estado = converge.linux_state(texto)
+        self.assertEqual(estado["files"]["/etc/x.conf"], "abc123")
+        self.assertEqual(estado["files"]["/etc/y.conf"], "-")
+
+    def test_los_ficheros_van_antes_que_los_servicios(self):
+        nodo = self.nodo(
+            files=[{"path": "/etc/x.conf", "content": "a=1\n"}],
+            services={"x": True},
+        )
+        ops = converge.linux_ops(nodo, {"files": {}, "services": {"x": "inactive"}})
+        self.assertEqual(len(ops), 2)
+        self.assertIn("fichero", ops[0]["effect"])
+        self.assertIn("servicio", ops[1]["effect"])
+
+    def test_un_comando_sin_marca_se_ejecuta_y_con_marca_no(self):
+        nodo = self.nodo(commands=[{"run": "x init", "creates": "/var/lib/x/stamp"}])
+        ops = converge.linux_ops(nodo, {"commands": {}})
+        self.assertEqual(len(ops), 1)
+        self.assertIn("comando", ops[0]["effect"])
+        self.assertEqual(converge.linux_ops(nodo, {"commands": {"/var/lib/x/stamp": True}}), [])
+
+    def test_el_comando_va_antes_que_el_servicio(self):
+        nodo = self.nodo(
+            commands=[{"run": "x init", "creates": "/var/lib/x/stamp"}],
+            services={"x": True},
+        )
+        ops = converge.linux_ops(nodo, {"commands": {}, "services": {"x": "inactive"}})
+        self.assertEqual([o["effect"].split()[0] for o in ops], ["comando:", "servicio"])
+
+    def test_un_servicio_que_arranca_se_reinicia_no_solo_se_arranca(self):
+        nodo = self.nodo(services={"x": True})
+        ops = converge.linux_ops(nodo, {"services": {"x": "activating"}})
+        self.assertEqual(len(ops), 1)
+        # `restart` relee la configuración; `start` no, y el servicio se queda
+        # en bucle de reinicio con la configuración vieja.
+        self.assertIn("systemctl restart x", ops[0]["cmd"][2])
+
+
 if __name__ == "__main__":
     unittest.main()

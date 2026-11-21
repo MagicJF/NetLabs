@@ -6,8 +6,7 @@ Lo que se aprendió ejecutándolo va debajo de la tabla. La tabla se genera con
 <!-- netlabs:begin -- generado por `./netlabs docs`; no se edita a mano -->
 
 ## uno
-
-Slot: `0`
+Slot: 0
 Address spaces: `10.44.0.0/16`
 
 ### Networks
@@ -35,5 +34,7 @@ Address spaces: `10.44.0.0/16`
 Configured areas: `addresses`, `dhcp_server`, `identity`, `services`, `users`.
 
 <!-- netlabs:end -->
+
+
 
 

@@ -1,0 +1,49 @@
+# 00_bootstrap · el servicio que observa el sitio
+#
+# No dibuja una topología: es el invitado persistente que ya existía antes del
+# motor y que sobrevive a todos los laboratorios. Su única pata está en la red de
+# gestión y su dirección se deriva de su vmid, igual que la del resto.
+#
+# El motor no sabe qué es NetXMS: aquí sólo se declaran un repositorio, unos
+# paquetes y un servicio. Si mañana el servicio cambia, cambia este fichero, no
+# el motor.
+
+lab: 00_bootstrap
+kind: control
+
+nodes:
+  - role: netxms
+    type: control
+    stage: 1
+    configure:
+      identity:
+        name: netxms
+      repositories:
+        - name: netxms
+          url: https://packages.netxms.org/7.x/debian
+          suite: trixie
+          components: main
+          key: https://packages.netxms.org/netxms-keyring.gpg
+      packages:
+        - netxms-server
+      # El servidor no arranca sin base de datos: sin esta sección sale con
+      # status=3 (NOTIMPLEMENTED) y se queda en bucle de reinicio. SQLite porque
+      # es una sola máquina y no hay un motor de base de datos que mantener.
+      files:
+        - path: /etc/netxmsd.conf
+          content: |
+            ## Logging
+            LogFile=/var/log/netxmsd
+            DebugLevel=2
+
+            ## Database configuration - SQLite (single host, no DBA to maintain)
+            DBDriver=sqlite.ddr
+            DBName=/var/lib/netxms/netxms.db
+      # Una base de datos recién creada no tiene esquema y el servidor sale con
+      # NOTIMPLEMENTED. `nxdbmgr init` lo crea una sola vez; la marca que deja
+      # (`creates`) es lo que hace que el segundo apply no lo repita.
+      commands:
+        - run: "systemctl stop netxms-server || true; /usr/bin/nxdbmgr init && touch /var/lib/netxms/netlabs-schema"
+          creates: /var/lib/netxms/netlabs-schema
+      services:
+        netxms-server: true
