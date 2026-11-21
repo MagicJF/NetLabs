@@ -8,6 +8,7 @@
 
 import copy
 import pathlib
+import re
 import sys
 import unittest
 
@@ -331,6 +332,40 @@ class Documentacion(unittest.TestCase):
         self.assertEqual(texto.count("```mermaid\narchitecture-beta"), 2)
         self.assertNotIn("flowchart", texto)
         self.assertIn("[edge (p1, p2)]", texto)
+
+    def test_los_dibujos_salen_enteros_de_la_declaracion(self):
+        """Ni un servicio inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""
+        lab = laboratorio()
+        texto = identity.render_docs(lab, entorno())
+        bloques = re.findall(r"```mermaid\narchitecture-beta\n(.*?)```", texto, re.S)
+        self.assertEqual(len(bloques), 2)
+        topologia, cableado = bloques
+
+        nodos = {identity._id(n["role"]) for n in lab["nodes"]}
+        redes = {f"red_{identity._id(n['name'])[2:]}" for n in lab["networks"]}
+        self.assertEqual(set(re.findall(r"service (\w+)\(", topologia)), nodos | redes)
+        self.assertEqual(set(re.findall(r"service (\w+)\(", cableado)), nodos)
+
+        # Topología: una arista por pata (nodo -> red). Cableado: una por cable.
+        patas = sum(len(dict.fromkeys(n.get("networks") or [])) for n in lab["nodes"])
+        self.assertEqual(len(re.findall(r"[RLTB] -- [RLTB]:", topologia)), patas)
+        cables = [(identity._id(c["a"]["node"]), identity._id(c["z"]["node"]))
+                  for c in lab["links"]]
+        self.assertEqual(re.findall(r"(\w+):[RLTB] -- [RLTB]:(\w+)", cableado), cables)
+
+    def test_el_dibujo_del_cableado_no_inventa_ni_omite(self):
+        lab = {"networks": [{"name": "lan", "address": "10.9.0.0/24"}],
+               "nodes": [{"role": "r", "type": "router", "networks": ["lan"],
+                          "address": "10.9.0.1/24"},
+                         {"role": "s", "type": "switch", "networks": ["lan", "lan"]},
+                         {"role": "h", "type": "workstation", "networks": ["lan"],
+                          "address": "dhcp"}],
+               "links": [{"a": {"node": "r", "port": 1}, "z": {"node": "s", "port": 1}},
+                         {"a": {"node": "s", "port": 2}, "z": {"node": "h", "port": 1}}]}
+        lineas = identity._mermaid_cableado(lab)
+        self.assertIn("    service n_s(server)[s (p1, p2)]", lineas)
+        self.assertEqual([l.strip() for l in lineas if " -- " in l],
+                         ["n_r:R -- L:n_s", "n_s:R -- L:n_h"])
 
 
 if __name__ == "__main__":
