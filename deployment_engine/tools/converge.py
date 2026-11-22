@@ -39,6 +39,10 @@ ROS_READS = (
 
 PREFIX = "netlabs-"
 
+# Las comunidades que RouterOS trae puestas de fábrica. Cualquier cliente que no se
+# configure manda una de estas; si el equipo las apaga, el cliente deja de ver nada.
+COMUNIDADES_DE_FABRICA = ("public", "default")
+
 # El nombre de la interfaz es el que el motor le puso al crear el invitado: la pata
 # i es ether<i>, y la de gestión es la última. No es un número de un laboratorio: es
 # cómo se llama lo que el propio motor creó.
@@ -244,10 +248,17 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
     # a la red de gestión, de sólo lectura y v2c, que es lo que la hace inofensiva: lo que
     # no se admite es una comunidad abierta a `::/0`, y ninguna queda así.
     for otra in comunidades:
-        if otra.get("name") == comunidad or \
-                str(otra.get("disabled", "")).lower() in ("true", "yes"):
+        if otra.get("name") == comunidad:
+            continue
+        # Una comunidad que alguien apagó a mano se respeta; la de fábrica no: si está
+        # apagada es residuo de una configuración anterior, y dejarla así es justo lo
+        # que obliga a tocar el cliente. Se vuelve a encender, ya acotada.
+        apagada = str(otra.get("disabled", "")).lower() in ("true", "yes")
+        if apagada and otra.get("name") not in COMUNIDADES_DE_FABRICA:
             continue
         cambios = {}
+        if apagada:
+            cambios["disabled"] = "no"
         if otra.get("addresses") != mgmt_cidr:
             cambios["addresses"] = mgmt_cidr
         if str(otra.get("read-access", "")).lower() not in ("true", "yes"):

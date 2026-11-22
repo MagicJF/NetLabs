@@ -280,6 +280,29 @@ class LaObservabilidadDelRouter(unittest.TestCase):
         self.assertEqual(acotada["body"], {"addresses": self.CIDR})
         self.assertNotIn("disabled", acotada["body"])
 
+    def test_la_comunidad_de_fabrica_apagada_se_vuelve_a_encender(self):
+        """Un `public` apagado por una configuración anterior deja al cliente ciego."""
+        actual = self.actual(enabled="true", comunidades=[
+            {".id": "*0", "name": "public", "addresses": "::/0", "disabled": "true",
+             "read-access": "true", "write-access": "false", "security": "none"},
+        ])
+        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR)
+        acotada = next(o for o in ops if o["path"] == "/rest/snmp/community/*0")
+        self.assertEqual(acotada["body"]["disabled"], "no")
+        self.assertEqual(acotada["body"]["addresses"], self.CIDR)
+
+    def test_una_comunidad_apagada_a_mano_se_respeta(self):
+        """Apagar una comunidad propia es una decisión; el motor no la deshace."""
+        actual = self.actual(enabled="true", comunidades=[
+            {".id": "*0", "name": "public", "addresses": self.CIDR,
+             "read-access": "true", "write-access": "false", "security": "none"},
+            {".id": "*2", "name": "clientes", "addresses": "::/0", "disabled": "true",
+             "read-access": "true", "write-access": "false", "security": "none"},
+        ])
+        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR)
+        self.assertEqual([o["path"] for o in ops if o["path"].startswith("/rest/snmp/community/")],
+                         [])
+
     def test_si_ya_esta_no_escribe_nada(self):
         actual = self.actual(enabled="true", comunidades=[
             {".id": "*1", "name": "lab-ro", "addresses": self.CIDR,
