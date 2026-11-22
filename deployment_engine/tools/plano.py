@@ -420,8 +420,9 @@ def _arbol(lab: dict) -> Region:
             # Un espacio que ya es una red declarada se dibuja una vez: la red manda,
             # que es la que tiene equipos y puerta.
             continue
-        # La caja del espacio se rotula como cualquier otra red: `10.46.x.x/16`, no
-        # `10.46.0.0/16`, que parece la dirección de un equipo.
+        # La caja del espacio se rotula como cualquier otra red —con `x` en los
+        # octetos de host—, no con el `.0` de la dirección de red, que se lee como si
+        # fuera la dirección de un equipo.
         regiones.append(Region("espacio:" + str(red), _mascara(str(red)),
                                _mascara(str(red)), red))
 
