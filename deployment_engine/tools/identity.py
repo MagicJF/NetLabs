@@ -67,7 +67,7 @@ LAB_KEYS = {"lab", "kind", "address_spaces", "networks", "nodes", "links"}
 # observa el resto. Su único nodo vive en la red de gestión y no tiene cables.
 KINDS = {"topology", "control"}
 NODE_KEYS = {"role", "type", "stage", "after", "resources", "image", "networks", "address", "configure"}
-NETWORK_KEYS = {"name", "address"}
+NETWORK_KEYS = {"name", "address", "title"}
 LINK_KEYS = {"a", "z"}
 END_KEYS = {"node", "port"}
 
@@ -1302,26 +1302,138 @@ def _id(role: str) -> str:
     return f"n_{limpio}"
 
 
+# El icono con el que se reconoce cada clase de equipo en el dibujo. Es un carácter,
+# no una imagen: no hay fichero que se quede viejo cuando cambie la declaración.
+ICONOS = {
+    "router": "📡",
+    "switch": "🔀",
+    "firewall": "🧱",
+    "workstation": "🖥️",
+    "server": "🗄️",
+    "control": "⚙️",
+}
+
+
+def _subred(address: str) -> str:
+    """La red con una `x` en los octetos de host: `10.20.55.x/24`, como se lee un plano.
+
+    Una red no es una dirección: escribir el `.0` hace creer que ese octeto es un
+    equipo. La `x` dice lo que de verdad es, el hueco donde se numeran los equipos.
+    """
+    red = ipaddress.ip_network(address, strict=False)
+    octetos = str(red.network_address).split(".")
+    # Los octetos de host son los que quedan por debajo de la máscara: en /24 el
+    # cuarto, en /16 el tercero y el cuarto. Los de red se quedan como están.
+    for i in range(red.prefixlen // 8, 4):
+        octetos[i] = "x"
+    return ".".join(octetos) + f"/{red.prefixlen}"
+
+
+def _profundidad(lab: dict) -> dict[str, int]:
+    """Cuántos saltos separan a cada equipo de la raíz de la topología.
+
+    Se mide sobre los `after` declarados: quien no espera a nadie es la raíz —lo más
+    cerca de la salida— y quien espera cuelga debajo. Ordenar por esto pone arriba lo
+    que da salida y abajo lo que la consume, que es el sentido N-S de la red; los
+    equipos del mismo nivel quedan en la misma franja, que es el sentido E-O.
+    """
+    por_rol = {n["role"]: n for n in lab["nodes"]}
+    memo: dict[str, int] = {}
+
+    def prof(rol: str, vistos: frozenset) -> int:
+        if rol in memo:
+            return memo[rol]
+        if rol in vistos:
+            raise LabError(f"el ciclo de 'after' pasa por {rol!r}")
+        padres = [p for p in (por_rol[rol].get("after") or []) if p in por_rol]
+        memo[rol] = 1 + max((prof(p, vistos | {rol}) for p in padres), default=-1)
+        return memo[rol]
+
+    return {rol: prof(rol, frozenset()) for rol in por_rol}
+
+
+def _principal(lab: dict) -> dict[str, str]:
+    """En qué red se dibuja cada equipo: aquella donde tiene más patas.
+
+    Un equipo multi-homed no puede estar dentro de dos cajas a la vez, así que se
+    dibuja en la que más le ata; las demás patas se ven en las aristas y en la tabla.
+    """
+    principal: dict[str, str] = {}
+    for node in lab["nodes"]:
+        patas = list(node.get("networks") or [])
+        if not patas:
+            continue
+        cuenta: dict[str, int] = {}
+        for net in patas:
+            cuenta[net] = cuenta.get(net, 0) + 1
+        principal[node["role"]] = max(cuenta, key=lambda n: (cuenta[n], -patas.index(n)))
+    return principal
+
+
+def _etiqueta_topologia(node: dict) -> str:
+    """El icono y el rol del equipo, con sus direcciones de laboratorio debajo.
+
+    Un equipo multi-homed enseña todas sus patas: si sólo saliera la primera, el
+    plano diría que el router no tiene cara en la segunda red y no se entendería por
+    qué llega hasta ella. Se leen de `configure.addresses`, que es lo que de verdad
+    se configura; `address` es el atajo de un equipo de una sola pata.
+    """
+    icono = ICONOS.get(node["type"], "▪")
+    direcciones = [a["address"] for a in (node.get("configure") or {}).get("addresses") or []]
+    if not direcciones:
+        direccion = node.get("address")
+        if direccion and direccion != "dhcp":
+            direcciones = [direccion]
+        elif direccion == "dhcp":
+            direcciones = ["dhcp"]
+    sufijo = "".join(f"<br/>{d}" for d in direcciones)
+    return f'{icono} {node["role"]}{sufijo}'
+
+
 def _mermaid_topologia(lab: dict) -> list[str]:
     """Quién está en qué red y quién es su puerta: la topología, no el cableado.
 
-    Una nube por red declarada y un equipo por nodo; cada nodo cuelga de todas las
-    redes en las que tiene pata. Con `architecture-beta` los iconos son vectores
-    nativos y el dibujo no depende de una fuente.
+    Cada red es un área: un rectángulo translúcido con su nombre y su numeración en
+    `x`. Dentro se dibujan los equipos que viven en ella, con el icono de su clase
+    (el router con el suyo), y las aristas son los `after` declarados: la jerarquía
+    real. Va en `flowchart TB` y no en `architecture-beta` porque allí las áreas
+    («groups») no admiten color ni transparencia, y el color es lo que distingue una
+    red de otra de un vistazo.
     """
-    lineas = ["```mermaid", "architecture-beta"]
-    for net in lab["networks"]:
-        lineas.append(f"    service red_{_id(net['name'])[2:]}(cloud)[{net['name']} {net['address']}]")
-    for node in lab["nodes"]:
-        papel = node["type"]
-        if node.get("address") and node["address"] != "dhcp":
-            papel += f" {node['address']}"
-        elif node.get("address") == "dhcp":
-            papel += " dhcp"
-        lineas.append(f"    service {_id(node['role'])}(server)[{node['role']} {papel}]")
-    for node in lab["nodes"]:
-        for net in dict.fromkeys(node.get("networks") or []):
-            lineas.append(f"    {_id(node['role'])}:R -- L:red_{_id(net)[2:]}")
+    profundidad = _profundidad(lab)
+    principal = _principal(lab)
+    # El color no significa nada: sólo hace que dos áreas no se confundan.
+    paleta = ["#3b82f6", "#ec4899", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444"]
+    lineas = ["```mermaid", "flowchart TB"]
+    for i, _ in enumerate(lab["networks"]):
+        color = paleta[i % len(paleta)]
+        lineas.append(f"    classDef red{i} fill:{color},fill-opacity:0.15,"
+                      f"stroke:{color},stroke-width:2px,color:#0f172a")
+    for i, net in enumerate(lab["networks"]):
+        titulo = net.get("title") or net["name"]
+        lineas.append(f'    subgraph red{i}["{titulo} · {_subred(net["address"])}"]')
+        lineas.append("        direction TB")
+        dentro = sorted((n for n in lab["nodes"] if principal.get(n["role"]) == net["name"]),
+                        key=lambda n: (profundidad[n["role"]], n["role"]))
+        if dentro:
+            for node in dentro:
+                # El router va en círculo, como en cualquier plano de red; el resto en
+                # caja. La forma dice la clase sin gastar una leyenda.
+                if node["type"] == "router":
+                    lineas.append(f'        {_id(node["role"])}(("{_etiqueta_topologia(node)}"))')
+                else:
+                    lineas.append(f'        {_id(node["role"])}["{_etiqueta_topologia(node)}"]')
+        else:
+            # Un área sin equipos se dibuja igual, con su nombre, para que el hueco se
+            # vea: una red declarada y vacía es una decisión, no un olvido.
+            lineas.append(f'        red{i}_vacia["{net["name"]}"]')
+        lineas.append("    end")
+        lineas.append(f"    class red{i} red{i}")
+    # La jerarquía declarada: cada `after` es una arista de arriba abajo. La flecha
+    # marca el sentido N-S del plano, no un flujo de tráfico.
+    for node in sorted(lab["nodes"], key=lambda n: (profundidad[n["role"]], n["role"])):
+        for padre in node.get("after") or []:
+            lineas.append(f"    {_id(padre)} --> {_id(node['role'])}")
     lineas.append("```")
     return lineas
 
@@ -1335,22 +1447,33 @@ def _mermaid_cableado(lab: dict) -> list[str]:
     `architecture-beta` no se puede escribir: allí el puerto acaba en la etiqueta del
     equipo y el emparejamiento hay que buscarlo en la tabla. Sigue siendo código
     dentro de la página: no hay fichero de imagen que se quede viejo.
+
+    Va en `flowchart TB` y con los equipos declarados de menos a más profundidad: lo
+    que da salida a internet queda arriba y lo más cerrado abajo, que es como se lee
+    un plano de planta. La flecha no marca sentido de tráfico —un cable es tonto—,
+    sólo el orden de lectura N-S.
     """
-    lineas = ["```mermaid", "flowchart LR"]
+    profundidad = _profundidad(lab)
+    lineas = ["```mermaid", "flowchart TB"]
     patas: dict[str, list[int]] = {}
     for link in lab.get("links") or []:
         for extremo in (link["a"], link["z"]):
             patas.setdefault(extremo["node"], []).append(extremo["port"])
-    for node in lab["nodes"]:
+    for node in sorted(lab["nodes"], key=lambda n: (profundidad[n["role"]], n["role"])):
         suyos = sorted(set(patas.get(node["role"], [])))
-        etiqueta = (f"{node['role']}<br/>p{', p'.join(str(p) for p in suyos)}"
-                    if suyos else node["role"])
-        lineas.append(f'    {_id(node["role"])}["{etiqueta}"]')
+        icono = ICONOS.get(node["type"], "▪")
+        cuerpo = f"{icono} {node['role']}"
+        if suyos:
+            cuerpo += f"<br/>p{', p'.join(str(p) for p in suyos)}"
+        lineas.append(f'    {_id(node["role"])}["{cuerpo}"]')
     for link in lab.get("links") or []:
         a, z = link["a"], link["z"]
+        # La punta de arriba primero: así la arista baja, nunca sube.
+        if profundidad.get(z["node"], 0) < profundidad.get(a["node"], 0):
+            a, z = z, a
         punta_a = _endpoint(a["node"], a["port"])
         punta_z = _endpoint(z["node"], z["port"])
-        lineas.append(f'    {_id(a["node"])} ---|{punta_a} ↔ {punta_z}| {_id(z["node"])}')
+        lineas.append(f'    {_id(a["node"])} -->|{punta_a} ↔ {punta_z}| {_id(z["node"])}')
     lineas.append("```")
     return lineas
 

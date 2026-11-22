@@ -171,13 +171,15 @@ así, qué se aprendió). La comprobación re-renderiza la región generada y **
 de lo que hay en el fichero.
 
 La región generada lleva además dos diagramas, también sacados de la declaración: la
-**topología** (una nube por red con su CIDR y quién cuelga de ella) y el **cableado** (un
-equipo por nodo con sus puertos y una arista por cable que dice las dos puntas que une). Los
-dos son **código**: bloques `` ```mermaid `` dentro del propio `.md`, sin PNG ni SVG generados
-ni guardados. Un diagrama es una línea más del documento: se lee, se compara y se revisa en el
-diff como cualquier otra. La topología va en `architecture-beta` —iconos vectoriales nativos,
-sin depender de una fuente— y el cableado en `flowchart`, porque en `architecture-beta` no se
-puede escribir texto en la arista y ahí lo que importa es justo eso: qué puerto va con cuál.
+**topología** (cada red como área translúcida con su nombre y su subred en `x`, y dentro quién
+cuelga de ella) y el **cableado** (un equipo por nodo con sus puertos y una arista por cable que
+dice las dos puntas que une). Los dos son **código**: bloques `` ```mermaid `` dentro del propio
+`.md`, sin PNG ni SVG generados ni guardados. Un diagrama es una línea más del documento: se lee,
+se compara y se revisa en el diff como cualquier otra. Los dos van en `flowchart TB` —no en
+`architecture-beta`— porque allí las áreas no admiten color ni transparencia, ni texto en la
+arista, y aquí hacen falta las tres cosas: el color distingue una red de otra, el nombre y la
+numeración van en el área, y cada cable dice sus dos puertos. El sentido es N-S: arriba lo que
+da salida y abajo lo más cerrado, con los equipos del mismo nivel alineados en la franja E-O.
 Un diagrama que no sale de la declaración no se dibuja: se pudre el primero que alguien cambie
 algo a mano.
 

@@ -11,27 +11,33 @@ Address spaces: `10.44.0.0/16`
 ### Topología
 
 ```mermaid
-architecture-beta
-    service red_lan1(cloud)[lan1 10.44.1.0/24]
-    service red_lan2(cloud)[lan2 10.44.2.0/24]
-    service n_rte1(server)[rte1 router 10.44.1.1/24]
-    service n_wsp1(server)[wsp1 workstation dhcp]
-    service n_wsp2(server)[wsp2 workstation dhcp]
-    n_rte1:R -- L:red_lan1
-    n_rte1:R -- L:red_lan2
-    n_wsp1:R -- L:red_lan1
-    n_wsp2:R -- L:red_lan2
+flowchart TB
+    classDef red0 fill:#3b82f6,fill-opacity:0.15,stroke:#3b82f6,stroke-width:2px,color:#0f172a
+    classDef red1 fill:#ec4899,fill-opacity:0.15,stroke:#ec4899,stroke-width:2px,color:#0f172a
+    subgraph red0["lan1 · 10.44.1.x/24"]
+        direction TB
+        n_rte1(("📡 rte1<br/>10.44.1.1/24<br/>10.44.2.1/24"))
+        n_wsp1["🖥️ wsp1<br/>dhcp"]
+    end
+    class red0 red0
+    subgraph red1["lan2 · 10.44.2.x/24"]
+        direction TB
+        n_wsp2["🖥️ wsp2<br/>dhcp"]
+    end
+    class red1 red1
+    n_rte1 --> n_wsp1
+    n_rte1 --> n_wsp2
 ```
 
 ### Cableado (L2)
 
 ```mermaid
-flowchart LR
-    n_rte1["rte1<br/>p1, p2"]
-    n_wsp1["wsp1<br/>p1"]
-    n_wsp2["wsp2<br/>p1"]
-    n_rte1 ---|rte1p1 ↔ wsp1p1| n_wsp1
-    n_rte1 ---|rte1p2 ↔ wsp2p1| n_wsp2
+flowchart TB
+    n_rte1["📡 rte1<br/>p1, p2"]
+    n_wsp1["🖥️ wsp1<br/>p1"]
+    n_wsp2["🖥️ wsp2<br/>p1"]
+    n_rte1 -->|rte1p1 ↔ wsp1p1| n_wsp1
+    n_rte1 -->|rte1p2 ↔ wsp2p1| n_wsp2
 ```
 
 ### Networks

@@ -453,12 +453,11 @@ class Documentacion(unittest.TestCase):
 
     def test_la_documentacion_dibuja_la_topologia_y_el_cableado(self):
         texto = identity.render_docs(laboratorio(), entorno())
-        # Dos dibujos sacados de la declaración: quién está en qué red (topología, en
-        # `architecture-beta`, con sus iconos vectoriales) y qué puerto va con qué puerto
-        # (cableado, en `flowchart`, que sí admite texto en la arista).
-        self.assertEqual(texto.count("```mermaid\narchitecture-beta"), 1)
-        self.assertEqual(texto.count("```mermaid\nflowchart LR"), 1)
-        self.assertIn('n_rte1["rte1<br/>p1, p2"]', texto)
+        # Dos dibujos sacados de la declaración: quién está en qué red (topología, con
+        # las redes como áreas translúcidas) y qué puerto va con qué puerto (cableado,
+        # con texto en la arista). Los dos en `flowchart TB`: N-S arriba-abajo.
+        self.assertEqual(texto.count("```mermaid\nflowchart TB"), 2)
+        self.assertIn('n_rte1["📡 rte1<br/>p1, p2"]', texto)
         # El cable dice sus dos puntas sin haber que mirar la tabla.
         self.assertIn("rte1p1 ↔ wsp1p1", texto)
         # El diagrama es código dentro de la página: ni imagen enlazada ni fichero aparte.
@@ -470,25 +469,31 @@ class Documentacion(unittest.TestCase):
         """Ni un servicio inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""
         lab = laboratorio()
         texto = identity.render_docs(lab, entorno())
-        bloques = dict(re.findall(r"```mermaid\n(architecture-beta|flowchart LR)\n(.*?)```",
-                                  texto, re.S))
-        self.assertEqual(sorted(bloques), ["architecture-beta", "flowchart LR"])
-        topologia = bloques["architecture-beta"]
-        cableado = bloques["flowchart LR"]
+        bloques = re.findall(r"```mermaid\nflowchart TB\n(.*?)```", texto, re.S)
+        self.assertEqual(len(bloques), 2)
+        topologia, cableado = bloques
 
         nodos = {identity._id(n["role"]) for n in lab["nodes"]}
-        redes = {f"red_{identity._id(n['name'])[2:]}" for n in lab["networks"]}
-        self.assertEqual(set(re.findall(r"service (\w+)\(", topologia)), nodos | redes)
-        self.assertEqual(set(re.findall(r"(?m)^\s+(\w+)\[\"", cableado)), nodos)
+        # Cada red es un área: subgraph con su nombre y su subred en `x`.
+        self.assertEqual(len(re.findall(r"subgraph red\d+\[", topologia)), len(lab["networks"]))
+        for net in lab["networks"]:
+            self.assertIn(identity._subred(net["address"]), topologia)
+        # Todos los equipos aparecen en el plano; ninguno inventado.
+        dibujados = set(re.findall(r"(?m)^\s+(\w+)[\[(]", topologia))
+        self.assertEqual(dibujados, nodos)
+        self.assertEqual(set(re.findall(r"(?m)^\s+(\w+)\[", cableado)), nodos)
 
-        # Topología: una arista por pata (nodo -> red). Cableado: una por cable.
-        patas = sum(len(dict.fromkeys(n.get("networks") or [])) for n in lab["nodes"])
-        self.assertEqual(len(re.findall(r"[RLTB] -- [RLTB]:", topologia)), patas)
-        aristas = re.findall(r"(\w+) ---\|([^|]+)\| (\w+)", cableado)
+        # Topología: una arista por `after`. Cableado: una por cable.
+        patas = sum(len(n.get("after") or []) for n in lab["nodes"])
+        self.assertEqual(len(re.findall(r"-->", topologia)), patas)
+        aristas = re.findall(r"(\w+) -->\|([^|]+)\| (\w+)", cableado)
         self.assertEqual(len(aristas), len(lab["links"]))
-        self.assertEqual([(a, z) for a, _, z in aristas],
-                         [(identity._id(c["a"]["node"]), identity._id(c["z"]["node"]))
-                          for c in lab["links"]])
+        # El cableado baja: la punta de arriba es la menos profunda.
+        profundidad = {identity._id(rol): d for rol, d in identity._profundidad(lab).items()}
+        for (a, _, z), cable in zip(aristas, lab["links"]):
+            self.assertLessEqual(profundidad[a], profundidad[z])
+            self.assertEqual({a, z},
+                             {identity._id(cable["a"]["node"]), identity._id(cable["z"]["node"])})
         # Y cada arista dice las dos puntas que une, que es lo que la hace útil.
         for (_, etiqueta, _), cable in zip(aristas, lab["links"]):
             self.assertEqual(etiqueta.split(" ↔ "),
@@ -505,9 +510,9 @@ class Documentacion(unittest.TestCase):
                "links": [{"a": {"node": "r", "port": 1}, "z": {"node": "s", "port": 1}},
                          {"a": {"node": "s", "port": 2}, "z": {"node": "h", "port": 1}}]}
         lineas = identity._mermaid_cableado(lab)
-        self.assertIn('    n_s["s<br/>p1, p2"]', lineas)
-        self.assertEqual([l.strip() for l in lineas if " ---|" in l],
-                         ["n_r ---|rp1 ↔ sp1| n_s", "n_s ---|sp2 ↔ hp1| n_h"])
+        self.assertIn('    n_s["🔀 s<br/>p1, p2"]', lineas)
+        self.assertEqual([l.strip() for l in lineas if " -->|" in l],
+                         ["n_r -->|rp1 ↔ sp1| n_s", "n_s -->|sp2 ↔ hp1| n_h"])
 
 
 if __name__ == "__main__":

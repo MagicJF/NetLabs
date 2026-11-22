@@ -274,9 +274,11 @@ class LaObservabilidadDelRouter(unittest.TestCase):
         self.assertEqual(creada["body"]["write-access"], "no")
         # La comunidad es v2c: en RouterOS lo decide `security`, no los protocolos de v3.
         self.assertEqual(creada["body"]["security"], "none")
-        # RouterOS no deja borrar la comunidad `default`: se apaga.
-        apagada = next(o for o in ops if o["path"] == "/rest/snmp/community/*0")
-        self.assertEqual(apagada["body"], {"disabled": "yes"})
+        # Y la de fábrica no se apaga: se acota igual que la del laboratorio, para que quien
+        # use la de siempre (NetXMS, `snmpwalk`) entre sin que nadie configure nada.
+        acotada = next(o for o in ops if o["path"] == "/rest/snmp/community/*0")
+        self.assertEqual(acotada["body"], {"addresses": self.CIDR})
+        self.assertNotIn("disabled", acotada["body"])
 
     def test_si_ya_esta_no_escribe_nada(self):
         actual = self.actual(enabled="true", comunidades=[

@@ -238,15 +238,30 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
                         "body": cambios,
                         "effect": f"comunidad SNMP -> {mgmt_cidr} (v2c, sólo lectura)"})
 
-    # Dentro del área, lo que sobra se apaga: RouterOS no deja borrar la comunidad
-    # `default` (responde 400), y una `public` abierta a ::/0 es justo lo que no
-    # queremos que quede viva en un equipo del laboratorio.
+    # Dentro del área, lo que sobra no se apaga: una comunidad que el equipo trae de
+    # fábrica (`public`, `default`) es la que cualquier cliente del sitio usa por defecto
+    # —NetXMS, un `snmpwalk` a mano—, y apagarla obliga a configurar el cliente. Se acota
+    # a la red de gestión, de sólo lectura y v2c, que es lo que la hace inofensiva: lo que
+    # no se admite es una comunidad abierta a `::/0`, y ninguna queda así.
     for otra in comunidades:
-        if otra.get("name") != comunidad and \
-                str(otra.get("disabled", "")).lower() not in ("true", "yes"):
+        if otra.get("name") == comunidad or \
+                str(otra.get("disabled", "")).lower() in ("true", "yes"):
+            continue
+        cambios = {}
+        if otra.get("addresses") != mgmt_cidr:
+            cambios["addresses"] = mgmt_cidr
+        if str(otra.get("read-access", "")).lower() not in ("true", "yes"):
+            cambios["read-access"] = "yes"
+        if str(otra.get("write-access", "")).lower() in ("true", "yes"):
+            cambios["write-access"] = "no"
+        for campo, valor in v2c.items():
+            if str(otra.get(campo, "")).lower() != valor:
+                cambios[campo] = valor
+        if cambios:
             ops.append({"method": "PATCH", "path": f"/rest/snmp/community/{otra['.id']}",
-                        "body": {"disabled": "yes"},
-                        "effect": f"apagar comunidad SNMP {otra.get('name')!r} (abierta o sin uso)"})
+                        "body": cambios,
+                        "effect": f"comunidad SNMP {otra.get('name')!r} -> {mgmt_cidr} "
+                                  "(v2c, sólo lectura)"})
     return ops
 
 

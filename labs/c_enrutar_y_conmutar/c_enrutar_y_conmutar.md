@@ -11,33 +11,36 @@ Address spaces: `10.46.0.0/16`
 ### Topología
 
 ```mermaid
-architecture-beta
-    service red_lan(cloud)[lan 10.46.1.0/24]
-    service n_rte1(server)[rte1 router 10.46.1.1/24]
-    service n_swc1(server)[swc1 switch]
-    service n_swa1(server)[swa1 switch]
-    service n_wsp1(server)[wsp1 workstation dhcp]
-    service n_wsp2(server)[wsp2 workstation dhcp]
-    n_rte1:R -- L:red_lan
-    n_swc1:R -- L:red_lan
-    n_swa1:R -- L:red_lan
-    n_wsp1:R -- L:red_lan
-    n_wsp2:R -- L:red_lan
+flowchart TB
+    classDef red0 fill:#3b82f6,fill-opacity:0.15,stroke:#3b82f6,stroke-width:2px,color:#0f172a
+    subgraph red0["lan · 10.46.1.x/24"]
+        direction TB
+        n_rte1(("📡 rte1<br/>10.46.1.1/24"))
+        n_swc1["🔀 swc1"]
+        n_swa1["🔀 swa1"]
+        n_wsp1["🖥️ wsp1<br/>dhcp"]
+        n_wsp2["🖥️ wsp2<br/>dhcp"]
+    end
+    class red0 red0
+    n_rte1 --> n_swc1
+    n_swc1 --> n_swa1
+    n_swa1 --> n_wsp1
+    n_swa1 --> n_wsp2
 ```
 
 ### Cableado (L2)
 
 ```mermaid
-flowchart LR
-    n_rte1["rte1<br/>p1"]
-    n_swc1["swc1<br/>p1, p2"]
-    n_swa1["swa1<br/>p1, p2, p3"]
-    n_wsp1["wsp1<br/>p1"]
-    n_wsp2["wsp2<br/>p1"]
-    n_rte1 ---|rte1p1 ↔ swc1p1| n_swc1
-    n_swc1 ---|swc1p2 ↔ swa1p1| n_swa1
-    n_swa1 ---|swa1p2 ↔ wsp1p1| n_wsp1
-    n_swa1 ---|swa1p3 ↔ wsp2p1| n_wsp2
+flowchart TB
+    n_rte1["📡 rte1<br/>p1"]
+    n_swc1["🔀 swc1<br/>p1, p2"]
+    n_swa1["🔀 swa1<br/>p1, p2, p3"]
+    n_wsp1["🖥️ wsp1<br/>p1"]
+    n_wsp2["🖥️ wsp2<br/>p1"]
+    n_rte1 -->|rte1p1 ↔ swc1p1| n_swc1
+    n_swc1 -->|swc1p2 ↔ swa1p1| n_swa1
+    n_swa1 -->|swa1p2 ↔ wsp1p1| n_wsp1
+    n_swa1 -->|swa1p3 ↔ wsp2p1| n_wsp2
 ```
 
 ### Networks
