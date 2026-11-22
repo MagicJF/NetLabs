@@ -1,0 +1,67 @@
+# PROPÓSITO:   reescribir los cores y la memoria de un invitado que YA existe, sin
+#              retirarlo: se para, se le escribe el config y se vuelve a arrancar.
+# INVARIANTES: su disco no se toca —no pierde nada de dentro— y sus cables tampoco: los
+#              puentes son del laboratorio, no del invitado.
+#              Sólo se para si está en pie; un invitado que ya estaba parado no se
+#              arranca por venir aquí (lo hace el plan con su paso `guest_start`).
+#              Nada de `sleep`: el parón y el arranque se esperan con la tarea del
+#              hipervisor, como el resto del motor.
+# VER:         docs/diseno.md §7; identity.py · `_diferencia_del_invitado`
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ cambio.type }}/{{ cambio.vmid }}/status/current"
+    pve_do: "leer el estado de {{ cambio.name }} antes de tocar sus recursos"
+    pve_status: [200]
+
+# `register` sobre un `include_tasks` no trae lo que registró la tarea de dentro
+# (medido): el estado se guarda en un hecho en cuanto se lee, antes de que la
+# siguiente llamada reescriba `pve_r`.
+- name: "anotar si {{ cambio.name }} estaba en marcha"
+  ansible.builtin.set_fact:
+    estaba_en_marcha: "{{ pve_r.json.data.status == 'running' }}"
+
+# El orden importa: con el invitado en pie, Proxmox acepta el `memory` del config pero
+# no lo aplica hasta el siguiente arranque, así que el plan diría «hecho» y el equipo
+# seguiría con la memoria vieja. Se para primero y se arranca después: lo que dice el
+# hypervisor es entonces lo que de verdad tiene.
+- name: "PVE · parar {{ cambio.name }} para reescribir sus recursos"
+  include_tasks: pve.yml
+  vars:
+    pve_method: POST
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ cambio.type }}/{{ cambio.vmid }}/status/stop"
+    pve_do: "parar {{ cambio.name }} ({{ cambio.vmid }}) para cambiar sus recursos"
+    pve_status: [200]
+  when: estaba_en_marcha | bool
+
+- include_tasks: wait_task.yml
+  vars:
+    upid: "{{ pve_r.json.data }}"
+    pve_do: "parar {{ cambio.name }} ({{ cambio.vmid }})"
+  when: estaba_en_marcha | bool
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: PUT
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ cambio.type }}/{{ cambio.vmid }}/config"
+    pve_body:
+      cores: "{{ cambio.cores }}"
+      memory: "{{ cambio.memory }}"
+    pve_do: "escribir en {{ cambio.name }} {{ cambio.cores }} core(s) y {{ cambio.memory }} MB"
+    pve_status: [200]
+
+- name: "PVE · devolver a {{ cambio.name }} a la vida"
+  include_tasks: pve.yml
+  vars:
+    pve_method: POST
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ cambio.type }}/{{ cambio.vmid }}/status/start"
+    pve_do: "arrancar {{ cambio.name }} ({{ cambio.vmid }}) con sus recursos nuevos"
+    pve_status: [200]
+  when: estaba_en_marcha | bool
+
+- include_tasks: wait_task.yml
+  vars:
+    upid: "{{ pve_r.json.data }}"
+    pve_do: "arrancar {{ cambio.name }} ({{ cambio.vmid }})"
+  when: estaba_en_marcha | bool

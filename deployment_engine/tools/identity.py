@@ -967,8 +967,26 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
                 f"(etapas {built['stage']})"
             )
         else:
-            _check_hot_changes(built, existing)
-            if existing.get("status") != "running":
+            paso = _diferencia_del_invitado(built, existing)
+            if paso is not None:
+                steps.append(paso)
+                if paso["op"] == "guest_set":
+                    piezas = []
+                    tenia = paso["tenia"]
+                    if "memory" in paso and tenia.get("memory") != paso["memory"]:
+                        piezas.append(f"memoria {tenia.get('memory')} -> {paso['memory']} MB")
+                    if "cores" in paso and tenia.get("cores") != paso["cores"]:
+                        piezas.append(f"{tenia.get('cores')} -> {paso['cores']} core(s)")
+                    effects.append(
+                        f"ajustar {paso['name']} ({paso['vmid']}): "
+                        f"{', '.join(piezas) or 'recursos'} — se para un momento y vuelve a "
+                        "arrancar; su disco no se toca"
+                    )
+                else:
+                    effects.append(
+                        f"rehacer {paso['name']} ({paso['vmid']}) y sólo ese: {paso['motivo']}"
+                    )
+            elif existing.get("status") != "running":
                 steps.append({"op": "guest_start", "vmid": built["vmid"]})
                 effects.append(f"arrancar {built['name']} ({built['vmid']})")
         # Un invitado que ya está como debe no genera paso: un plan lleno de
@@ -1202,34 +1220,68 @@ def _gateway_for(lab: dict, network: str) -> str:
     raise LabError(f"la red {network!r} no está declarada y no tiene puerta")
 
 
-def _check_hot_changes(built: dict, existing: dict) -> None:
-    """Lo que no se cambia en caliente se dice antes de tocar nada."""
+def _diferencia_del_invitado(built: dict, existing: dict) -> dict | None:
+    """Qué hay que hacer con un invitado que ya existe, sin tocar a los demás.
+
+    Antes cualquier diferencia de recursos paraba el plan con un «hace falta
+    destroy», y el destroy se lleva el laboratorio entero: subir la memoria de ocho
+    switches costaba tirar otros dieciséis equipos que estaban bien. Arreglar uno
+    costaba arreglarlos todos.
+
+    Se distinguen dos arreglos, cada uno sobre UN invitado:
+
+    - `guest_set`: cores y memoria. Proxmox los escribe en el config del invitado;
+      como aquí no hay globo de memoria, se para un momento y vuelve a arrancar. Su
+      disco no se toca: no pierde lo que tenía dentro.
+    - `guest_recreate`: lo que no se cambia en caliente de ninguna manera —de máquina
+      virtual a contenedor, o el nombre, que es el del rol—: se retira ese y se
+      vuelve a crear ese, y sólo ese.
+    """
     if int(existing["vmid"]) != built["vmid"]:
-        raise LabError(f"el rol {built['role']!r} cambió de vmid: eso no se hace en caliente")
-    if existing.get("type") != "lxc" and built["guest"] == "lxc":
-        raise LabError(f"el rol {built['role']!r} cambia de máquina virtual a contenedor: hace falta destroy")
-    if existing.get("type") == "lxc" and built["guest"] == "qemu":
-        raise LabError(f"el rol {built['role']!r} cambia de contenedor a máquina virtual: hace falta destroy")
+        raise LabError(
+            f"el rol {built['role']!r} sale con vmid {built['vmid']} y en el mundo está con "
+            f"{existing['vmid']}: un vmid no se reescribe, porque los demás invitados y los "
+            "puentes lo referencian por número"
+        )
+    motivo = ""
     if existing.get("name") and existing["name"] != built["name"]:
-        raise LabError(
-            f"el invitado existente se llama {existing['name']!r} y la declaración pide "
-            f"{built['name']!r}: el nombre no se cambia en caliente"
-        )
-    # Los recursos tampoco. Sin esta comprobación el segundo `apply` diría que no hay nada
-    # que hacer con un equipo al que le faltan cores, que es la mentira que este fichero
-    # evita: si la declaración pide otros, hay que rehacer el invitado y se dice.
-    if existing.get("cores") is not None and int(existing["cores"]) != built["cores"]:
-        raise LabError(
-            f"el invitado {built['name']!r} tiene {existing['cores']} core(s) y la declaración "
-            f"pide {built['cores']}: los recursos no se cambian en caliente, hace falta destroy"
-        )
-    memoria_viva = existing.get("memory_bytes")
-    if memoria_viva and int(memoria_viva) != int(built["memory"]) * 1024 * 1024:
-        raise LabError(
-            f"el invitado {built['name']!r} tiene {int(memoria_viva) // (1024 * 1024)} MB y la "
-            f"declaración pide {built['memory']} MB: los recursos no se cambian en caliente, "
-            "hace falta destroy"
-        )
+        motivo = f"se llamaba {existing['name']!r}"
+    elif {existing.get("type")} != {built["guest"]}:
+        motivo = f"pasa de {existing.get('type')} a {built['guest']}"
+    if motivo:
+        return {"op": "guest_recreate", "vmid": built["vmid"], "name": built["name"],
+                "type": existing.get("type"), "built": built, "motivo": motivo}
+
+    # Los valores ESCRITOS en su config mandan; los del clúster son de en marcha y no
+    # ven el cambio que aún no se ha aplicado (a un invitado encendido se le cambia la
+    # memoria en el config y sigue con la vieja hasta reiniciar).
+    cores_vivos = existing.get("config_cores")
+    if cores_vivos is None:
+        cores_vivos = existing.get("cores")
+    memoria_mb = existing.get("config_memory")
+    if not memoria_mb:
+        memoria_bytes = existing.get("memory_bytes")
+        memoria_mb = (int(memoria_bytes) // (1024 * 1024)) if memoria_bytes else None
+
+    nuevo: dict = {}
+    if cores_vivos is not None and int(cores_vivos) != int(built["cores"]):
+        nuevo["cores"] = int(built["cores"])
+    if memoria_mb and int(memoria_mb) != int(built["memory"]):
+        nuevo["memory"] = int(built["memory"])
+    if not nuevo:
+        return None
+    return {
+        "op": "guest_set",
+        "vmid": built["vmid"],
+        "name": built["name"],
+        "type": built["guest"],
+        "status": existing.get("status") or "unknown",
+        "cores": int(built["cores"]),
+        "memory": int(built["memory"]),
+        # Lo que tenía, para poder contarlo en el plan y en el informe: un plan que
+        # dice el valor nuevo y calla el viejo no enseña la diferencia.
+        "tenia": {"cores": cores_vivos, "memory": memoria_mb},
+    }
 
 
 def _check_foreign_spaces(world: dict, lab: dict, env: dict) -> None:

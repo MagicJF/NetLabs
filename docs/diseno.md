@@ -509,8 +509,17 @@ laboratorio, y por tanto se puede leer, configurar y destruir como cualquier otr
 
 **Lo que esto implica.** Un puerto declarado sin cable es un error, no una red implícita; un
 cable que une dos redes distintas es un error, porque eso es enrutar, y enrutar es un router.
-Cambiar el cableado de un invitado que ya existe no se hace en caliente: se destruye y se vuelve
-a crear, y el plan lo dice antes de tocar nada.
+Cambiar el cableado de un invitado que ya existe no se hace en caliente: se rehace **ese**
+invitado —se retira y se vuelve a crear— y **ningún otro se toca**; el plan lo dice antes de
+tocar nada. Los recursos no llegan a eso: los cores y la memoria se escriben en el config del
+invitado con él parado un momento, y su disco, sus cables y lo que tenga dentro siguen donde
+estaban. Se comparan contra lo **escrito** en el config, no contra lo que el invitado tiene en
+marcha: a una máquina encendida se le puede cambiar la memoria en el config y seguir con la
+vieja hasta reiniciar, y la lectura del clúster no vería la diferencia justo cuando existe.
+
+Antes cualquier diferencia paraba el plan con un «hace falta destroy», y el `destroy` se lleva el
+laboratorio entero: subir la memoria de ocho conmutadores costaba tirar otros dieciséis equipos
+que estaban bien. Arreglar uno costaba arreglarlos todos, y eso no es converger: es demoler.
 
 ---
 

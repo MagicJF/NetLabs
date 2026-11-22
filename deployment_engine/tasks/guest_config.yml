@@ -1,0 +1,31 @@
+# PROPÓSITO:   leer el config de UN invitado y anotar los recursos que tiene ESCRITOS.
+# INVARIANTES: `/cluster/resources` no sirve para esto: a un invitado en marcha se le
+#              puede cambiar la memoria en su config y seguir con la vieja hasta
+#              reiniciar, y esa lectura devuelve la de en marcha. Comparar la
+#              declaración contra ella es no ver la diferencia justo cuando existe.
+#              Un invitado que desaparece entre la lista y esta lectura no se inventa:
+#              se queda sin valores y el plan lo trata como desconocido.
+# VER:         docs/diseno.md §2.1; identity.py · `_diferencia_del_invitado`
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: "/nodes/{{ invitado.node }}/{{ invitado.type }}/{{ invitado.vmid }}/config"
+    pve_do: "leer el config de {{ invitado.name }} ({{ invitado.vmid }})"
+    # 404 y 500 se aceptan para no tumbar un plan entero porque un invitado se esté
+    # retirando justo entonces; sin config, el plan no compara sus recursos.
+    # `failed_when` no vale sobre un include (medido, igual que `until`): los códigos
+    # que se aceptan van en `pve_status`, y el resto sigue siendo un fallo con su cuerpo.
+    pve_status: [200, 404, 500]
+
+- name: "anotar los recursos escritos de {{ invitado.name }}"
+  ansible.builtin.set_fact:
+    config_recursos: >-
+      {{ (config_recursos | default({})) | combine({
+           invitado.vmid | string: {
+             'cores': (pve_r.json.data.cores | default(1)) | int,
+             'memory': (pve_r.json.data.memory | default(0)) | int
+           }
+         }) }}
+  when: (pve_r.json is defined) and (pve_r.json.data is mapping) and
+        ('memory' in pve_r.json.data)

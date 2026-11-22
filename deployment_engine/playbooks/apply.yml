@@ -33,10 +33,17 @@
 
     - name: apply · lo que se va a crear en esta pasada
       ansible.builtin.set_fact:
-        nuevos: "{{ plan.steps | selectattr('op', 'equalto', 'guest_create') | map(attribute='guest.vmid') | list }}"
+        # Un invitado rehecho cuenta como nuevo: se retira y se vuelve a crear en esta
+        # misma pasada, y luego se le espera igual que al que nace de cero.
+        nuevos: "{{ (plan.steps | selectattr('op', 'equalto', 'guest_create') | map(attribute='guest.vmid') | list)
+                    + (plan.steps | selectattr('op', 'equalto', 'guest_recreate') | map(attribute='vmid') | list) }}"
         puentes: "{{ plan.steps | selectattr('op', 'equalto', 'bridge_ensure') | list }}"
         puentes_sobrantes: "{{ plan.steps | selectattr('op', 'equalto', 'bridge_destroy') | list }}"
         sobrantes: "{{ plan.steps | selectattr('op', 'equalto', 'guest_destroy') | list }}"
+        # Recursos escritos en el config de un invitado que ya existe: se para, se le
+        # escribe el config y se le vuelve a arrancar. Sin tirar su disco.
+        cambios: "{{ plan.steps | selectattr('op', 'equalto', 'guest_set') | list }}"
+        rehacer: "{{ plan.steps | selectattr('op', 'equalto', 'guest_recreate') | list }}"
 
     # --- el camino ---------------------------------------------------------
     - name: apply · el camino hacia la gestión tiene que estar abierto
@@ -104,6 +111,17 @@
       loop_control: {label: "{{ item.name }} ({{ item.vmid }})"}
       when: sobrantes | length > 0
 
+    # Un invitado que no se arregla en caliente —de máquina virtual a contenedor, o con
+    # otro nombre— se retira SÓLO ese y se vuelve a crear abajo, con el resto del
+    # laboratorio intacto. Antes esto costaba un `destroy` del laboratorio entero.
+    - name: "apply · retirar los que se rehacen (sólo esos)"
+      include_tasks: ../tasks/destroy_guest.yml
+      vars:
+        guest: "{{ item }}"
+      loop: "{{ rehacer }}"
+      loop_control: {label: "{{ item.name }} ({{ item.vmid }})"}
+      when: rehacer | length > 0
+
     # Los cables que ya no se declaran se retiran después de los invitados que
     # sobraban: si un invitado viejo aún colgaba de un cable viejo, primero se
     # apaga y se borra, y sólo entonces desaparece el cable.
@@ -140,6 +158,17 @@
       vars:
         guest: "{{ item }}"
       when: item.vmid in nuevos
+
+    # Los recursos, en el sitio: no hay globo de memoria, así que el invitado se para
+    # un momento, se le escribe el config y se le vuelve a arrancar. Su disco, sus
+    # cables y su configuración de dentro siguen donde estaban.
+    - name: apply · los invitados a los que les cambian los recursos
+      include_tasks: ../tasks/guest_set.yml
+      loop: "{{ cambios }}"
+      loop_control: {label: "{{ item.name }} ({{ item.vmid }})"}
+      vars:
+        cambio: "{{ item }}"
+      when: cambios | length > 0
 
     - name: apply · los invitados que ya existían tienen que estar en pie
       include_tasks: ../tasks/wait_running.yml

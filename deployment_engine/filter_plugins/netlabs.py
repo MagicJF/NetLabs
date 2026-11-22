@@ -16,6 +16,26 @@ import converge  # noqa: E402
 import identity  # noqa: E402
 
 
+def netlabs_con_config(world: dict, configs: dict) -> dict:
+    """Pega a cada invitado los recursos ESCRITOS en su config.
+
+    `configs` viene de `tasks/guest_config.yml`: {vmid: {cores, memory(MB)}}. Un
+    invitado sin config leído se queda con lo que dice el clúster, que para uno parado
+    es lo mismo y para uno en marcha puede no serlo: por eso el plan prefiere
+    `config_*` cuando está.
+    """
+    salida = dict(world)
+    salida["guests"] = []
+    for guest in world.get("guests") or []:
+        dato = (configs or {}).get(str(guest.get("vmid"))) or {}
+        nuevo = dict(guest)
+        if dato:
+            nuevo["config_cores"] = int(dato.get("cores") or guest.get("cores") or 1)
+            nuevo["config_memory"] = int(dato.get("memory") or 0)
+        salida["guests"].append(nuevo)
+    return salida
+
+
 def _world(resources, networks, pools):
     guests = [
         {
@@ -24,11 +44,14 @@ def _world(resources, networks, pools):
             "type": "lxc" if item.get("type") == "lxc" else "qemu",
             "pool": item.get("pool") or "",
             "status": item.get("status"),
-            # Los recursos que el invitado tiene de verdad: `/cluster/resources` los trae
-            # (cores y memoria), así que el plan puede decir si la declaración pide otra
-            # cosa sin una llamada más por invitado.
+            # Lo que el invitado tiene EN MARCHA. No es lo que hay escrito en su
+            # config: a una máquina encendida se le cambia la memoria en el config y
+            # sigue con la vieja hasta reiniciar. `netlabs_con_config` añade después los
+            # valores escritos, que son los que compara el plan; esto queda de respaldo
+            # para cuando el config no se pudo leer.
             "cores": item.get("maxcpu"),
             "memory_bytes": item.get("maxmem"),
+            "node": item.get("node"),
         }
         for item in resources
         if item.get("type") in ("qemu", "lxc") and item.get("vmid") is not None
@@ -115,6 +138,7 @@ class FilterModule:
     def filters(self):
         return {
             "netlabs_world": _world,
+            "netlabs_con_config": netlabs_con_config,
             "netlabs_plan": lambda world, lab, env: identity.plan(world, lab, env),
             "netlabs_site": lambda world, env: identity.site(world, env),
             "netlabs_docs": lambda lab, env: identity.render_docs(lab, env),

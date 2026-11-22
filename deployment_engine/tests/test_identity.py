@@ -180,18 +180,35 @@ class ElPlan(unittest.TestCase):
                 self.assertIsNone(node["mgmt_address"])
                 self.assertTrue(all(i["network"] is not None for i in node["interfaces"]))
 
-    def test_rechaza_cambiar_los_recursos_de_un_invitado_vivo(self):
-        # Los recursos no se cambian en caliente. Sin esta comprobación, subir los cores en
-        # la declaración dejaría al invitado con los viejos y el plan diría que no hay nada
-        # que hacer: la mentira que este fichero evita.
+    def test_los_recursos_se_ajustan_en_el_sitio_y_no_tirando_el_invitado(self):
+        # Un invitado con otra memoria no se destruye: se le reescribe el config. Tirar
+        # los veinticuatro equipos para cambiar ocho memorias era el precio de antes.
         vivos = [{"vmid": 210, "name": "rte1", "type": "qemu", "pool": "b_router_dos_puestos",
-                  "status": "running", "cores": 1, "memory_bytes": 256 * 1024 * 1024}]
-        with self.assertRaisesRegex(identity.LabError, "core"):
-            identity.plan(mundo(guests=vivos), laboratorio(), entorno())
-        # Y con los cores bien y la memoria corta, lo dice por la memoria.
-        vivos[0]["cores"] = 2
-        with self.assertRaisesRegex(identity.LabError, "256 MB"):
-            identity.plan(mundo(guests=vivos), laboratorio(), entorno())
+                  "status": "running", "cores": 1, "memory_bytes": 128 * 1024 * 1024}]
+        plan = identity.plan(mundo(guests=vivos), laboratorio(), entorno())
+        pasos = [s for s in plan["steps"] if s["op"] in ("guest_set", "guest_recreate", "guest_destroy")]
+        self.assertEqual([(s["op"], s["vmid"]) for s in pasos], [("guest_set", 210)])
+        declarado = next(n for n in plan["nodes"] if n["vmid"] == 210)["memory"]
+        self.assertEqual(pasos[0]["memory"], declarado)
+        self.assertEqual(pasos[0]["tenia"]["memory"], 128)
+        # Los demás no aparecen: un plan que toca a todos cuando cambia uno es el que
+        # obligaba a un destroy del laboratorio entero.
+        self.assertFalse([s for s in plan["steps"]
+                          if s["op"] == "guest_create" and s["guest"]["vmid"] == 210])
+        self.assertTrue(any(f"memoria 128 -> {declarado} MB" in e for e in plan["effects"]),
+                        plan["effects"])
+
+        # Con los cores cortos, el mismo arreglo y por los cores.
+        vivos[0]["cores"] = 0
+        plan = identity.plan(mundo(guests=vivos), laboratorio(), entorno())
+        declarado_cores = next(n for n in plan["nodes"] if n["vmid"] == 210)["cores"]
+        paso = next(s for s in plan["steps"] if s["op"] == "guest_set")
+        self.assertEqual(paso["cores"], declarado_cores)
+        self.assertEqual(paso["tenia"]["cores"], 0)
+        # El paso lleva siempre el estado deseado entero —cores y memoria—, que es lo
+        # que se escribe en el config: mandar sólo la mitad deja la otra a expensas de
+        # lo que hubiera, y el plan dejaría de decir a qué se converge.
+        self.assertEqual(paso["memory"], declarado)
 
     def test_un_equipo_se_llama_igual_en_el_plan_y_en_sus_cables(self):
         # El nombre del equipo es el rol declarado: el mismo en el invitado, en su
@@ -315,11 +332,16 @@ class Rechazos(unittest.TestCase):
         with self.assertRaisesRegex(identity.LabError, "misma red"):
             identity.plan(mundo(), lab, entorno())
 
-    def test_rechaza_cambiar_de_contenedor_a_maquina(self):
+    def test_cambiar_de_contenedor_a_maquina_rehace_solo_ese_invitado(self):
+        # Lo que no se cambia en caliente se rehace, pero rehacer no es destruir el
+        # laboratorio: el paso lleva el vmid exacto y no arrastra a ningún otro.
         viejos = [{"vmid": 200, "name": "rte1", "type": "lxc", "pool": "b_router_dos_puestos",
                    "description": "netlabs lab=b_router_dos_puestos role=rte1", "status": "running"}]
-        with self.assertRaisesRegex(identity.LabError, "contenedor a máquina"):
-            identity.plan(mundo(guests=viejos), laboratorio(), entorno())
+        plan = identity.plan(mundo(guests=viejos), laboratorio(), entorno())
+        rehacer = [s for s in plan["steps"] if s["op"] == "guest_recreate"]
+        self.assertEqual([s["vmid"] for s in rehacer], [200])
+        self.assertIn("lxc", rehacer[0]["motivo"])
+        self.assertEqual(rehacer[0]["built"]["vmid"], 200)
 
 
 class ElPlanDeControl(unittest.TestCase):

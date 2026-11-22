@@ -41,3 +41,17 @@
     pve_do: "leer los pools"
 - set_fact:
     world: "{{ recursos | netlabs_world(redes, pve_r.json.data) }}"
+
+# Los recursos que cuenta el plan son los ESCRITOS en el config, no los que el
+# invitado tiene en marcha: a una máquina encendida se le cambia la memoria en su
+# config y sigue con la vieja hasta reiniciar, así que la lectura del clúster no ve
+# esa diferencia justo cuando existe.
+- name: "leer el config de cada invitado"
+  include_tasks: ../tasks/guest_config.yml
+  loop: "{{ world.guests }}"
+  loop_control: {label: "{{ item.name }}"}
+  vars:
+    invitado: "{{ item }}"
+
+- set_fact:
+    world: "{{ world | netlabs_con_config(config_recursos | default({})) }}"
