@@ -20,18 +20,29 @@ import re
 # Los tipos de nodo son un vocabulario cerrado; cada uno puede hacer una cosa.
 # `network device` (router, switch) nace con la pata de gestión; `end node`
 # (server, workstation) no la tiene y se llega a él por su router.
+#
+# El código de dos letras es la cabeza del nombre del equipo y la letra de función
+# dice qué hace dentro de su tipo: un router de borde y uno de núcleo no se llaman
+# igual porque no son lo mismo. La letra se valida contra esta tabla —una función
+# que no existe no es un equipo, es una errata— y no se admite cualquier cosa.
 TYPES = {
-    "router": {"code": "rt", "guest": "qemu", "network_device": True, "routes": True},
-    "firewall": {"code": "fw", "guest": "qemu", "network_device": True, "routes": True},
-    "switch": {"code": "sw", "guest": "qemu", "network_device": True, "routes": False},
-    "server": {"code": "sv", "guest": "lxc", "network_device": False, "routes": False},
-    "workstation": {"code": "ws", "guest": "lxc", "network_device": False, "routes": False},
+    "router": {"code": "rt", "guest": "qemu", "network_device": True, "routes": True,
+               "functions": {"e": "borde", "c": "núcleo", "a": "acceso"}},
+    "firewall": {"code": "fw", "guest": "qemu", "network_device": True, "routes": True,
+                 "functions": {"e": "borde", "i": "interior"}},
+    "switch": {"code": "sw", "guest": "qemu", "network_device": True, "routes": False,
+               "functions": {"c": "núcleo", "a": "acceso", "d": "distribución"}},
+    "server": {"code": "sv", "guest": "lxc", "network_device": False, "routes": False,
+               "functions": {"s": "servicio", "d": "datos"}},
+    "workstation": {"code": "ws", "guest": "lxc", "network_device": False, "routes": False,
+                    "functions": {"p": "puesto"}},
     # Un nodo de control no vive en una topología: es el servicio persistente que
     # observa y abre el camino. Su única pata está en la red de gestión y su
     # dirección se deriva del vmid, igual que la del servicio de gestión. No es
-    # un equipo de red ni un puesto: no tiene cables ni recibe DHCP.
+    # un equipo de red ni un puesto: no tiene cables ni recibe DHCP, y se llama por
+    # el nombre del servicio que declara el laboratorio, no por el patrón de un equipo.
     "control": {"code": "nx", "guest": "lxc", "network_device": False, "routes": False,
-                "control": True},
+                "control": True, "functions": {}},
 }
 
 # El único secreto del sitio que un laboratorio puede nombrar para el administrador
@@ -43,12 +54,15 @@ SNMP_SECRET = "secrets.snmp_comunidad"
 
 # Las áreas de configuración que el motor entiende, por clase de equipo. Una clave
 # fuera de su lista es un error con mensaje (§2.13), no una nota al pie.
+# El nombre del equipo no es un área: sale del rol declarado y el motor lo escribe
+# en todas partes (el hostname del invitado, la identidad del RouterOS), así que
+# declararlo otra vez sería una segunda verdad esperando a contradecirse.
 AREAS = {
-    "routeros": {"identity", "addresses", "routes", "dhcp_server", "services", "users", "snmp"},
-    "linux": {"identity", "repositories", "packages", "files", "commands", "services"},
+    "routeros": {"addresses", "routes", "dhcp_server", "services", "users", "snmp"},
+    "linux": {"repositories", "packages", "files", "commands", "services"},
 }
 
-LAB_KEYS = {"lab", "kind", "slot", "address_spaces", "networks", "nodes", "links"}
+LAB_KEYS = {"lab", "kind", "address_spaces", "networks", "nodes", "links"}
 # Un laboratorio de control no dibuja una topología: declara el servicio que
 # observa el resto. Su único nodo vive en la red de gestión y no tiene cables.
 KINDS = {"topology", "control"}
@@ -57,16 +71,21 @@ NETWORK_KEYS = {"name", "address"}
 LINK_KEYS = {"a", "z"}
 END_KEYS = {"node", "port"}
 
-ROLE_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
-NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
-# El nombre de un laboratorio de topología es su identidad completa: `labNN-<título>`.
-# El número va delante y es consecutivo hasta 99; el prefijo `lab` no es decorativo,
-# es lo que hace que el nombre del pool empiece por letra (Proxmox lo exige).
-LAB_NAME_RE = re.compile(r"^lab(\d{2})-[a-z0-9][a-z0-9-]{0,14}$")
-# Un laboratorio de control es el servicio persistente: se llama por su nombre de
-# siempre (`00_bootstrap`), que puede empezar por cifra y llevar guion bajo. Un
-# laboratorio de topología sigue con el vocabulario de siempre.
-CONTROL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,30}$")
+# El nombre de un laboratorio es su identidad completa: una letra y un título que se
+# lee. La letra no es decorativa: es lo que hace único el nombre de cada cable en el
+# hipervisor —dos laboratorios con la misma topología no comparten un solo puente— y
+# lo que hace que el nombre del pool empiece por letra, que es lo que la API de
+# Proxmox exige. La letra y el título son también el nombre de la carpeta y del
+# fichero: uno, no cuatro.
+LAB_NAME_RE = re.compile(r"^([a-z])_[a-z0-9][a-z0-9_]{1,30}$")
+# El nombre de un equipo es el rol declarado y vale para todo: el hostname del
+# invitado, su nombre en Proxmox y las dos puntas de cada cable que lo toca. Dos
+# letras de tipo, una de función y el ordinal: el segundo equipo de una misma clase
+# lleva el 2 donde el primero lleva el 1.
+DEVICE_RE = re.compile(r"^([a-z]{2})([a-z])([1-9])$")
+# El nodo de un laboratorio de control se llama por su nombre de servicio: no es un
+# equipo de una topología y renombrarlo en caliente no es una opción.
+CONTROL_NODE_RE = re.compile(r"^[a-z][a-z0-9-]{0,20}$")
 
 
 class LabError(Exception):
@@ -158,18 +177,10 @@ def validate(lab: dict, env: dict) -> None:
             raise LabError(f"la declaración no tiene '{key}', y sin eso no hay laboratorio")
 
     name = lab["lab"]
-    if not isinstance(name, str) or not NAME_RE.match(name):
-        raise LabError(f"el nombre del laboratorio {name!r} no vale: minúsculas, números y guiones")
-
-    # El slot es el sitio del laboratorio en el hipervisor. Va dentro del
-    # identificador de cada nodo (dos cifras: slot + ordinal), así que dos
-    # laboratorios con la misma topología no comparten el nombre de un cable.
-    # Un sufijo `_XX` no cabría: el nombre ya mide 15 caracteres.
-    slot = lab.get("slot", 0)
-    if not isinstance(slot, int) or isinstance(slot, bool) or not 0 <= slot <= 9:
+    if not isinstance(name, str) or not LAB_NAME_RE.match(name):
         raise LabError(
-            f"el 'slot' del laboratorio {name!r} tiene que ser un entero de 0 a 9: "
-            "es la cifra que separa los nombres de dos laboratorios en el mismo hipervisor"
+            f"el nombre del laboratorio {name!r} no vale: una letra y un título que se lee, "
+            "en minúsculas y con guion bajo"
         )
 
     spaces = lab.get("address_spaces") or []
@@ -238,21 +249,22 @@ def validate(lab: dict, env: dict) -> None:
                     f"el nodo {node['role']!r} espera a {after!r}, que no está declarado en el laboratorio"
                 )
     _reject_stage_cycles(nodes)
-    _validate_links(lab, slot)
+    _validate_links(lab)
 
 
 def _validate_control(lab: dict, env: dict) -> None:
     """Un laboratorio de control: el servicio persistente, sin topología.
 
     No declara espacios ni cables porque no dibuja una red: su nodo vive en la
-    red de gestión, que no pertenece a ningún laboratorio. Su nombre es el del
-    servicio de siempre (`00_bootstrap`), y su nodo se llama por su rol.
+    red de gestión, que no pertenece a ningún laboratorio. Su nombre sigue la misma
+    regla que el de cualquier laboratorio —una letra y un título— y su nodo se llama
+    por el servicio que declara, no por el patrón de un equipo.
     """
     name = lab["lab"]
-    if not isinstance(name, str) or not CONTROL_NAME_RE.match(name):
+    if not isinstance(name, str) or not LAB_NAME_RE.match(name):
         raise LabError(
-            f"el nombre del laboratorio de control {name!r} no vale: minúsculas, "
-            "números, guiones y guion bajo, empezando por letra o cifra"
+            f"el nombre del laboratorio de control {name!r} no vale: una letra y un "
+            "título que se lee, en minúsculas y con guion bajo"
         )
     for key in ("address_spaces", "networks", "links"):
         if key in lab:
@@ -284,10 +296,13 @@ def _validate_control_node(node: dict, roles: set) -> None:
         if key not in node:
             raise LabError(f"el nodo {node.get('role')!r} no tiene '{key}', y es obligatorio")
     role = node["role"]
-    if not isinstance(role, str) or not ROLE_RE.match(role):
-        raise LabError(f"el rol {role!r} no vale: minúsculas, números y guiones, empezando por letra")
+    if not isinstance(role, str) or not CONTROL_NODE_RE.match(role):
+        raise LabError(
+            f"el nombre del nodo de control {role!r} no vale: se llama por el servicio "
+            "que declara el laboratorio, en minúsculas, con números y guiones"
+        )
     if role in roles:
-        raise LabError(f"el rol {role!r} está declarado dos veces: es el contrato de referencia")
+        raise LabError(f"el nodo {role!r} está declarado dos veces: es el servicio persistente y hay uno")
     if node["type"] != "control":
         raise LabError(
             f"el nodo {role!r} de un laboratorio de control declara tipo {node['type']!r}: "
@@ -329,13 +344,18 @@ def _validate_control_node(node: dict, roles: set) -> None:
         _validate_area(role, area, body, {})
 
 
-def _validate_links(lab: dict, slot: int) -> None:
+def _validate_links(lab: dict) -> None:
     """Cada cable une dos puertos, y cada puerto del laboratorio va en un cable.
 
     Un puente es un cable tonto: no tiene dirección, ni puerta, ni MAC. Por eso
     la declaración no puede dejar puertos sueltos —un puerto sin cable no es una
     red, es un olvido— ni unir dos puertos de redes distintas, que sería un
     cable que mezcla dos planes de direcciones sin decirlo.
+
+    Un puerto se llama con una sola cifra porque el nombre del cable tiene que
+    caber en los 15 caracteres de un nombre de interfaz de Linux: la letra del
+    laboratorio, las dos puntas con su `p` y su puerto. De ahí que un equipo no
+    pueda tener más de nueve puertos cableados, y que se diga aquí.
     """
     links = lab.get("links")
     if not isinstance(links, list) or not links:
@@ -364,8 +384,12 @@ def _validate_links(lab: dict, slot: int) -> None:
                     f"el cable {i + 1} cita el nodo {body['node']!r}, que no está declarado"
                 )
             port = body["port"]
-            if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 99:
-                raise LabError(f"el puerto de {body['node']!r} tiene que ser un entero de 1 a 99")
+            if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 9:
+                raise LabError(
+                    f"el puerto de {body['node']!r} tiene que ser un entero de 1 a 9: "
+                    "el nombre del cable es `letra+punta+p+puerto` y tiene que caber en los "
+                    "15 caracteres de un nombre de interfaz de Linux"
+                )
             if port > len(node["networks"]):
                 raise LabError(
                     f"el nodo {body['node']!r} declara {len(node['networks'])} puerto(s) "
@@ -395,6 +419,36 @@ def _validate_links(lab: dict, slot: int) -> None:
                 )
 
 
+def _check_device_name(role: str, kind: str) -> None:
+    """El nombre de un equipo lo dice todo: tipo, función y ordinal.
+
+    Dos letras iguales al código del tipo declarado, una letra de función que exista
+    para ese tipo, y el ordinal. Si el nombre y el tipo no cuentan lo mismo se para
+    aquí: un nombre de switch en un nodo declarado router miente sobre lo que se va a
+    desplegar, y ese nombre viaja al hostname del invitado, a su nombre en Proxmox y a
+    las puntas de sus cables.
+    """
+    match = DEVICE_RE.match(role)
+    if match is None:
+        raise LabError(
+            f"el nombre del equipo {role!r} no vale: dos letras de tipo, una de función y "
+            "el ordinal (el segundo equipo de una misma clase termina en 2)"
+        )
+    code, funcion, _orden = match.groups()
+    if code != TYPES[kind]["code"]:
+        raise LabError(
+            f"el nombre del equipo {role!r} empieza por {code!r} y el nodo se declara de "
+            f"tipo {kind!r}, cuyo código es {TYPES[kind]['code']!r}: el nombre y el tipo "
+            "tienen que contar lo mismo"
+        )
+    funciones = TYPES[kind]["functions"]
+    if funcion not in funciones:
+        permite = ", ".join(f"{letra} ({significa})" for letra, significa in sorted(funciones.items()))
+        raise LabError(
+            f"la función {funcion!r} de {role!r} no existe para un {kind}: se admite {permite}"
+        )
+
+
 def _validate_node(node: dict, networks: dict, roles: set) -> None:
     if not isinstance(node, dict):
         raise LabError(f"un nodo tiene que ser un mapa, y hay {node!r}")
@@ -406,16 +460,17 @@ def _validate_node(node: dict, networks: dict, roles: set) -> None:
             raise LabError(f"el nodo {node.get('role')!r} no tiene '{key}', y es obligatorio")
 
     role = node["role"]
-    if not isinstance(role, str) or not ROLE_RE.match(role):
-        raise LabError(f"el rol {role!r} no vale: minúsculas, números y guiones, empezando por letra")
+    if not isinstance(role, str):
+        raise LabError(f"el nombre del equipo {role!r} no vale: tiene que ser texto")
     if role in roles:
-        raise LabError(f"el rol {role!r} está declarado dos veces: es el contrato de referencia")
+        raise LabError(f"el nombre del equipo {role!r} está declarado dos veces: es el contrato de referencia")
     kind = node["type"]
     if kind not in TYPES:
         raise LabError(
             f"el nodo {role!r} declara tipo {kind!r}, que no existe. "
             f"Se admite: {', '.join(sorted(TYPES))}"
         )
+    _check_device_name(role, kind)
     if not isinstance(node["stage"], int) or isinstance(node["stage"], bool) or node["stage"] < 1:
         raise LabError(f"el nodo {role!r} tiene que declarar 'stage' como entero >= 1")
 
@@ -492,12 +547,7 @@ def _validate_node(node: dict, networks: dict, roles: set) -> None:
 
 def _validate_area(role: str, area: str, body, networks: dict) -> None:
     """Cada área tiene su forma; lo que no encaja se rechaza con el porqué."""
-    if area == "identity":
-        if not isinstance(body, dict) or set(body) != {"name"}:
-            raise LabError(f"el área 'identity' de {role!r} es {{name: <texto>}}")
-        if not isinstance(body["name"], str) or not body["name"]:
-            raise LabError(f"el nombre de identidad de {role!r} tiene que ser texto no vacío")
-    elif area == "addresses":
+    if area == "addresses":
         _require_list(role, area, body)
         for item in body:
             if not isinstance(item, dict) or set(item) != {"network", "address"}:
@@ -707,13 +757,11 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     """
     validate(lab, env)
     name = lab["lab"]
-    slot = lab.get("slot", 0)
     control = lab.get("kind", "topology") == "control"
-    # Un laboratorio de control no vive en un pool de laboratorio: su pool se
-    # llama como él, porque es un servicio del sitio y no una topología
-    # desechable. El prefijo `lab-` no es decorativo: la API de Proxmox exige que
-    # el nombre de un pool empiece por letra, y `00_bootstrap` no lo hace.
-    pool = f"lab-{name}" if control else f"netlabs-lab-{name}"
+    # El pool se llama como el laboratorio: un nombre, no dos. La letra por la que
+    # empieza el nombre es lo que la API de Proxmox exige de un pool, así que no hace
+    # falta ningún prefijo que no signifique nada.
+    pool = name
     management = env["management"]
     mgmt_net = ipaddress.ip_network(management["address_space"], strict=False)
 
@@ -726,14 +774,10 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     mine = {g["vmid"]: g for g in guests if g.get("pool") == pool}
     by_role = {}
     sobra = []
-    # El nombre se deriva del rol (`<código>-<rol>`), así que un invitado que nació
-    # antes de que el motor escribiera la etiqueta se reconoce igual por su nombre.
-    # Sin ese respaldo, cada apply de un laboratorio viejo crearía un juego nuevo.
-    if control:
-        # El nodo de control se llama por su rol: es un servicio con nombre propio.
-        nombres = {n["role"]: n["role"] for n in lab["nodes"]}
-    else:
-        nombres = {f"{TYPES[n['type']]['code']}-{n['role']}": n["role"] for n in lab["nodes"]}
+    # El nombre del invitado es el del equipo, así que el respaldo por nombre es el
+    # propio nombre: se conserva para reconocer invitados creados antes del cambio
+    # sin una llamada de configuración por cada uno.
+    nombres = {n["role"]: n["role"] for n in lab["nodes"]}
     roles = {n["role"] for n in lab["nodes"]}
     for guest in sorted(mine.values(), key=lambda g: int(g["vmid"])):
         role = _role_of(guest) or nombres.get(guest.get("name") or "")
@@ -760,11 +804,10 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         assigned[node["role"]] = vmid
         taken.add(vmid)
 
-    # Los cables: cada uno es un puente tonto entre dos puertos. El nombre son
-    # sus dos puntas, y el identificador de cada nodo lleva el slot del
-    # laboratorio, así que dos laboratorios con la misma topología no chocan.
-    ordinals = _ordinals(lab, slot)
-    cables = _cables(lab, slot, ordinals) if not control else {"per_port": {}, "links": []}
+    # Los cables: cada uno es un puente tonto entre dos puertos. El nombre lleva la
+    # letra del laboratorio y sus dos puntas, así que dos laboratorios con la misma
+    # topología no chocan en el mismo hipervisor.
+    cables = _cables(lab) if not control else {"per_port": {}, "links": []}
     nodes = []
     effects = []
     steps = []
@@ -913,54 +956,33 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     }
 
 
-def _ordinals(lab: dict, slot: int) -> dict:
-    """El identificador de cada nodo: `<slot><ordinal>` dentro de su tipo.
-
-    El ordinal es la posición entre los nodos del mismo tipo, contada desde 1.
-    Dos cifras: slot 0 y primer router -> `01`; slot 1 y primer router -> `11`.
-    Así el nombre del cable dice a qué laboratorio pertenece sin añadir sufijos
-    que no caben en los 15 caracteres de un nombre de interfaz.
-    """
-    counters = {}
-    out = {}
-    for node in lab["nodes"]:
-        code = TYPES[node["type"]]["code"]
-        counters[code] = counters.get(code, 0) + 1
-        ordinal = counters[code]
-        if ordinal > 9:
-            raise LabError(
-                f"el laboratorio {lab['lab']!r} tiene más de 9 nodos de tipo {node['type']!r}: "
-                "el identificador de dos cifras se agota (slot + ordinal)"
-            )
-        out[node["role"]] = f"{slot}{ordinal}"
-    return out
+def _endpoint(role: str, port: int) -> str:
+    """La punta de un cable: el nombre del equipo y el puerto (`rte1p1`)."""
+    return f"{role}p{port}"
 
 
-def _endpoint(role: str, port: int, ordinals: dict, lab: dict) -> str:
-    """La punta de un cable: `<código><id>p<puerto>`, siempre 7 caracteres."""
-    kind = next(n["type"] for n in lab["nodes"] if n["role"] == role)
-    return f"{TYPES[kind]['code']}{ordinals[role]}p{port:02d}"
-
-
-def _cables(lab: dict, slot: int, ordinals: dict) -> dict:
+def _cables(lab: dict) -> dict:
     """Los cables del laboratorio, con su nombre y la red que transportan.
 
-    Devuelve `{rol: {puerto: nombre}}` para que cada interfaz sepa qué puente
-    lleva, y `links` con la lista ordenada para crear los puentes.
+    El nombre empieza por la letra del laboratorio y sigue con sus dos puntas, así
+    que dos laboratorios con la misma topología en el mismo hipervisor no comparten
+    un solo puente. Devuelve `{equipo: {puerto: nombre}}` para que cada interfaz
+    sepa qué puente lleva, y `links` con la lista ordenada para crear los puentes.
     """
+    letra = lab["lab"][0]
     by_role = {n["role"]: n for n in lab["nodes"]}
     cidrs = {n["name"]: str(ipaddress.ip_network(n["address"], strict=False)) for n in lab["networks"]}
     per_port = {}
     links = []
     for link in lab["links"]:
         a, z = link["a"], link["z"]
-        ea = _endpoint(a["node"], a["port"], ordinals, lab)
-        ez = _endpoint(z["node"], z["port"], ordinals, lab)
-        name = f"{ea}_{ez}"
+        ea = _endpoint(a["node"], a["port"])
+        ez = _endpoint(z["node"], z["port"])
+        name = f"{letra}_{ea}_{ez}"
         if len(name) > 15:
             raise LabError(
                 f"el cable {name!r} no cabe en un nombre de interfaz (15 caracteres): "
-                "acorta los códigos de rol o usa menos nodos"
+                "acorta el nombre del equipo o usa menos puertos"
             )
         red = by_role[a["node"]]["networks"][a["port"] - 1]
         per_port.setdefault(a["node"], {})[a["port"]] = name
@@ -1013,7 +1035,7 @@ def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
         "type": kind,
         "guest": TYPES[kind]["guest"],
         "vmid": vmid,
-        "name": f"{code}-{node['role']}",
+        "name": node["role"],
         "description": f"netlabs lab={lab_name} role={node['role']}",
         "stage": node["stage"],
         "after": node.get("after") or [],
@@ -1130,7 +1152,10 @@ def _check_foreign_spaces(world: dict, lab: dict, env: dict) -> None:
 
 
 def _lab_from_comment(comment: str):
-    match = re.search(r"netlabs\s+lab=([A-Za-z0-9][A-Za-z0-9-]*)", comment)
+    # El nombre de un laboratorio lleva guion bajo (`b_router_dos_puestos`) y la letra
+    # por la que empieza: si la marca se partiera en la primera palabra, el laboratorio
+    # no se reconocería a sí mismo y se tomaría por otro con el mismo espacio.
+    match = re.search(r"netlabs\s+lab=([A-Za-z0-9][A-Za-z0-9_-]*)", comment)
     return match.group(1) if match else None
 
 
@@ -1342,7 +1367,6 @@ def render_docs(lab: dict, env: dict) -> str:
     if lab.get("kind", "topology") == "control":
         return _render_control_docs(lab, env)
     lines = [DOC_BEGIN, "", f"## {lab['lab']}"]
-    lines.append(f"Slot: {lab.get('slot', 0)}")
     lines.append("Address spaces: " + ", ".join(f"`{s}`" for s in lab["address_spaces"]))
     if lab.get("networks"):
         # El dibujo es código, no una imagen: se ve en el visor de Markdown y se puede
@@ -1368,7 +1392,7 @@ def render_docs(lab: dict, env: dict) -> str:
             f"{', '.join(f'`{n}`' for n in node['networks'])} | {address} | {res} |"
         )
     lines += ["", "### Cables", "", "| bridge | a | z | network |", "| --- | --- | --- | --- |"]
-    cables = _cables(lab, lab.get("slot", 0), _ordinals(lab, lab.get("slot", 0)))
+    cables = _cables(lab)
     for cable in cables["links"]:
         lines.append(f"| `{cable['name']}` | `{cable['a']}` | `{cable['z']}` | `{cable['space']}` |")
     areas = sorted({area for node in lab["nodes"] for area in (node.get("configure") or {})})

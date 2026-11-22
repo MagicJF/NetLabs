@@ -48,7 +48,9 @@ ejecuta; es la única puerta que se abre antes de que exista red, y se cierra en
    una costumbre. (Para *diagnosticar* sí puedes entrar por SSH: su fruto debe ser una comprobación
    nueva o un mensaje de error mejor, nunca un atajo.)
 2. **No se declaran números que se pueden derivar.** Ni identificadores, ni MACs, ni direcciones de
-   gestión. Se derivan del identificador que elige el motor; si un YAML los lleva, es un bug.
+   gestión. Se derivan del identificador que elige el motor; si un YAML los lleva, es un bug. El
+   **nombre de un equipo sí se declara entero** —dos letras de tipo, una de función y el ordinal—:
+   es su identidad, y el motor la comprueba contra el tipo declarado en vez de adivinarla.
 3. **No se escribe a mano dentro de lo generado.** Si el agente edita lo que genera la herramienta,
    el fichero pasa a tener dos verdades y la herramienta lo sobrescribe.
 4. **No se añaden colecciones de Ansible.** Sólo `ansible.builtin`: una dependencia menos que explicar
@@ -60,12 +62,15 @@ ejecuta; es la única puerta que se abre antes de que exista red, y se cierra en
 7. **No se configura fuera de las áreas que el laboratorio declara.** Dentro de un área, lo que sobra
    se quita; fuera, no se entra. Sin esta frontera, el motor se convierte en un `ssh` con esteroides.
 8. **El hipervisor no conmuta: un puente es un cable tonto.** Un `bridge` de Proxmox une exactamente
-   dos puertos y se llama por sus dos puntas, `<A-end>_<Z-end>`, cada una `<rol><id>p<puerto>` (por
-   ejemplo `rt01p02_sw01p01`, 15 caracteres como tope). No lleva CIDR, ni puerta, ni MAC, ni DHCP, ni
-   VLAN: esas cosas son del puerto, no del cable. Si un laboratorio necesita conmutar, se declara un
-   nodo `switch` (un RouterOS) y se cablea como cualquier otro equipo. El número de laboratorio va
-   dentro del identificador de cada nodo (slot + ordinal), no como sufijo del cable: así dos labs no
-   comparten nombres y el cable sigue cabiendo en 15 caracteres.
+   dos puertos y se llama por la letra del laboratorio y sus dos puntas,
+   `<letra>_<equipo>p<puerto>_<equipo>p<puerto>` (por ejemplo `c_rte1p1_swc1p1`, 15 caracteres como
+   tope). No lleva CIDR, ni puerta, ni MAC, ni DHCP, ni VLAN: esas cosas son del puerto, no del
+   cable. Si un laboratorio necesita conmutar, se declara un nodo `switch` (un RouterOS) y se cablea
+   como cualquier otro equipo. El nombre de cada equipo es su rol —dos letras de tipo, una de función
+   y el ordinal— y ese mismo nombre es el del invitado, el de su hostname y el de la punta de cada
+   cable que lo toca: un nombre, no tres. La punta mide seis caracteres, así que el cable cabe en los
+   15 de un nombre de interfaz de Linux porque **el puerto es de una cifra**: nueve puertos cableados
+   por equipo, y al agotarse el motor lo dice en vez de reventar al levantar el puente.
 
 ## 4. Quién pone los números
 

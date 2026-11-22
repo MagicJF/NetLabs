@@ -1,0 +1,61 @@
+# Laboratorio `b_router_dos_puestos`
+
+Lo que se aprendió ejecutándolo va debajo de la tabla. La tabla se genera con
+`./netlabs docs` y no se edita a mano: sale de la declaración.
+
+<!-- netlabs:begin -- generado por `./netlabs docs`; no se edita a mano -->
+
+## b_router_dos_puestos
+Address spaces: `10.44.0.0/16`
+
+### Topología
+
+```mermaid
+architecture-beta
+    service red_lan1(cloud)[lan1 10.44.1.0/24]
+    service red_lan2(cloud)[lan2 10.44.2.0/24]
+    service n_rte1(server)[rte1 router 10.44.1.1/24]
+    service n_wsp1(server)[wsp1 workstation dhcp]
+    service n_wsp2(server)[wsp2 workstation dhcp]
+    n_rte1:R -- L:red_lan1
+    n_rte1:R -- L:red_lan2
+    n_wsp1:R -- L:red_lan1
+    n_wsp2:R -- L:red_lan2
+```
+
+### Cableado (L2)
+
+```mermaid
+architecture-beta
+    service n_rte1(server)[rte1 (p1, p2)]
+    service n_wsp1(server)[wsp1 (p1)]
+    service n_wsp2(server)[wsp2 (p1)]
+    n_rte1:R -- L:n_wsp1
+    n_rte1:R -- L:n_wsp2
+```
+
+### Networks
+
+| network | address |
+| --- | --- |
+| `lan1` | `10.44.1.0/24` |
+| `lan2` | `10.44.2.0/24` |
+
+### Nodes
+
+| role | type | stage | interfaces | address | resources |
+| --- | --- | --- | --- | --- | --- |
+| `rte1` | router | 1 | `lan1`, `lan2` | management (derived) | cores=1, disk=1, memory=256 |
+| `wsp1` | workstation | 2 | `lan1` | from router (DHCP) | cores=1, disk=2, memory=256 |
+| `wsp2` | workstation | 2 | `lan2` | from router (DHCP) | cores=1, disk=2, memory=256 |
+
+### Cables
+
+| bridge | a | z | network |
+| --- | --- | --- | --- |
+| `b_rte1p1_wsp1p1` | `rte1p1` | `wsp1p1` | `10.44.1.0/24` |
+| `b_rte1p2_wsp2p1` | `rte1p2` | `wsp2p1` | `10.44.2.0/24` |
+
+Configured areas: `addresses`, `dhcp_server`, `services`, `snmp`, `users`.
+
+<!-- netlabs:end -->

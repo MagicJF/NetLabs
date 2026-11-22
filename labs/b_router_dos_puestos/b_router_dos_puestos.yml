@@ -1,16 +1,19 @@
 # El laboratorio mínimo del diseño (Fase 1, entregable 2): un router y dos puestos.
 #
-# Un puente ya no es una red compartida: es un CABLE tonto entre dos puertos. El
-# nombre del puente son sus dos puntas (`rt01p01_ws01p01`), y el identificador de
-# cada nodo lleva el slot del laboratorio (slot 0 -> rt01, ws01) para que dos
-# laboratorios con la misma topología no choquen en el mismo hipervisor.
+# El nombre del laboratorio es una letra y un título que se lee, y esa letra es lo
+# que hace único el nombre de cada cable en el hipervisor: dos laboratorios con la
+# misma topología no comparten un solo puente.
+#
+# Un puente no es una red compartida: es un CABLE tonto entre dos puertos. El nombre
+# del puente lleva la letra del laboratorio y sus dos puntas (`b_rte1p1_wsp1p1`), y
+# cada equipo se llama igual en todas partes: el rol declarado es su hostname, su
+# nombre en Proxmox y las puntas de sus cables.
 #
 # No hay un solo número derivado: ni vmid, ni MAC, ni dirección de gestión. El
 # router nace con una pata más en la red de gestión (la última) y la dirección de
 # cada pata de laboratorio se declara por red, no por posición.
 
-lab: uno
-slot: 0                          # el sitio de este laboratorio en el hipervisor
+lab: b_router_dos_puestos
 
 # Lo que este laboratorio puede usar. Ningún otro puede solaparse con esto, y el
 # plan lo comprueba contra lo que ya vive en el hipervisor antes de tocar nada.
@@ -25,14 +28,13 @@ networks:
     address: 10.44.2.0/24
 
 nodes:
-  - role: edge                    # el contrato: así se le cita desde otros nodos
-    type: router
+  - role: rte1                    # el nombre del equipo es el contrato: así se le cita
+    type: router                  # dos letras de tipo, una de función y el ordinal
     stage: 1
     resources: {cores: 1, memory: 256, disk: 1}
     networks: [lan1, lan2]        # puerto 1 = lan1, puerto 2 = lan2; la gestión va después
     address: 10.44.1.1/24         # la dirección de su primera pata de laboratorio
     configure:
-      identity: {name: rt-edge}
       addresses:
         - {network: lan1, address: 10.44.1.1/24}
         - {network: lan2, address: 10.44.2.1/24}
@@ -46,18 +48,18 @@ nodes:
       # nombra la comunidad; el valor vive en secrets.yml (read-only, sólo gestión).
       snmp: {enabled: true, community_from: secrets.snmp_comunidad}
 
-  - role: pc-1
+  - role: wsp1
     type: workstation
     stage: 2
-    after: [edge]                 # no arranca antes de que el router sirva
+    after: [rte1]                 # no arranca antes de que el router sirva
     resources: {cores: 1, memory: 256, disk: 2}
     networks: [lan1]
     address: dhcp
 
-  - role: pc-2
+  - role: wsp2
     type: workstation
     stage: 2
-    after: [edge]
+    after: [rte1]
     resources: {cores: 1, memory: 256, disk: 2}
     networks: [lan2]
     address: dhcp
@@ -65,7 +67,7 @@ nodes:
 # Cada cable une dos puertos y se convierte en un puente. Es lo único que crea
 # puentes: no hay redes compartidas ni puentes por red.
 links:
-  - a: {node: edge, port: 1}
-    z: {node: pc-1, port: 1}
-  - a: {node: edge, port: 2}
-    z: {node: pc-2, port: 1}
+  - a: {node: rte1, port: 1}
+    z: {node: wsp1, port: 1}
+  - a: {node: rte1, port: 2}
+    z: {node: wsp2, port: 1}

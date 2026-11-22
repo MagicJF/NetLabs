@@ -82,8 +82,10 @@ Cada laboratorio se declara en **un fichero YAML**, y ese fichero **es** el esta
 **Ansible** lo lleva a la realidad, es **idempotente** y no guarda nada propio en disco: ni
 inventario, ni fichero de asignaciones, ni memoria de lo que desplegó.
 
-Todo lo derivado se **re-deriva** preguntando al hipervisor: identificadores, nombres, MAC,
-direcciones de gestión y pertenencia. La **frontera de propiedad** —qué es de este
+Todo lo derivado se **re-deriva** preguntando al hipervisor: identificadores, MAC,
+direcciones de gestión y pertenencia. El **nombre de un equipo sí se declara** —es su
+identidad—, y de él salen el hostname del invitado, su nombre en el hipervisor y las
+puntas de sus cables. La **frontera de propiedad** —qué es de este
 laboratorio y qué es ajeno— se lee también del hipervisor: un grupo de recursos con el
 nombre del laboratorio y una descripción en cada nodo que dice a qué rol pertenece.
 
@@ -438,27 +440,30 @@ une exactamente dos puertos y transporta lo que le metan. No tiene dirección, n
 ni DHCP, ni VLAN: si tuviera cualquiera de esas cosas, sería un conmutador, y el motor no crea
 conmutadores.
 
-**El nombre del cable son sus dos puntas.** Se nombra con lo que une, en el orden
-`<A-end>_<Z-end>`, y cada punta es `<código-de-rol><id>p<puerto>`:
+**El nombre del cable lleva la letra del laboratorio y sus dos puntas.** Se nombra
+`<letra>_<equipo>p<puerto>_<equipo>p<puerto>`, y cada equipo por su rol:
 
 ```
-rt01p01_ws01p01     router 01, puerto 01  ->  workstation 01, puerto 01
-fw01p02_rt01p01     firewall 01, puerto 02 -> router 01, puerto 01
-sw01p03_ws01p01     switch 01, puerto 03  ->  workstation 01, puerto 01
+c_rte1p1_swc1p1     laboratorio `c`: el router de borde 1 -> el switch de núcleo 1
+b_rte1p2_wsp2p1     laboratorio `b`: el router de borde 1 -> el segundo puesto
 ```
 
-Cada punta mide siempre 7 caracteres (código de dos letras, identificador de dos cifras, `p` y
-puerto de dos cifras), así que el nombre mide 15 y **cabe en el tope de 15 caracteres de un
-nombre de interfaz en Linux**. El nombre del cable dice qué une sin consultar la declaración: es
-la mitad de la documentación.
+**La letra es la del nombre del laboratorio** (`c_enrutar_y_conmutar`) y es lo que hace
+que dos laboratorios con la misma topología en el mismo hipervisor no compartan un solo
+nombre de puente. Cada punta mide seis caracteres (dos de tipo, una de función, el
+ordinal, `p` y el puerto), así que el nombre mide 15 y **cabe en el tope de 15
+caracteres de un nombre de interfaz en Linux**: `IFNAMSIZ` es 16, con el nulo final.
+Medido en el nodo: 15 entra, 16 no. El nombre del cable dice qué une sin consultar la
+declaración: es la mitad de la documentación.
 
-**Por qué el identificador lleva el slot.** Un cable no puede llamarse
-`rt01p02_sw01p01_XX` porque no cabe. El número de laboratorio va **dentro** del identificador de
-cada nodo: dos cifras, **slot + ordinal dentro del tipo**. Slot 0 y primer router -> `01`; slot 1
-y primer router -> `11`. Así dos laboratorios con la misma topología en el mismo hipervisor no
-comparten un solo nombre de cable, sin sufijos y sin alargar el nombre. El precio, dicho claro:
-**diez slots por hipervisor** (0-9) y **nueve nodos por tipo y laboratorio**; al agotarse, el
-motor lo dice en vez de repetir un nombre.
+**Por qué el puerto es de una cifra.** El tope de 15 no es una convención: es del
+kernel. Con la letra del laboratorio y las dos puntas dentro, el puerto cabe en una
+cifra, y de ahí que **un equipo no pueda tener más de nueve puertos cableados**. El
+precio se dice: al pedir el puerto 10 el motor se para con un mensaje, en vez de dejar
+que la API de Proxmox acepte el nombre —su validador admite hasta 21 caracteres— y el
+puente falle después, al levantarlo, que es la peor clase de fallo. Si un laboratorio
+necesitara más puertos, el puerto pasaría a un carácter en base 36 (`a` = 10) y cabrían
+35, a costa de que el nombre deje de leerse de un vistazo.
 
 **El comentario del puente dice de quién es.** Como el cable no puede llevar CIDR, su marca vive
 en el comentario: `netlabs lab=<lab> space=<cidr> cable=<nombre>`. Es lo que permite a `destroy`
@@ -577,7 +582,8 @@ después los nodos, y los nodos se refieren a las redes por su nombre**. No hay 
 posicionales ni números mágicos, y el orden de las patas es el orden en que se declaran.
 
 ```yaml
-lab: <lab-name>                          # also the name of the folder
+lab: <letra>_<título>                    # la letra es la cabeza de cada cable y el nombre
+                                         # es también el de la carpeta, el fichero y el pool
 
 address_spaces: [<cidr>, ...]            # addresses this lab may use; no other lab may
 
@@ -586,7 +592,8 @@ networks:                                # named networks of the lab
     address: <cidr>
 
 nodes:
-  - role: <role-in-this-lab>             # the contract: how it is referenced
+  - role: <equipo>                       # su nombre en todas partes: dos letras de tipo,
+                                         # una de función y el ordinal (`swc2`)
     type: router | server | workstation | switch
     stage: <integer>                     # coarse order: a stage waits for the previous one
     after: [<role>, ...]                 # optional: fine order inside the same stage
@@ -600,7 +607,9 @@ nodes:
 
 Reglas:
 
-1. **Nada derivado.** Ni identificadores, ni MAC, ni direcciones de gestión.
+1. **Nada derivado.** Ni identificadores, ni MAC, ni direcciones de gestión. El **nombre de un
+   equipo sí se declara entero** —tipo, función y ordinal— y el motor lo comprueba contra el tipo
+   declarado: si no cuentan lo mismo, se para antes de tocar nada.
 2. **Los espacios de direcciones son exclusivos** entre laboratorios, y **no se confía en la
    palabra**: el plan lo comprueba contra lo que ya existe en el hipervisor (y contra el espacio
    de gestión), y falla antes de tocar nada si se pisan.
@@ -627,11 +636,13 @@ Tres vías, cada una en un fichero del motor:
   nodo, con la contraseña del fichero de secretos (§10).
 
 Lo configurable se declara por **áreas**, nombradas con el vocabulario de la API del equipo
-(`identity`, `addresses`, `routes`, `dhcp_server`, `services`, `users`, `snmp`). Un área declarada se
-converge entera; un área ausente se deja intacta. Todas las áreas y sus claves caben en **una
-tabla que se lee de una sentada**; si un laboratorio necesita algo que no está, se añade la
-primitiva al motor **con su prueba**, no se abre una puerta genérica del tipo «ejecuta esta
-orden» ni se permite un caso especial por laboratorio.
+(`addresses`, `routes`, `dhcp_server`, `services`, `users`, `snmp`). Un área declarada se
+converge entera; un área ausente se deja intacta. El **nombre del equipo no es un área**: sale del
+rol declarado y el motor lo escribe en todas partes (el hostname del invitado, la identidad del
+RouterOS), así que declararlo otra vez sería una segunda verdad esperando a contradecirse. Todas las
+áreas y sus claves caben en **una tabla que se lee de una sentada**; si un laboratorio necesita algo
+que no está, se añade la primitiva al motor **con su prueba**, no se abre una puerta genérica del
+tipo «ejecuta esta orden» ni se permite un caso especial por laboratorio.
 
 El área `snmp` enciende el servicio y mantiene una comunidad de **sólo lectura, restringida a la
 red de gestión**: el laboratorio dice `enabled` y nombra la comunidad (`community_from`), y el
@@ -812,12 +823,12 @@ ejemplo de declaración**, y el motor lo despliega **sin tocar `engine/`**.
 | **node** | un elemento del laboratorio: router, switch, server, workstation |
 | **network device** | el que hace la red (router, switch): tiene red de gestión |
 | **end node** | el que usa la red (server, workstation): se llega a él por su router |
-| **role** | el papel de un node dentro de su lab; es su contrato de referencia |
+| **role** | el papel de un node dentro de su lab: su contrato de referencia y su nombre en todas partes |
 | **stage** | unidad de orden: una no empieza hasta que la anterior converge y sirve |
 | **area** | conjunto de ajustes que se convergen enteros dentro de un node |
 | **OOB** | red de gestión compartida, por la que se llega a los equipos de red |
-| **management pool** | pool persistente del plano de gestión; ningún laboratorio lo toca |
-| **lab pool** | pool efímero de un laboratorio; es el alcance de `destroy` |
+| **management pool** | pool del servicio persistente: es el de su laboratorio de control, y ningún otro laboratorio lo toca |
+| **lab pool** | pool efímero de un laboratorio, que se llama como él; es el alcance de `destroy` |
 | **guest agent (QEMU)** | agente del hipervisor: sólo **lee** estado del invitado |
 | **serial console** | la consola de texto del router, alcanzada por la API; por ahí va la línea de arranque |
 | **guest agent (QGA)** | el agente del CHR: lee estado y puede ejecutar un script de RouterOS |

@@ -1,4 +1,4 @@
-# 00_bootstrap · el servicio que observa el sitio
+# a_bootstrap · el servicio que observa el sitio
 #
 # No dibuja una topología: es el invitado persistente que ya existía antes del
 # motor y que sobrevive a todos los laboratorios. Su única pata está en la red de
@@ -8,7 +8,7 @@
 # paquetes y un servicio. Si mañana el servicio cambia, cambia este fichero, no
 # el motor.
 
-lab: 00_bootstrap
+lab: a_bootstrap
 kind: control
 
 nodes:
@@ -16,8 +16,6 @@ nodes:
     type: control
     stage: 1
     configure:
-      identity:
-        name: netxms
       repositories:
         - name: netxms
           url: https://packages.netxms.org/7.x/debian

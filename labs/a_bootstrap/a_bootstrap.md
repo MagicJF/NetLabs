@@ -1,11 +1,11 @@
-# Laboratorio `00_bootstrap`
+# Laboratorio `a_bootstrap`
 
 Lo que se aprendió ejecutándolo va debajo de la tabla. La tabla se genera con
 `./netlabs docs` y no se edita a mano: sale de la declaración.
 
 <!-- netlabs:begin -- generado por `./netlabs docs`; no se edita a mano -->
 
-## 00_bootstrap
+## a_bootstrap
 
 Tipo: control (servicio persistente del sitio, sin topología).
 Red: `vmbr30` (`10.30.0.0/16`), la de gestión.
@@ -16,16 +16,16 @@ Red: `vmbr30` (`10.30.0.0/16`), la de gestión.
 | --- | --- | --- | --- | --- |
 | `netxms` | control | 1 | management (derived) | — |
 
-Configured areas: `commands`, `files`, `identity`, `packages`, `repositories`, `services`.
+Configured areas: `commands`, `files`, `packages`, `repositories`, `services`.
 
 <!-- netlabs:end -->
 
 ## Lo aprendido al ejecutarlo
 
-- **El pool no puede llamarse `00_bootstrap` en Proxmox.** La API exige que el
-  nombre de un pool empiece por letra, así que el motor lo llama
-  `lab-00_bootstrap` y el invitado de gestión vive ahí. El nombre del
-  laboratorio sigue siendo `00_bootstrap`: sólo se prefija el pool.
+- **El pool se llama como el laboratorio.** La API de Proxmox exige que el nombre
+  de un pool empiece por letra, y de ahí que este laboratorio se llame `a_bootstrap`
+  y no `00_bootstrap`: un nombre para el laboratorio, la carpeta y el pool, en vez
+  de un nombre y un prefijo. El invitado de gestión vive ahí.
 - **El servidor no arranca sin esquema.** Con la base de datos vacía sale con
   `status=3/NOTIMPLEMENTED` y se queda en bucle de reinicio. `nxdbmgr init`
   crea el esquema una sola vez y deja una marca en disco; la marca es lo que

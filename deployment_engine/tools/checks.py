@@ -167,32 +167,30 @@ def comprobar_espacios(env) -> list[str]:
     return errores
 
 
-def comprobar_slots(env) -> list[str]:
-    """Dos laboratorios no pueden compartir slot: el slot va dentro del nombre de cada cable.
+def comprobar_letras(env) -> list[str]:
+    """Dos laboratorios no pueden compartir letra: la letra va dentro del nombre de cada cable.
 
-    Un cable se llama por sus dos puntas (`rt01p02_sw01p01`) y el número de laboratorio
-    vive en el identificador del nodo. Si dos laboratorios comparten slot, sus cables
-    comparten nombre y el segundo `apply` se encuentra puentes ajenos con su propio
-    nombre. El slot es la única defensa contra eso, así que se comprueba aquí.
+    Un cable se llama por la letra del laboratorio y sus dos puntas (`c_rte1p1_swc1p1`),
+    y el pool de Proxmox se llama como el laboratorio. Si dos laboratorios comparten
+    letra comparten nombre de cable y de pool, y el segundo `apply` se encuentra
+    puentes ajenos con el suyo. La letra es la única defensa contra eso, así que se
+    comprueba aquí.
     """
     errores = []
     vistos = {}
     for nombre, (ruta, lab) in laboratorios().items():
-        # Un laboratorio de control no dibuja cables: no tiene puertos ni puentes,
-        # así que su slot no nombra nada y no puede colisionar con nadie.
-        if lab.get("kind", "topology") == "control":
+        letra = (lab.get("lab") or "")[:1]
+        if not re.fullmatch(r"[a-z]", letra):
+            errores.append(f"{ruta.relative_to(RAIZ)}: el nombre del laboratorio "
+                           f"{lab.get('lab')!r} no empieza por una letra de la a a la z")
             continue
-        slot = lab.get("slot", 0)
-        if not isinstance(slot, int) or not 0 <= slot <= 9:
-            errores.append(f"{ruta.relative_to(RAIZ)}: slot {slot!r} fuera de 0-9")
-            continue
-        if slot in vistos:
+        if letra in vistos:
             errores.append(
-                f"{ruta.relative_to(RAIZ)}: slot {slot} ya lo usa '{vistos[slot]}'; "
-                "dos laboratorios con el mismo slot comparten nombres de cable"
+                f"{ruta.relative_to(RAIZ)}: la letra {letra!r} ya la usa '{vistos[letra]}'; "
+                "dos laboratorios con la misma letra comparten nombres de cable y de pool"
             )
         else:
-            vistos[slot] = nombre
+            vistos[letra] = nombre
     return errores
 
 
@@ -308,7 +306,7 @@ def ejecutar() -> int:
         ("YAML válido y sin claves duplicadas", lambda: comprobar_yaml()),
         ("declaraciones del vocabulario cerrado", lambda: comprobar_declaraciones(env)),
         ("espacios de direcciones disjuntos", lambda: comprobar_espacios(env)),
-        ("slots de laboratorio distintos", lambda: comprobar_slots(env)),
+        ("letras de laboratorio distintas", lambda: comprobar_letras(env)),
         ("documentación generada al día", lambda: comprobar_documentacion(env)),
         ("el motor no conoce ningún laboratorio", lambda: comprobar_pureza(env)),
         ("enlaces de la documentación", comprobar_enlaces),

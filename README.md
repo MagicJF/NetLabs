@@ -63,6 +63,13 @@ Reglas de la estructura:
   parámetro. Un valor concreto de un lab aquí es un bug.
 - **`labs/<lab>/` sólo declara `<lab>.yml` y `<lab>.md`.** Nada de configuración global ni de
   ficheros de estado. Lo que se ejecuta no vive aquí.
+- **El nombre de un laboratorio es una letra y un título** (`c_enrutar_y_conmutar`). La letra es la
+  cabeza del nombre de cada cable y la que hace que el pool de Proxmox empiece por letra; ese nombre
+  es también el de la carpeta, el del fichero y el del pool. Dos laboratorios no comparten letra, y
+  `./netlabs check` lo comprueba.
+- **El nombre de un equipo es su rol** (`rte1`, `swc2`): dos letras de tipo, una de función y el
+  ordinal. Ese mismo nombre es el hostname del invitado, su nombre en Proxmox y la punta de cada
+  cable que lo toca (AGENTS.md §3.8).
 - **Los informes van a `logs/`.** Ni el motor ni los laboratorios guardan su propia salida.
 - **`netlabs.yml` es del sitio, no de un laboratorio.** Dice qué hipervisor, qué almacenes y cómo
   se llega a la gestión; nunca qué invitados tiene un laboratorio concreto.

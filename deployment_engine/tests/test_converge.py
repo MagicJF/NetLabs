@@ -25,12 +25,13 @@ def router(dos_redes=True):
     interfaces = []
     if dos_redes:
         interfaces = [
-            {"index": 0, "network": "lan1", "bridge": "vmb_uno_lan1"},
-            {"index": 1, "network": "lan2", "bridge": "vmb_uno_lan2"},
+            {"index": 0, "network": "lan1", "bridge": "b_rte1p1_wsp1p1"},
+            {"index": 1, "network": "lan2", "bridge": "b_rte1p2_wsp2p1"},
         ]
     interfaces.append({"index": len(interfaces), "network": None, "bridge": "vmbr30"})
     return {
-        "role": "edge",
+        "role": "rte1",
+        "name": "rte1",
         "type": "router",
         "mgmt_address": "10.30.0.111",
         "interfaces": interfaces,
@@ -92,7 +93,8 @@ class LaDiferencia(unittest.TestCase):
     def test_un_servicio_apagado_se_enciende_por_su_id(self):
         nodo = nodo_router()
         nodo["configure"] = {"services": {"www": True}}
-        ops = converge.ros_ops(nodo, {"services": [{"name": "www", ".id": "*2", "disabled": "true"}]}, "clave")
+        ops = converge.ros_ops(nodo, {"identity": {"name": "rte1"},
+                                      "services": [{"name": "www", ".id": "*2", "disabled": "true"}]}, "clave")
         self.assertEqual(len(ops), 1)
         self.assertEqual(ops[0]["method"], "PATCH")
         self.assertEqual(ops[0]["path"], "/rest/ip/service/*2")
@@ -102,17 +104,17 @@ class ElInteriorLinux(unittest.TestCase):
     """Un nodo de control declara su interior: repos, paquetes, ficheros, servicios."""
 
     def nodo(self, **configure):
-        return {"role": "netxms", "type": "control", "configure": configure}
+        return {"role": "netxms", "name": "netxms", "type": "control", "configure": configure}
 
     def test_un_fichero_que_coincide_no_se_escribe(self):
         nodo = self.nodo(files=[{"path": "/etc/x.conf", "content": "a=1\n"}])
         huella = converge._sha256("a=1\n")
-        ops = converge.linux_ops(nodo, {"files": {"/etc/x.conf": huella}})
+        ops = converge.linux_ops(nodo, {"hostname": "netxms", "files": {"/etc/x.conf": huella}})
         self.assertEqual(ops, [])
 
     def test_un_fichero_que_falta_se_escribe(self):
         nodo = self.nodo(files=[{"path": "/etc/x.conf", "content": "a=1\n"}])
-        ops = converge.linux_ops(nodo, {"files": {"/etc/x.conf": "-"}})
+        ops = converge.linux_ops(nodo, {"hostname": "netxms", "files": {"/etc/x.conf": "-"}})
         self.assertEqual(len(ops), 1)
         self.assertIn("/etc/x.conf", ops[0]["effect"])
         # El contenido viaja en base64: un `$` o un apóstrofo no rompen el comando.
@@ -133,17 +135,17 @@ class ElInteriorLinux(unittest.TestCase):
             files=[{"path": "/etc/x.conf", "content": "a=1\n"}],
             services={"x": True},
         )
-        ops = converge.linux_ops(nodo, {"files": {}, "services": {"x": "inactive"}})
+        ops = converge.linux_ops(nodo, {"hostname": "netxms", "files": {}, "services": {"x": "inactive"}})
         self.assertEqual(len(ops), 2)
         self.assertIn("fichero", ops[0]["effect"])
         self.assertIn("servicio", ops[1]["effect"])
 
     def test_un_comando_sin_marca_se_ejecuta_y_con_marca_no(self):
         nodo = self.nodo(commands=[{"run": "x init", "creates": "/var/lib/x/stamp"}])
-        ops = converge.linux_ops(nodo, {"commands": {}})
+        ops = converge.linux_ops(nodo, {"hostname": "netxms", "commands": {}})
         self.assertEqual(len(ops), 1)
         self.assertIn("comando", ops[0]["effect"])
-        self.assertEqual(converge.linux_ops(nodo, {"commands": {"/var/lib/x/stamp": True}}), [])
+        self.assertEqual(converge.linux_ops(nodo, {"hostname": "netxms", "commands": {"/var/lib/x/stamp": True}}), [])
 
     def test_el_fichero_va_antes_que_el_comando(self):
         # Un comando de inicialización lee su configuración: si el fichero aún no
@@ -152,7 +154,7 @@ class ElInteriorLinux(unittest.TestCase):
             files=[{"path": "/etc/x.conf", "content": "a=1\n"}],
             commands=[{"run": "x init", "creates": "/var/lib/x/stamp"}],
         )
-        ops = converge.linux_ops(nodo, {"files": {}, "commands": {}})
+        ops = converge.linux_ops(nodo, {"hostname": "netxms", "files": {}, "commands": {}})
         self.assertEqual([o["effect"].split()[0] for o in ops], ["fichero", "comando:"])
 
     def test_el_comando_va_antes_que_el_servicio(self):
@@ -160,7 +162,7 @@ class ElInteriorLinux(unittest.TestCase):
             commands=[{"run": "x init", "creates": "/var/lib/x/stamp"}],
             services={"x": True},
         )
-        ops = converge.linux_ops(nodo, {"commands": {}, "services": {"x": "inactive"}})
+        ops = converge.linux_ops(nodo, {"hostname": "netxms", "commands": {}, "services": {"x": "inactive"}})
         self.assertEqual([o["effect"].split()[0] for o in ops], ["comando:", "servicio"])
 
     def test_una_credencial_se_converge_por_la_huella_de_la_clave(self):
@@ -170,7 +172,7 @@ class ElInteriorLinux(unittest.TestCase):
             "run": "cambiar admin", "stamp": "/var/lib/x/clave", "secret": "netxms",
         }])
         credenciales = {"netxms": {"usuario": "admin", "clave": "s3cr3t"}}
-        ops = converge.linux_ops(nodo, {"stamps": {}}, credenciales)
+        ops = converge.linux_ops(nodo, {"hostname": "netxms", "stamps": {}}, credenciales)
         self.assertEqual(len(ops), 1)
         self.assertEqual(ops[0]["secret"], "netxms")
         self.assertIn("credencial netxms", ops[0]["effect"])
@@ -185,7 +187,7 @@ class ElInteriorLinux(unittest.TestCase):
         huella = __import__("hashlib").sha256(b"s3cr3t").hexdigest()
         credenciales = {"netxms": {"usuario": "admin", "clave": "s3cr3t"}}
         self.assertEqual(
-            converge.linux_ops(nodo, {"stamps": {"/var/lib/x/clave": huella}}, credenciales),
+            converge.linux_ops(nodo, {"hostname": "netxms", "stamps": {"/var/lib/x/clave": huella}}, credenciales),
             [],
         )
 
@@ -194,11 +196,11 @@ class ElInteriorLinux(unittest.TestCase):
             "run": "cambiar admin", "stamp": "/var/lib/x/clave", "secret": "netxms",
         }])
         with self.assertRaises(converge.LabError):
-            converge.linux_ops(nodo, {"stamps": {}}, {})
+            converge.linux_ops(nodo, {"hostname": "netxms", "stamps": {}}, {})
 
     def test_un_servicio_que_arranca_se_reinicia_no_solo_se_arranca(self):
         nodo = self.nodo(services={"x": True})
-        ops = converge.linux_ops(nodo, {"services": {"x": "activating"}})
+        ops = converge.linux_ops(nodo, {"hostname": "netxms", "services": {"x": "activating"}})
         self.assertEqual(len(ops), 1)
         # `restart` relee la configuración; `start` no, y el servicio se queda
         # en bucle de reinicio con la configuración vieja.
@@ -244,6 +246,7 @@ class LaObservabilidadDelRouter(unittest.TestCase):
 
     def actual(self, enabled="false", comunidades=None):
         return {
+            "identity": {"name": "rte1"},
             "snmp": {"enabled": enabled},
             "snmp_community": comunidades if comunidades is not None else [
                 {".id": "*0", "name": "public", "addresses": "::/0",
@@ -331,7 +334,7 @@ class ElSwitchConmuta(unittest.TestCase):
 
     def nodo(self):
         return {
-            "role": "sw-1", "type": "switch",
+            "role": "swc1", "name": "swc1", "type": "switch",
             "networks": [{"name": "lan"}, {"name": "lan"}],
             "interfaces": [
                 {"index": 0, "network": "lan"},
@@ -342,7 +345,8 @@ class ElSwitchConmuta(unittest.TestCase):
         }
 
     def test_crea_el_puente_y_mete_solo_las_patas_de_laboratorio(self):
-        ops = converge.ros_ops(self.nodo(), {"bridges": [], "bridge_ports": []}, "clave", {}, None)
+        ops = converge.ros_ops(self.nodo(), {"identity": {"name": "swc1"},
+                                            "bridges": [], "bridge_ports": []}, "clave", {}, None)
         self.assertEqual([(o["method"], o["path"]) for o in ops], [
             ("PUT", "/rest/interface/bridge"),
             ("PUT", "/rest/interface/bridge/port"),
@@ -353,6 +357,7 @@ class ElSwitchConmuta(unittest.TestCase):
 
     def test_si_ya_esta_no_escribe_nada(self):
         actual = {
+            "identity": {"name": "swc1"},
             "bridges": [{"name": "netlabs-lan"}],
             "bridge_ports": [
                 {".id": "*1", "bridge": "netlabs-lan", "interface": "ether1"},
@@ -370,6 +375,7 @@ class ElSwitchConmuta(unittest.TestCase):
                 {".id": "*3", "bridge": "netlabs-lan", "interface": "ether3"},
             ],
         }
+        actual["identity"] = {"name": "swc1"}
         ops = converge.ros_ops(self.nodo(), actual, "clave", {}, None)
         self.assertEqual([(o["method"], o["path"]) for o in ops],
                          [("DELETE", "/rest/interface/bridge/port/*3")])
@@ -384,7 +390,7 @@ class LasRutasDelLaboratorio(unittest.TestCase):
     """
 
     ESPACIOS = ["10.44.0.0/16"]
-    DESEADAS = [{"space": "10.44.0.0/16", "via": "10.30.0.104", "role": "edge",
+    DESEADAS = [{"space": "10.44.0.0/16", "via": "10.30.0.104", "role": "rte1",
                  "prueba": "10.44.1.1"}]
 
     def test_si_ya_esta_no_se_escribe_nada(self):

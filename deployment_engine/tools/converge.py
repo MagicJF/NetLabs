@@ -144,13 +144,14 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
         ops += _snmp_ops(current.get("snmp") or {}, current.get("snmp_community") or [],
                          area_snmp, secrets, mgmt_cidr)
 
-    if "identity" in configure:
-        actual = (current.get("identity") or {}).get("name")
-        deseado = configure["identity"]["name"]
-        if actual != deseado:
-            ops.append({"method": "POST", "path": "/rest/system/identity/set",
-                        "body": {"name": deseado},
-                        "effect": f"identidad del router -> {deseado}"})
+    # El nombre del equipo lo pone el motor desde el rol declarado: no es un área que
+    # el laboratorio repita, porque una segunda verdad acaba contradiciendo a la
+    # primera. El equipo se llama igual en su identidad, en su hostname y en sus cables.
+    actual = (current.get("identity") or {}).get("name")
+    if actual != node["name"]:
+        ops.append({"method": "POST", "path": "/rest/system/identity/set",
+                    "body": {"name": node["name"]},
+                    "effect": f"identidad del router -> {node['name']}"})
 
     if "services" in configure:
         servicios = {s.get("name"): s for s in current.get("services") or []}
@@ -727,7 +728,7 @@ def linux_ops(node: dict, current: dict, credenciales: dict | None = None) -> li
                     "check": ["systemctl", "is-active", service],
                     "want": quiere})
 
-    identidad = (configure.get("identity") or {}).get("name")
+    identidad = node["name"]
     if identidad and identidad != current.get("hostname"):
         ops.append({"cmd": ["hostnamectl", "set-hostname", identidad],
                     "effect": f"nombre del equipo -> {identidad}"})

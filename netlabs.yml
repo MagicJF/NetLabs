@@ -24,9 +24,9 @@ management:
   address_space: 10.30.0.0/16
   gateway: 10.30.0.1
   # El invitado de gestión vive en el pool del laboratorio de control que lo
-  # declara (`lab-00_bootstrap`); la API de Proxmox no admite un pool que empiece
-  # por cifra, así que el prefijo `lab-` es obligatorio.
-  pool: lab-00_bootstrap
+  # declara (`a_bootstrap`), y ese pool se llama como el laboratorio: la letra por
+  # la que empieza el nombre es lo que la API de Proxmox exige de un pool.
+  pool: a_bootstrap
   guest: netxms
   cores: 2
   memory: 4096
@@ -44,11 +44,7 @@ vmids:
   min: 100
   max: 9999
 
-# Un invitado de laboratorio se nombra `<tipo>-<rol>`; el tipo sale de la
-# declaración y este mapa es la única traducción.
-type_codes:
-  router: rt
-  switch: sw
-  server: srv
-  workstation: ws
-  firewall: fw
+# Un invitado de laboratorio se nombra como su equipo: dos letras de tipo, una de
+# función y el ordinal (`rte1`, `swc2`), y ese mismo nombre es su hostname, su
+# nombre en Proxmox y la punta de sus cables. El código de cada tipo vive en
+# `TYPES` (deployment_engine/tools/identity.py), que es la única traducción.
