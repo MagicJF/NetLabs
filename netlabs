@@ -94,6 +94,15 @@ class Reenvios:
         self.puertos: list[int] = []
 
     def abrir(self, destinos: list[dict]) -> None:
+        """Abre todos los reenvíos que falten, en UNA sola sesión SSH.
+
+        Antes se abría una sesión por router, dieciséis de golpe contra el mismo sshd:
+        el servidor corta varias (su límite de conexiones sin autenticar) y esas se
+        quedaban sin escuchar. El apply seguía y moría más tarde con «HTTP -1» y un
+        mensaje que culpaba al arranque del router. Con una sola sesión que lleva un
+        `-L` por router no hay límite que agotar: o entran todos o no entra ninguno.
+        """
+        pendientes: list[tuple[int, dict]] = []
         for destino in destinos:
             local = identity.tunnel_port(int(destino["vmid"]))
             if _escucha(local):
@@ -106,11 +115,56 @@ class Reenvios:
                 print(f"aviso: el puerto {local} está ocupado por otro proceso; "
                       f"no hay reenvío hacia {destino['role']} y su REST no se podrá leer.")
                 continue
+            pendientes.append((local, destino))
+        if not pendientes:
+            return
+        if self._abrir_de_una_vez(pendientes):
+            self.puertos += [local for local, _ in pendientes]
+            return
+        # Si la sesión única no sale adelante, se vuelve a una por router: es más
+        # lenta y puede chocar con el límite del sshd, pero deja diagnosticado cuál
+        # falla y por qué.
+        for local, destino in pendientes:
             proceso = self._abrir_uno(local, destino)
             if proceso is None:
                 continue
             self.procesos.append(proceso)
             self.puertos.append(local)
+
+    def _abrir_de_una_vez(self, destinos: list[tuple[int, dict]]) -> bool:
+        """Una sesión SSH con un `-L` por reenvío. Devuelve si acabaron escuchando todos."""
+        orden = ["ssh", "-i", str(self.clave), "-p", str(self.puerto_ssh),
+                 "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+                 "-o", "UserKnownHostsFile=/dev/null",
+                 "-o", "ExitOnForwardFailure=yes", "-N"]
+        for local, destino in destinos:
+            orden += ["-L", f"{local}:{destino['address']}:80"]
+        orden.append("root@127.0.0.1")
+        for _intento in range(3):
+            proceso = subprocess.Popen(orden, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.PIPE, text=True)
+            if all(_esperar_puerto(local, 6.0) for local, _ in destinos):
+                self.procesos.append(proceso)
+                return True
+            proceso.terminate()
+            try:
+                proceso.wait(timeout=5)
+                error = (proceso.stderr.read() or "").strip().splitlines()
+            except subprocess.TimeoutExpired:
+                proceso.kill()
+                error = []
+            if error:
+                print(f"aviso: la sesión de reenvíos no arrancó: {error[-1]}")
+            # Los puertos que sí quedaron escuchando se conservan: el reintento abre
+            # sólo los que faltan.
+            faltan = [(local, destino) for local, destino in destinos
+                      if not _escucha(local)]
+            if len(faltan) == len(destinos):
+                time.sleep(1.0)
+                continue
+            self.puertos += [local for local, _ in destinos if _escucha(local)]
+            destinos = faltan
+        return False
 
     def _abrir_uno(self, local: int, destino: dict):
         """Abre un reenvío y espera a que escuche, con reintento.
@@ -212,6 +266,16 @@ def verbo_apply(lab: str) -> int:
     reenvios = Reenvios(clave, env["management"]["tunnel"]["local_ssh_port"])
     try:
         reenvios.abrir(plan.get("tunnel_forwards") or [])
+        # Sin camino no se aplica: cada router se configura por su reenvío, y seguir
+        # sin él deja el fallo para más abajo, donde se lee como un problema de
+        # credenciales del router y no del camino.
+        faltan = sorted({identity.tunnel_port(int(d["vmid"])) for d in plan.get("tunnel_forwards") or []}
+                        - set(reenvios.puertos))
+        if faltan:
+            print(f"no hay camino hacia la red de gestión en "
+                  f"{', '.join(str(p) for p in faltan)}: no se aplica nada.")
+            print(f"\ninforme: {log.relative_to(RAIZ)}")
+            return 1
         codigo = ansible("apply.yml", {"netlabs_lab": lab}, log)
     finally:
         reenvios.cerrar()

@@ -71,6 +71,18 @@
   retries: 10
   delay: 3
 
+# Un `-1` no es una credencial rechazada: es que no hubo ni conexión. Decirlo con el
+# mensaje de la clave manda a mirar el router cuando el problema estaba en el camino
+# —el reenvío no escuchaba—, que es por donde se perdió una tarde.
+- name: "RouterOS · sin camino hasta {{ router.name }} no se puede ni preguntar"
+  ansible.builtin.assert:
+    that: ros_login_ok.status in [200, 401]
+    fail_msg: >-
+      no hay camino hasta {{ router.name }}: el reenvío
+      {{ router.vmid | netlabs_tunnel_port }} no contesta
+      ({{ ros_login_ok.status | default('sin respuesta') }}). No es la clave: es que
+      no se llegó a preguntar. Mira el reenvío y la dirección de gestión del invitado.
+
 - name: "RouterOS · sin la clave del secreto no se entra: se para"
   ansible.builtin.assert:
     that: ros_login_ok.status == 200
