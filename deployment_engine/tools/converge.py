@@ -948,6 +948,20 @@ def _en_mis_espacios(red, espacios: list) -> bool:
     return any(red.subnet_of(ipaddress.ip_network(e, strict=False)) for e in espacios or [])
 
 
+def _salto(entrada: dict) -> str:
+    """El salto de una entrada tal y como lo nombra `ip route del`.
+
+    El mismo salto con otra métrica son dos entradas distintas de la tabla, así que hay
+    que decir cuál se retira: `ip route del <prefijo>` a secas se lleva la primera que
+    encaje, que puede no ser la que se quiere quitar. La métrica por defecto no se
+    nombra —viene sin ella—, y nombrarla apuntaría a otra entrada.
+    """
+    salto = f"via {entrada['gateway']}"
+    if entrada.get("metric") not in (None, 0):
+        salto += f" metric {entrada['metric']}"
+    return salto
+
+
 def rutas_ops(actuales: list, deseadas: list, espacios: list) -> list[dict]:
     """La diferencia entre las rutas declaradas y las que tiene el invitado de gestión.
 
@@ -976,16 +990,34 @@ def rutas_ops(actuales: list, deseadas: list, espacios: list) -> list[dict]:
     for deseada in deseadas or []:
         red = ipaddress.ip_network(deseada["space"], strict=False)
         declaradas[red] = deseada
-        if any(entrada["gateway"] == deseada["via"] for entrada in ahora.get(red, [])):
+        entradas = ahora.get(red, [])
+        mia = any(entrada["gateway"] == deseada["via"] for entrada in entradas)
+        # Sólo un salto compite con el nuestro: una ruta conectada —sin salto— no es un
+        # salto que retirar, y quitarla se llevaría por delante una interfaz.
+        ajenas = [e for e in entradas if e["gateway"] and e["gateway"] != deseada["via"]]
+        if mia and not ajenas:
             continue
-        # `replace` y no `add`: una ruta que ya existe con otro salto no se puede
-        # añadir, y el salto viejo —un router que ya no está— es justo lo que hay
-        # que corregir.
-        verbo = "replace" if red in ahora else "add"
-        ops.append({
-            "cmd": _sh(f"ip route {verbo} {red} via {deseada['via']}"),
-            "effect": f"ruta {red} -> {deseada['via']} ({deseada['role']})",
-        })
+        # Que la nuestra esté puesta no basta: con otra entrada del mismo prefijo el
+        # tráfico no sale necesariamente por ella —`ip route` se queda con la de menos
+        # métrica y, a métricas iguales, reparte el tráfico entre las dos—. El salto que
+        # sobra es lo que se retira, y retirarlo es lo que deja a la declarada mandando
+        # de verdad. Se retira antes de poner la nuestra: si no, la tabla se queda con
+        # las dos y el problema vuelve a esconderse.
+        for entrada in ajenas:
+            ops.append({
+                "cmd": _sh(f"ip route del {red} {_salto(entrada)}"),
+                "effect": (f"retirar el salto {entrada['gateway']} de {red}: el "
+                           f"laboratorio declara {deseada['via']}"),
+            })
+        if not mia:
+            # `replace` y no `add`: una ruta que ya existe con otro salto no se puede
+            # añadir, y el salto viejo —un router que ya no está— es justo lo que hay
+            # que corregir.
+            verbo = "replace" if red in ahora else "add"
+            ops.append({
+                "cmd": _sh(f"ip route {verbo} {red} via {deseada['via']}"),
+                "effect": f"ruta {red} -> {deseada['via']} ({deseada['role']})",
+            })
 
     for red in sorted(ahora):
         if red in declaradas:

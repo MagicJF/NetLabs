@@ -594,13 +594,13 @@ class LasRutasDelLaboratorio(unittest.TestCase):
         self.assertIn("10.44.0.0/16", ops[0]["effect"])
 
     def test_una_ruta_con_otro_salto_se_corrige(self):
-        # Un router que ya no está: la ruta existe con el salto viejo. Se corrige, no
-        # se añade otra —una ruta que ya existe no se puede añadir, y el salto viejo
-        # es justo lo que hay que quitar—.
+        # Un router que ya no está: la ruta existe con el salto viejo. Se retira el salto
+        # viejo y se pone el declarado —una ruta que ya existe no se puede añadir—.
         actual = [{"dst": "10.44.0.0/16", "gateway": "10.30.0.199"}]
         ops = converge.rutas_ops(actual, self.DESEADAS, self.ESPACIOS)
         self.assertEqual([o["cmd"] for o in ops],
-                         [converge._sh("ip route replace 10.44.0.0/16 via 10.30.0.104")])
+                         [converge._sh("ip route del 10.44.0.0/16 via 10.30.0.199"),
+                          converge._sh("ip route replace 10.44.0.0/16 via 10.30.0.104")])
 
     def test_lo_que_sobra_dentro_de_mis_espacios_se_retira(self):
         actual = [{"dst": "10.44.0.0/16", "gateway": "10.30.0.104"},
@@ -630,6 +630,43 @@ class LasRutasDelLaboratorio(unittest.TestCase):
     def test_una_ruta_declarada_con_otra_metrica_no_se_toca(self):
         # Lo que decide si la ruta declarada está puesta es su salto, no su métrica.
         actual = [{"dst": "10.44.0.0/16", "gateway": "10.30.0.104", "metric": 100}]
+        self.assertEqual(converge.rutas_ops(actual, self.DESEADAS, self.ESPACIOS), [])
+
+    def test_el_salto_viejo_con_menos_metrica_no_deja_la_ruta_por_puesta(self):
+        """Tener nuestro salto en la tabla no es que el tráfico salga por él.
+
+        Demuestra que la ruta no se da por puesta sólo porque exista una entrada con el
+        salto declarado: con el salto viejo y menos métrica por delante, el tráfico sigue
+        saliendo por el router que ya no está, así que se retira el viejo.
+        """
+        actual = [{"dst": "10.44.0.0/16", "gateway": "10.30.0.104", "metric": 200},
+                  {"dst": "10.44.0.0/16", "gateway": "10.30.0.199", "metric": 100}]
+        ops = converge.rutas_ops(actual, self.DESEADAS, self.ESPACIOS)
+        self.assertEqual([o["cmd"] for o in ops],
+                         [converge._sh("ip route del 10.44.0.0/16 via 10.30.0.199 metric 100")])
+
+    def test_a_metricas_iguales_se_retira_el_salto_viejo(self):
+        """Con la misma métrica el tráfico se reparte entre los dos saltos.
+
+        Demuestra que la ruta declarada no se da por puesta cuando el salto viejo tiene
+        su misma métrica: `ip route` monta multipath y la mitad del tráfico sale por un
+        router que el laboratorio ya no declara. La métrica por defecto no se nombra al
+        retirar, porque es como la llama la tabla.
+        """
+        actual = [{"dst": "10.44.0.0/16", "gateway": "10.30.0.104"},
+                  {"dst": "10.44.0.0/16", "gateway": "10.30.0.199"}]
+        ops = converge.rutas_ops(actual, self.DESEADAS, self.ESPACIOS)
+        self.assertEqual([o["cmd"] for o in ops],
+                         [converge._sh("ip route del 10.44.0.0/16 via 10.30.0.199")])
+
+    def test_una_ruta_conectada_no_se_retira(self):
+        """Una ruta sin salto no es un salto viejo.
+
+        Demuestra que la frontera se respeta también aquí: retirar una ruta conectada se
+        llevaría por delante una interfaz, y no es lo que el laboratorio declara.
+        """
+        actual = [{"dst": "10.44.0.0/16", "dev": "eth0", "protocol": "kernel"},
+                  {"dst": "10.44.0.0/16", "gateway": "10.30.0.104", "dev": "eth0"}]
         self.assertEqual(converge.rutas_ops(actual, self.DESEADAS, self.ESPACIOS), [])
 
     def test_destroy_retira_lo_que_declaro_y_solo_eso(self):
