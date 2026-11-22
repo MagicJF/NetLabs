@@ -9,7 +9,8 @@ trabajo del repositorio, en [`AGENTS.md`](AGENTS.md).
 ## Estado
 
 **En curso.** El motor está completo y verificado contra el hipervisor real. El laboratorio de
-referencia `uno` se despliega con `./netlabs apply uno` y se retira con `./netlabs destroy uno`.
+referencia `b_router_dos_puestos` se despliega con `./netlabs apply b_router_dos_puestos` y se retira
+con `./netlabs destroy b_router_dos_puestos`.
 
 ## Las cinco vías de acceso
 
