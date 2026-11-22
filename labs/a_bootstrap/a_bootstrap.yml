@@ -80,7 +80,7 @@ nodes:
           content: |
             #!/usr/bin/env python3
             """Cambia la clave de un usuario de NetXMS sin terminal interactiva."""
-            import os, pty, select, sys, time
+            import os, pty, select, signal, sys, time
 
             usuario = sys.argv[1] if len(sys.argv) > 1 else "admin"
             clave = sys.stdin.readline().rstrip("\n").encode()
@@ -94,29 +94,52 @@ nodes:
             salida = b""
             enviadas = 0
             final = time.time() + 60
+            # El plazo agotado es un fallo, no una espera sin tope. Sin esta bandera,
+            # el `waitpid(pid, 0)` de más abajo bloquearía a `apply` si nxdbmgr no
+            # contesta (AGENTS.md §3.5).
+            agotado = True
             while time.time() < final:
                 listos, _, _ = select.select([fd], [], [], 0.5)
-                if fd in listos:
-                    try:
-                        trozo = os.read(fd, 4096)
-                    except OSError:
-                        break
-                    if not trozo:
-                        break
-                    salida += trozo
-                    texto = salida.lower()
-                    if enviadas == 0 and b"new password" in texto:
-                        os.write(fd, clave + b"\n")
-                        enviadas = 1
-                        time.sleep(0.3)
-                    elif enviadas == 1 and b"confirm password" in texto:
-                        os.write(fd, clave + b"\n")
-                        enviadas = 2
-                        time.sleep(0.3)
-            _, estado = os.waitpid(pid, 0)
+                if fd not in listos:
+                    continue
+                try:
+                    trozo = os.read(fd, 4096)
+                except OSError:
+                    agotado = False
+                    break
+                if not trozo:
+                    agotado = False
+                    break
+                salida += trozo
+                texto = salida.lower()
+                if enviadas == 0 and b"new password" in texto:
+                    os.write(fd, clave + b"\n")
+                    enviadas = 1
+                    time.sleep(0.3)
+                elif enviadas == 1 and b"confirm password" in texto:
+                    os.write(fd, clave + b"\n")
+                    enviadas = 2
+                    time.sleep(0.3)
+            # Al vencer el plazo se termina el hijo y se recoge su salida con una
+            # espera ACOTADA: agotar el tope es un fallo, y el que llama lo dice en
+            # vez de quedarse colgado esperando a un hijo que no muere solo.
+            if agotado:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            estado = None
+            tope = time.time() + 5
+            while estado is None and time.time() < tope:
+                recogido, valor = os.waitpid(pid, os.WNOHANG)
+                if recogido != 0:
+                    estado = valor
+                    break
+                time.sleep(0.05)
             sys.stdout.write(salida.decode("utf-8", "replace"))
-            bien = b"changed successfully" in salida
-            sys.exit(0 if bien and os.WIFEXITED(estado) and os.WEXITSTATUS(estado) == 0 else 1)
+            bien = (not agotado) and b"changed successfully" in salida
+            sys.exit(0 if bien and estado is not None
+                     and os.WIFEXITED(estado) and os.WEXITSTATUS(estado) == 0 else 1)
       # Una base de datos recién creada no tiene esquema y el servidor sale con
       # NOTIMPLEMENTED. `nxdbmgr init` lo crea una sola vez; la marca que deja
       # (`creates`) es lo que hace que el segundo apply no lo repita. El WAR se
