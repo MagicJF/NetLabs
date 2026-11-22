@@ -152,7 +152,10 @@ protección de `main` exige tres cosas y ninguna se puede saltar desde la interf
 
 - **`netlabs check`** — el mismo comando de §5, corriendo en CI (`.github/workflows/verificar.yml`).
 - **`CodeRabbit`** — el check de CodeRabbit (`.coderabbit.yaml`), en español y en perfil `assertive`.
-- **`Greptile Review`** — el check de Greptile (`.greptile/config.json`, `strictness: 3`).
+- **`Greptile Review`** — el check de Greptile (`greptile.json` en la raíz, `strictness: 3`).
+  Va en la raíz y no en un punto-directorio porque es ahí donde Greptile lo busca: movido a
+  `.greptile/`, deja de revisar y su check obligatorio no se pronuncia, con lo que el PR se
+  queda cerrado sin decir por qué.
 
 Y además que **no quede ninguna conversación sin resolver**: los dos revisores comentan en el PR,
 y un comentario abierto bloquea el merge aunque los checks estén en verde.

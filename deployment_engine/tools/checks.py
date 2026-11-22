@@ -77,6 +77,10 @@ def comprobar_yaml() -> list[str]:
 RAIZ_PERMITIDA = {
     "netlabs", "netlabs.yml", "secrets.yml", "README.md", "AGENTS.md",
     ".gitignore", ".yamllint", "deployment_engine", "labs", "docs", "logs",
+    # Greptile busca su configuración en la raíz y en ningún otro sitio: movida a un
+    # punto-directorio deja de revisar, su check obligatorio no se pronuncia y el PR se
+    # queda cerrado sin que nada lo explique. Se queda aquí por eso, no por descuido.
+    "greptile.json",
 }
 MOTOR_PERMITIDO = {"playbooks", "tasks", "filter_plugins", "tools", "tests"}
 

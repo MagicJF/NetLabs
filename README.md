@@ -55,7 +55,7 @@ logs/<lab>/                # informes de ejecución; gitignored
 logs/site/                 # informes del plano de gestión; gitignored
 docs/                      # diseño y decisiones (ADR)
 .coderabbit.yaml           # qué revisa CodeRabbit y qué no deja pasar
-.greptile/config.json      # qué revisa Greptile; las reglas del repositorio, en su idioma
+greptile.json              # qué revisa Greptile; las reglas del repositorio, en su idioma
 .github/workflows/         # lo que se comprueba solo en cada PR: ./netlabs check
 ```
 
@@ -64,7 +64,8 @@ Reglas de la estructura:
 - **La raíz no guarda código.** Sólo el punto de entrada, la configuración del sitio y la
   documentación. Un fichero nuevo en la raíz se justifica o se va a `docs/`. La configuración de
   las herramientas que miran el repositorio desde fuera —revisores, CI— vive en carpetas con punto
-  (`.github/`, `.greptile/`), que no ensucian la raíz y no se mezclan con lo que se despliega.
+  (`.github/`), que no ensucian la raíz y no se mezclan con lo que se despliega. La excepción
+  es `greptile.json`, que se queda en la raíz porque es donde su herramienta lo lee.
 - **`deployment_engine/` no conoce ningún laboratorio.** No lee `labs/`: el laboratorio es un
   parámetro. Un valor concreto de un lab aquí es un bug.
 - **`labs/<lab>/` sólo declara `<lab>.yml` y `<lab>.md`.** Los dos planos van dentro del `.md`
