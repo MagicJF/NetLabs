@@ -9,6 +9,8 @@
 import pathlib
 import re
 import sys
+import ipaddress
+import re
 import unittest
 
 import yaml
@@ -210,20 +212,30 @@ def routers_de_borde(lab):
 
 class TestConvenciones(unittest.TestCase):
     def test_toda_area_escribe_su_red_igual(self):
-        """Misma notación en todas: `10.20.55.x/24`. Sin prefijo, dos cajas no se comparan."""
+        """Misma notación en todas: `10.20.55.0 - 10.20.55.255 (/24)`.
+
+        El bloque se lee de un golpe —de dónde a dónde llega— y el prefijo va al
+        final. Antes se escribía `10.20.55.x/24`: dos áreas con prefijos distintos
+        había que compararlas contando octetos, y el `x` no dice dónde acaba la red.
+        """
         for lab in todos_los_laboratorios():
             areas, _ = cajas_y_equipos(plano.plano(laboratorio(lab), "topologia"))
             for area in areas:
                 if not area["subred"]:
                     continue
                 with self.subTest(laboratorio=lab, area=area["titulo"]):
-                    self.assertRegex(area["subred"], r"^[\dx.]+/\d+$")
-                    red, prefijo = area["subred"].split("/")
-                    octetos = red.split(".")
-                    for i in range(int(prefijo) // 8, 4):
-                        self.assertEqual(
-                            octetos[i], "x",
-                            f"{area['subred']} escribe el octeto de host como dirección")
+                    detalle = f"{area['titulo']}: {area['subred']!r}"
+                    if "/" not in area["subred"]:
+                        # Una sola dirección: sin prefijo, que no dice nada.
+                        ipaddress.ip_address(area["subred"])
+                        continue
+                    m = re.match(r"^(\d+\.\d+\.\d+\.\d+) - (\d+\.\d+\.\d+\.\d+) "
+                                 r"\(/(\d+)\)$", area["subred"])
+                    self.assertIsNotNone(m, f"no es el bloque de una red: {detalle}")
+                    inicio, fin, prefijo = m.group(1), m.group(2), int(m.group(3))
+                    red = ipaddress.ip_network(f"{inicio}/{prefijo}", strict=False)
+                    self.assertEqual(str(red.network_address), inicio, detalle)
+                    self.assertEqual(str(red.broadcast_address), fin, detalle)
 
     def test_el_router_de_borde_cabalga_el_borde_de_su_sede(self):
         """Una pata en la sede y otra en Internet: tiene que intersecar la sede."""

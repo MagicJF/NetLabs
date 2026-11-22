@@ -295,17 +295,22 @@ def _cadena(salidas: list[dict]) -> list[dict]:
     return orden
 
 
+def _direccion(texto: str) -> str:
+    """La dirección de un equipo, sin `/32`: una sola IP no lleva prefijo que leer."""
+    return texto[:-3] if str(texto).endswith("/32") else str(texto)
+
+
 def _direccion_de(nodo: dict, red: str | None = None) -> str:
     """La dirección con la que ese equipo se asoma a esa red (o a la primera)."""
     for pata in (nodo.get("configure") or {}).get("addresses") or []:
         if red is None or pata.get("network") == red:
-            return pata["address"]
+            return _direccion(pata["address"])
     if red is not None and len(nodo.get("networks") or []) > 1:
         # Una dirección suelta no dice a cuál de sus redes se asoma: escribirla en la
         # cabecera de todas sería inventar una puerta donde no la hay.
         return ""
     if nodo.get("address") and nodo["address"] != "dhcp":
-        return nodo["address"]
+        return _direccion(nodo["address"])
     return "dhcp" if nodo.get("address") == "dhcp" else ""
 
 
@@ -330,18 +335,22 @@ PASO_CLIENTES = 84    # aire vertical entre dos clientes de la misma área
 MARGEN_ARRIBA = 16
 
 
-def _mascara(texto: str) -> str:
-    """Cómo se lee una red en un plano: octetos de host en `x` y su prefijo.
+def _bloque(texto: str) -> str:
+    """Cómo se lee una red en un plano: de dónde a dónde llega, y su prefijo.
 
-    Una sola convención para todas las áreas —`10.20.55.x/24`, `10.x.x.x/10`,
-    `203.0.113.x/30`—: con la máscara escrita unas veces y otras no, el que lee el
-    plano no sabe si dos cajas hablan de la misma red o de un prefijo distinto.
+    `10.20.55.0 - 10.20.55.255 (/24)`, `10.20.0.0 - 10.20.255.255 (/16)`,
+    `203.0.113.0 - 203.0.113.3 (/30)`. Una sola convención para todas las áreas y en
+    cualquier prefijo: la primera y la última dirección del bloque se leen de un
+    golpe, y con la máscara al final no hay que contar octetos para saber el tamaño.
+
+    Una sola dirección no es un bloque: `_direccion` la deja sin el `/32`, que no
+    añade nada a quien ya ve la dirección entera.
     """
     red = ipaddress.ip_network(texto, strict=False)
-    octetos = str(red.network_address).split(".")
-    for i in range(red.prefixlen // 8, 4):
-        octetos[i] = "x"
-    return ".".join(octetos) + f"/{red.prefixlen}"
+    if red.prefixlen == 32 or red.num_addresses == 1:
+        return str(red.network_address)
+    return (f"{red.network_address} - {red.broadcast_address} "
+            f"(/{red.prefixlen})")
 
 
 class Region(Caja):
@@ -407,7 +416,7 @@ def _arbol(lab: dict) -> Region:
     por_red: dict[str, Region] = {}
     for net in lab["networks"]:
         region = Region(net["name"], net.get("title") or net["name"],
-                        identity._subred(net["address"]),
+                        _bloque(net["address"]),
                         ipaddress.ip_network(net["address"], strict=False))
         # `shape: cloud` es una decisión de dibujo: la red se pinta como nube porque no
         # es un segmento del cliente, no porque el despliegue sea distinto.
@@ -423,8 +432,8 @@ def _arbol(lab: dict) -> Region:
         # La caja del espacio se rotula como cualquier otra red —con `x` en los
         # octetos de host—, no con el `.0` de la dirección de red, que se lee como si
         # fuera la dirección de un equipo.
-        regiones.append(Region("espacio:" + str(red), _mascara(str(red)),
-                               _mascara(str(red)), red))
+        regiones.append(Region("espacio:" + str(red), _bloque(str(red)),
+                               _bloque(str(red)), red))
 
     for region in regiones:
         candidatos = [p for p in regiones
@@ -446,7 +455,7 @@ def _arbol(lab: dict) -> Region:
                 prueba = ipaddress.ip_network(
                     f"{tierra[0].cidr.network_address}/{prefijo}", strict=False)
                 if all(r.cidr.subnet_of(prueba) for r in tierra):
-                    caja = Region("espacio:" + str(prueba), _mascara(str(prueba)), "", prueba)
+                    caja = Region("espacio:" + str(prueba), _bloque(str(prueba)), "", prueba)
                     caja.hijas = sorted(tierra, key=lambda r: (int(r.cidr.network_address),
                                                               r.prefijo))
                     for hija in caja.hijas:
@@ -586,8 +595,7 @@ def _servicios(lab: dict, por_red: dict[str, Region]) -> None:
             region = por_red.get(srv.get("network") or "")
             if region is None:
                 continue
-            subred = identity._subred(str(region.cidr))
-            rango = _rango_corto(srv.get("pool") or "", subred.replace(".x/", ".0/"))
+            rango = _rango_corto(srv.get("pool") or "", str(region.cidr))
             if rango:
                 region.servicios.append(f"dhcp {rango}")
 
@@ -1076,7 +1084,7 @@ def _plano_anidado(lab: dict) -> str:
          f'font-size="15" font-weight="650" fill="{TINTA}">{_esc(lab["lab"])}</text>'),
         (f'<text x="{ancho / 2:.1f}" y="45" text-anchor="middle" font-family="{FUENTE}" '
          f'font-size="11.5" fill="{TENUE}">'
-         f'{_esc(" · ".join(_mascara(s) for s in lab.get("address_spaces") or []))}</text>'),
+         f'{_esc(" · ".join(_bloque(s) for s in lab.get("address_spaces") or []))}</text>'),
         f'<g transform="translate({dx:.1f},{dy:.1f})">',
         *piezas,
         *textos,
@@ -1266,7 +1274,7 @@ def plano(lab: dict, modo: str = "topologia") -> str:
     cajas: dict[str, Caja] = {}
     for net in lab["networks"]:
         cajas[net["name"]] = Caja(net["name"], net.get("title") or net["name"],
-                                  identity._subred(net["address"]))
+                                  _bloque(net["address"]))
     dentro = [n for n in nodos if profundidad[n["role"]] > 0 and principal.get(n["role"]) in cajas]
     for net in lab["networks"]:
         suyos = [n for n in dentro if principal[n["role"]] == net["name"]]
@@ -1377,8 +1385,9 @@ def plano(lab: dict, modo: str = "topologia") -> str:
             red = srv.get("network")
             if not red or red not in cajas:
                 continue
-            subred = cajas[red].subred
-            rango = _rango_corto(srv.get("pool") or "", subred.replace(".x/", ".0/"))
+            cidr = next((n["address"] for n in (lab.get("networks") or [])
+                         if n.get("name") == red), "")
+            rango = _rango_corto(srv.get("pool") or "", cidr)
             if rango:
                 servicios.setdefault(red, []).append(f"dhcp {rango}")
 
@@ -1488,7 +1497,7 @@ def plano(lab: dict, modo: str = "topologia") -> str:
     alto = max(ys) - miny + 2 * MARGEN + CABECERA
     dx, dy = MARGEN - minx, MARGEN + CABECERA - miny
 
-    espacios = ", ".join(identity._subred(s) for s in lab["address_spaces"])
+    espacios = ", ".join(_bloque(s) for s in lab["address_spaces"])
     # El pie de figura dice lo que un plano no debe dejar adivinar: qué es cada área.
     return "\n".join([
         # Cada cadena va entre paréntesis: dentro de una lista, dos literales pegados
@@ -1546,10 +1555,10 @@ def _etiqueta(cx: float, cy: float, lineas: list[str], clase: str = "equipo",
     return "".join(partes)
 
 
-def _rango_corto(rango: str, subred: str) -> str:
+def _rango_corto(rango: str, cidr: str) -> str:
     """El rango DHCP sin repetir lo que ya dice la subred: `10.44.1.100-199`."""
     desde, _, hasta = str(rango).partition("-")
-    prefijo = subred.rsplit(".", 1)[0] + "."
+    prefijo = str(ipaddress.ip_network(cidr, strict=False).network_address).rsplit(".", 1)[0] + "."
     if hasta.startswith(prefijo) and desde.startswith(prefijo):
         return f"{desde}-{hasta[len(prefijo):]}"
     return str(rango)

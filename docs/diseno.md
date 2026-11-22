@@ -193,7 +193,10 @@ Internet arriba; con una sola red, el router se sienta sobre el techo del área.
 **Lo que no cambia se escribe**: cada equipo lleva su dirección estática bajo el nombre —una por
 pata si tiene varias, como un router con un pie en cada red— y el que sale por DHCP lo dice con
 esa palabra. Cada área, en su cabecera, lleva su nombre, su subred y **el rango que sirve su
-DHCP**. La puerta no se repite en la cabecera: es la dirección del equipo que toca la red y va
+DHCP**. La red se escribe como el bloque que es —`10.20.55.0 - 10.20.55.255 (/24)`,
+`10.20.0.0 - 10.20.255.255 (/16)`—: la primera y la última dirección se leen de un golpe y el
+prefijo va al final, así dos áreas de tamaños distintos se comparan sin contar octetos. Una
+dirección sola va sin `/32`, que no añade nada a quien ya la ve entera. La puerta no se repite en la cabecera: es la dirección del equipo que toca la red y va
 escrita en él, que es su dueño. Un equipo de una sola red vive
 dentro de la suya, y dentro de cada red la profundidad baja: lo que cuelga de la puerta queda
 pegado a ella. **La clase la dice el símbolo**, plano y de línea, sin volumen ni perspectiva: el router

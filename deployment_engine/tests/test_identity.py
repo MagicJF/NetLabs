@@ -536,7 +536,7 @@ class Documentacion(unittest.TestCase):
         for nodo in lab["nodes"]:
             self.assertIn(f">{nodo["role"]}<", topologia + cableado)
         for net in lab["networks"]:
-            self.assertIn(identity._subred(net["address"]), topologia)
+            self.assertIn(plano._bloque(net["address"]), topologia)
             self.assertIn(f">{net["name"]}<", topologia)
 
         # La topología dibuja la jerarquía: la pata del equipo que cruza de un área a
