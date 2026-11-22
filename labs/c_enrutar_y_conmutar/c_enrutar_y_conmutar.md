@@ -50,9 +50,9 @@ flowchart LR
 
 | role | type | stage | interfaces | address | resources |
 | --- | --- | --- | --- | --- | --- |
-| `rte1` | router | 1 | `lan` | management (derived) | cores=1, disk=1, memory=256 |
-| `swa1` | switch | 2 | `lan`, `lan`, `lan` | management (derived) | cores=1, disk=1, memory=256 |
-| `swc1` | switch | 2 | `lan`, `lan` | management (derived) | cores=1, disk=1, memory=256 |
+| `rte1` | router | 1 | `lan` | management (derived) | cores=2, disk=1, memory=512 |
+| `swa1` | switch | 2 | `lan`, `lan`, `lan` | management (derived) | cores=2, disk=1, memory=512 |
+| `swc1` | switch | 2 | `lan`, `lan` | management (derived) | cores=2, disk=1, memory=512 |
 | `wsp1` | workstation | 3 | `lan` | from router (DHCP) | cores=1, disk=2, memory=256 |
 | `wsp2` | workstation | 3 | `lan` | from router (DHCP) | cores=1, disk=2, memory=256 |
 

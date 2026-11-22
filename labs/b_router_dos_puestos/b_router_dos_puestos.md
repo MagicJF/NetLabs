@@ -45,7 +45,7 @@ flowchart LR
 
 | role | type | stage | interfaces | address | resources |
 | --- | --- | --- | --- | --- | --- |
-| `rte1` | router | 1 | `lan1`, `lan2` | management (derived) | cores=1, disk=1, memory=256 |
+| `rte1` | router | 1 | `lan1`, `lan2` | management (derived) | cores=2, disk=1, memory=512 |
 | `wsp1` | workstation | 2 | `lan1` | from router (DHCP) | cores=1, disk=2, memory=256 |
 | `wsp2` | workstation | 2 | `lan2` | from router (DHCP) | cores=1, disk=2, memory=256 |
 

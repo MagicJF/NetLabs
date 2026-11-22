@@ -24,6 +24,11 @@ def _world(resources, networks, pools):
             "type": "lxc" if item.get("type") == "lxc" else "qemu",
             "pool": item.get("pool") or "",
             "status": item.get("status"),
+            # Los recursos que el invitado tiene de verdad: `/cluster/resources` los trae
+            # (cores y memoria), así que el plan puede decir si la declaración pide otra
+            # cosa sin una llamada más por invitado.
+            "cores": item.get("maxcpu"),
+            "memory_bytes": item.get("maxmem"),
         }
         for item in resources
         if item.get("type") in ("qemu", "lxc") and item.get("vmid") is not None

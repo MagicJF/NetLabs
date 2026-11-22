@@ -30,7 +30,7 @@ nodes:
   - role: rte1
     type: router
     stage: 1
-    resources: {cores: 1, memory: 256, disk: 1}
+    resources: {cores: 2, memory: 512, disk: 1}
     networks: [lan]
     address: 10.46.1.1/24
     configure:
@@ -50,7 +50,7 @@ nodes:
     type: switch
     stage: 2
     after: [rte1]
-    resources: {cores: 1, memory: 256, disk: 1}
+    resources: {cores: 2, memory: 512, disk: 1}
     networks: [lan, lan]
     configure:
       users:
@@ -61,7 +61,7 @@ nodes:
     type: switch
     stage: 2
     after: [swc1]
-    resources: {cores: 1, memory: 256, disk: 1}
+    resources: {cores: 2, memory: 512, disk: 1}
     networks: [lan, lan, lan]
     configure:
       users:

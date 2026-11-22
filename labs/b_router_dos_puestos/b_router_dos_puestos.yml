@@ -31,7 +31,7 @@ nodes:
   - role: rte1                    # el nombre del equipo es el contrato: así se le cita
     type: router                  # dos letras de tipo, una de función y el ordinal
     stage: 1
-    resources: {cores: 1, memory: 256, disk: 1}
+    resources: {cores: 2, memory: 512, disk: 1}
     networks: [lan1, lan2]        # puerto 1 = lan1, puerto 2 = lan2; la gestión va después
     address: 10.44.1.1/24         # la dirección de su primera pata de laboratorio
     configure:

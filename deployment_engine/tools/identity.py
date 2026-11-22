@@ -1124,6 +1124,21 @@ def _check_hot_changes(built: dict, existing: dict) -> None:
             f"el invitado existente se llama {existing['name']!r} y la declaración pide "
             f"{built['name']!r}: el nombre no se cambia en caliente"
         )
+    # Los recursos tampoco. Sin esta comprobación el segundo `apply` diría que no hay nada
+    # que hacer con un equipo al que le faltan cores, que es la mentira que este fichero
+    # evita: si la declaración pide otros, hay que rehacer el invitado y se dice.
+    if existing.get("cores") is not None and int(existing["cores"]) != built["cores"]:
+        raise LabError(
+            f"el invitado {built['name']!r} tiene {existing['cores']} core(s) y la declaración "
+            f"pide {built['cores']}: los recursos no se cambian en caliente, hace falta destroy"
+        )
+    memoria_viva = existing.get("memory_bytes")
+    if memoria_viva and int(memoria_viva) != int(built["memory"]) * 1024 * 1024:
+        raise LabError(
+            f"el invitado {built['name']!r} tiene {int(memoria_viva) // (1024 * 1024)} MB y la "
+            f"declaración pide {built['memory']} MB: los recursos no se cambian en caliente, "
+            "hace falta destroy"
+        )
 
 
 def _check_foreign_spaces(world: dict, lab: dict, env: dict) -> None:

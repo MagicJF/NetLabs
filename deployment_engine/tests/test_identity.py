@@ -172,6 +172,19 @@ class ElPlan(unittest.TestCase):
                 self.assertIsNone(node["mgmt_address"])
                 self.assertTrue(all(i["network"] is not None for i in node["interfaces"]))
 
+    def test_rechaza_cambiar_los_recursos_de_un_invitado_vivo(self):
+        # Los recursos no se cambian en caliente. Sin esta comprobación, subir los cores en
+        # la declaración dejaría al invitado con los viejos y el plan diría que no hay nada
+        # que hacer: la mentira que este fichero evita.
+        vivos = [{"vmid": 210, "name": "rte1", "type": "qemu", "pool": "b_router_dos_puestos",
+                  "status": "running", "cores": 1, "memory_bytes": 256 * 1024 * 1024}]
+        with self.assertRaisesRegex(identity.LabError, "core"):
+            identity.plan(mundo(guests=vivos), laboratorio(), entorno())
+        # Y con los cores bien y la memoria corta, lo dice por la memoria.
+        vivos[0]["cores"] = 2
+        with self.assertRaisesRegex(identity.LabError, "256 MB"):
+            identity.plan(mundo(guests=vivos), laboratorio(), entorno())
+
     def test_un_equipo_se_llama_igual_en_el_plan_y_en_sus_cables(self):
         # El nombre del equipo es el rol declarado: el mismo en el invitado, en su
         # descripción y en la punta de cada cable que lo toca. Uno, no tres.
