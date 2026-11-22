@@ -141,6 +141,19 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
     configure = node.get("configure") or {}
     if node.get("type") == "switch":
         ops += _switch_ops(node, current)
+
+    # El nombre del equipo lo pone el motor desde el rol declarado: no es un área que
+    # el laboratorio repita, porque una segunda verdad acaba contradiciendo a la
+    # primera. El equipo se llama igual en su identidad, en su hostname y en sus cables.
+    # Va antes del corte de abajo: un equipo sin áreas declaradas —un switch con
+    # `configure: {}`— sigue teniendo nombre, y reconciliarlo no depende de que declare
+    # nada. Lo que sí queda condicionado a su área es cada configuración de más abajo.
+    actual = (current.get("identity") or {}).get("name")
+    if actual != node["name"]:
+        ops.append({"method": "POST", "path": "/rest/system/identity/set",
+                    "body": {"name": node["name"]},
+                    "effect": f"identidad del router -> {node['name']}"})
+
     if not configure:
         return ops
 
@@ -148,15 +161,6 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
     if area_snmp is not None:
         ops += _snmp_ops(current.get("snmp") or {}, current.get("snmp_community") or [],
                          area_snmp, secrets, mgmt_cidr)
-
-    # El nombre del equipo lo pone el motor desde el rol declarado: no es un área que
-    # el laboratorio repita, porque una segunda verdad acaba contradiciendo a la
-    # primera. El equipo se llama igual en su identidad, en su hostname y en sus cables.
-    actual = (current.get("identity") or {}).get("name")
-    if actual != node["name"]:
-        ops.append({"method": "POST", "path": "/rest/system/identity/set",
-                    "body": {"name": node["name"]},
-                    "effect": f"identidad del router -> {node['name']}"})
 
     if "services" in configure:
         servicios = {s.get("name"): s for s in current.get("services") or []}
@@ -210,12 +214,13 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
     if not mgmt_cidr:
         raise LabError("falta la red de gestión para restringir la comunidad SNMP")
 
+    # El encendido va al final, no al principio: mientras la comunidad siga abierta a
+    # `::/0`, encender el servicio lo deja expuesto. El bucle de escritura de `ros.yml`
+    # ejecuta estas llamadas en orden y para en la primera que falla —y con ella el
+    # play—, así que una restricción que no se aplica deja el servicio **apagado**, que
+    # es el fallo inocuo. Encender primero era exponerlo y confiar en que el PATCH
+    # posterior llegara: el contrato del área exige el acceso sólo desde la red de gestión.
     ops: list[dict] = []
-    if not encendido_ahora:
-        ops.append({"method": "POST", "path": "/rest/snmp/set",
-                    "body": {"enabled": "yes"},
-                    "effect": "SNMP encendido"})
-
     propia = next((c for c in comunidades if c.get("name") == comunidad), None)
     # La comunidad del laboratorio es v2c, y en RouterOS el campo que lo decide es
     # `security`: con `none` el equipo atiende peticiones v1/v2c con esa comunidad. Los
@@ -229,6 +234,12 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
                     "effect": f"comunidad SNMP de sólo lectura (v2c), desde {mgmt_cidr}"})
     else:
         cambios: dict = {}
+        # Una comunidad declarada que quedó apagada —una rotación, o alguien que la
+        # apagó— no responde aunque sus permisos ya coincidan: se vuelve a encender.
+        # La rama de las demás comunidades sí respeta una apagada a mano; la propia es
+        # la que el laboratorio declara, y declararla es quererla viva.
+        if str(propia.get("disabled", "")).lower() in ("true", "yes"):
+            cambios["disabled"] = "no"
         if propia.get("addresses") != mgmt_cidr:
             cambios["addresses"] = mgmt_cidr
         if str(propia.get("read-access", "")).lower() not in ("true", "yes"):
@@ -272,8 +283,25 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
         if cambios:
             ops.append({"method": "PATCH", "path": f"/rest/snmp/community/{otra['.id']}",
                         "body": cambios,
-                        "effect": f"comunidad SNMP {otra.get('name')!r} -> {mgmt_cidr} "
+                        # Por su id interno, no por su nombre: el nombre de una comunidad
+                        # es su valor secreto, y `ros.yml` imprime el `effect` antes de
+                        # escribir. Un valor renombrado en el diagnóstico es un secreto
+                        # en el informe (la declaración nombra el secreto, no lo escribe).
+                        "effect": f"acotar la comunidad SNMP {otra['.id']} -> {mgmt_cidr} "
                                   "(v2c, sólo lectura)"})
+
+    # Sólo ahora, con las comunidades ya acotadas: mientras la comunidad siga abierta a
+    # `::/0`, encender el servicio lo deja expuesto. Va MARCADO para que `ros.yml` lo
+    # ejecute en un paso propio, después de que el anterior haya terminado entero —una
+    # llamada que falla dentro del mismo bucle NO impide que Ansible siga con los
+    # elementos siguientes (medido: recorre todos y falla al final), así que el orden
+    # dentro de la lista no bastaba—. El contrato del área exige acceso sólo desde la
+    # red de gestión, y si una restricción falla el servicio queda apagado.
+    if not encendido_ahora:
+        ops.append({"method": "POST", "path": "/rest/snmp/set",
+                    "body": {"enabled": "yes"},
+                    "tras_restricciones": True,
+                    "effect": "SNMP encendido, con la comunidad ya acotada a la gestión"})
     return ops
 
 
@@ -476,6 +504,11 @@ def _user_ops(declarados: list, actuales: list, routeros_clave: str) -> list[dic
 # Interior Linux: identidad y servicios, sin inventar vocabulario
 # ---------------------------------------------------------------------------
 
+# Dónde deja el motor las marcas que no caben en el fichero declarado: que un
+# repositorio ya actualizó su índice y que una unidad ya releyó su configuración.
+# Fuera de las rutas que el laboratorio declara, para no pisar lo suyo.
+MARCA_DIR = "/var/lib/netlabs"
+
 LINUX_STATE_SCRIPT = """\
 echo "HOST:$(hostname)"
 for p in {packages}; do
@@ -489,9 +522,15 @@ for s in {services}; do
   echo "SVC:$s:$(systemctl is-active "$s" 2>/dev/null || true)"
   echo "SVC_ENABLED:$s:$(systemctl is-enabled "$s" 2>/dev/null || true)"
 done
-for f in /etc/apt/sources.list.d/*.list; do
-  [ -e "$f" ] || continue
-  echo "REPO:$(basename "$f" .list):$(base64 -w0 < "$f")"
+for r in {repos}; do
+  f="/etc/apt/sources.list.d/$r.list"
+  if [ -f "$f" ]; then
+    echo "REPO:$r:$(base64 -w0 < "$f")"
+  else
+    echo "REPO:$r:-"
+  fi
+  m="{reload_dir}/apt/$r.ok"
+  if [ -f "$m" ]; then echo "REPO_OK:$r:$(cat "$m")"; else echo "REPO_OK:$r:-"; fi
 done
 for f in {files}; do
   if [ -f "$f" ]; then
@@ -507,28 +546,65 @@ done
 for s in {stamps}; do
   if [ -f "$s" ]; then echo "STAMP:$s:$(cat "$s")"; else echo "STAMP:$s:-"; fi
 done
+for f in {reloads}; do
+  m="{reload_dir}/reload/$(printf '%s' "$f" | sha256sum | cut -d' ' -f1).ok"
+  if [ -f "$m" ]; then echo "RELOAD:$f:$(cat "$m")"; else echo "RELOAD:$f:-"; fi
+done
 true
 """
+
+
+def _marca_repo(nombre: str) -> str:
+    """Dónde queda registrado que un repositorio declarado ya actualizó su índice.
+
+    Escribir el `.list` y actualizar el índice son dos hechos distintos, y sólo el
+    segundo hace que un paquete nuevo sea instalable. La marca guarda la huella de
+    la línea declarada: si cambia el repositorio, la marca vieja no vale y se
+    vuelve a actualizar.
+    """
+    return f"{MARCA_DIR}/apt/{nombre}.ok"
+
+
+def _marca_recarga(ruta: str) -> str:
+    """Dónde queda registrado que una unidad ya releyó la configuración de un fichero.
+
+    La ruta se resume a su huella porque puede llevar `/`; la marca no necesita ser
+    legible, sólo distinguir un fichero de otro.
+    """
+    return f"{MARCA_DIR}/reload/{hashlib.sha256(ruta.encode('utf-8')).hexdigest()}.ok"
 
 
 def linux_probe(node: dict) -> str:
     """El sondeo que se ejecuta por SSH para leer el interior de un Linux.
 
-    Pregunta sólo por lo declarado: los paquetes que el nodo pide y los servicios
-    que toca. Un paquete que no se declara no se consulta, porque el motor no
-    tiene por qué saber qué hay dentro de un huésped que no es suyo.
+    Pregunta sólo por lo declarado: los paquetes que el nodo pide, los servicios
+    que toca y las fuentes APT que declara. Un paquete que no se declara no se
+    consulta, y una fuente que el laboratorio no declara tampoco: leer las demás
+    sería sacar del huésped lo que no es del motor —una fuente con credenciales en
+    la URL viaja en base64, que no la esconde—, y además `HOST:` ya lee el nombre
+    del huésped, que sí hace falta para su identidad.
+
+    Todo lo que se interpola va entrecomillado con `shlex.quote`: una ruta con
+    espacios, sin comillas, se parte en dos palabras y el sondeo no la encuentra —
+    el estado no tendría su clave, y cada apply volvería a escribir el fichero, a
+    ejecutar el comando y a aplicar la credencial, porque nada de eso coincidiría.
     """
     configure = node.get("configure") or {}
     paquetes = " ".join(configure.get("packages") or [])
     servicios = " ".join(sorted((configure.get("services") or {}).keys()))
-    ficheros = " ".join(f["path"] for f in configure.get("files") or [])
-    comandos = " ".join(c["creates"] for c in configure.get("commands") or [] if "creates" in c)
+    ficheros = " ".join(shlex.quote(f["path"]) for f in configure.get("files") or [])
+    comandos = " ".join(shlex.quote(c["creates"])
+                        for c in configure.get("commands") or [] if "creates" in c)
     # Una marca de credencial guarda la huella de la clave, nunca la clave: así el
     # sondeo puede comparar sin que el secreto salga del fichero de secretos.
-    marcas = " ".join(c["stamp"] for c in configure.get("commands") or [] if "stamp" in c)
+    marcas = " ".join(shlex.quote(c["stamp"])
+                      for c in configure.get("commands") or [] if "stamp" in c)
+    repos = " ".join(shlex.quote(r["name"]) for r in configure.get("repositories") or [])
+    recargas = " ".join(shlex.quote(f["path"])
+                        for f in configure.get("files") or [] if f.get("restart"))
     return LINUX_STATE_SCRIPT.format(
         packages=paquetes, services=servicios, files=ficheros, commands=comandos,
-        stamps=marcas,
+        stamps=marcas, repos=repos, reloads=recargas, reload_dir=MARCA_DIR,
     )
 
 
@@ -536,14 +612,15 @@ def linux_state(text: str) -> dict:
     """El estado de un interior Linux, leído de la salida del sondeo.
 
     El sondeo es un script `sh` que el motor ejecuta por SSH y que imprime una
-    línea por hecho: `HOST:`, `PKG:`, `SVC:` y `REPO:`. Se parsea aquí, en Python
-    puro, para que la comparación se pruebe sin hipervisor.
+    línea por hecho: `HOST:`, `PKG:`, `SVC:`, `REPO:`, `REPO_OK:`, `RELOAD:` y las
+    demás. Se parsea aquí, en Python puro, para que la comparación se pruebe sin
+    hipervisor.
     """
     import base64
 
     state = {"hostname": "", "packages": {}, "services": {}, "enabled": {},
-             "repositories": {}, "files": {}, "modes": {}, "commands": {},
-             "stamps": {}}
+             "repositories": {}, "repos_ok": {}, "files": {}, "modes": {},
+             "commands": {}, "stamps": {}, "reloads": {}}
     for linea in (text or "").splitlines():
         if linea.startswith("HOST:"):
             state["hostname"] = linea[5:].strip()
@@ -556,6 +633,9 @@ def linux_state(text: str) -> dict:
         elif linea.startswith("SVC:"):
             _, nombre, valor = linea.split(":", 2)
             state["services"][nombre] = valor.strip()
+        elif linea.startswith("REPO_OK:"):
+            _, nombre, valor = linea.split(":", 2)
+            state["repos_ok"][nombre] = valor.strip()
         elif linea.startswith("REPO:"):
             _, nombre, valor = linea.split(":", 2)
             try:
@@ -580,6 +660,10 @@ def linux_state(text: str) -> dict:
             resto = linea[6:]
             ruta, _, huella = resto.rpartition(":")
             state["stamps"][ruta] = huella.strip()
+        elif linea.startswith("RELOAD:"):
+            resto = linea[7:]
+            ruta, _, huella = resto.rpartition(":")
+            state["reloads"][ruta] = huella.strip()
     return state
 
 
@@ -590,7 +674,16 @@ def _repo_line(repo: dict) -> str:
 
 
 def _repo_script(repo: dict) -> str:
-    """El script que deja el repositorio puesto. Sólo se ejecuta si difiere."""
+    """El script que deja el repositorio puesto *y* su índice actualizado.
+
+    Las dos cosas son inseparables en un solo script, pero se comprueban por
+    separado: la marca de índice completado se escribe al final y sólo si todo lo
+    anterior salió bien (`set -e`), así que el sondeo puede distinguir un `.list`
+    bien escrito de un `apt-get update` terminado. Sin esa distinción, un `update`
+    que falló tras escribir el `.list` quedaba invisible para siempre —el fichero
+    ya coincidía— y un paquete que sólo está en el índice nuevo no se instalaba
+    nunca, sin que nada lo dijera.
+    """
     lineas = [
         "set -e",
         "install -d /etc/apt/keyrings",
@@ -608,6 +701,11 @@ def _repo_script(repo: dict) -> str:
         f"/etc/apt/sources.list.d/{repo['name']}.list"
     )
     lineas.append("apt-get update -qq")
+    marca = _marca_repo(repo["name"])
+    lineas.append(f"install -d {shlex.quote(os.path.dirname(marca))}")
+    lineas.append(
+        f"printf '%s' {shlex.quote(_sha256(_repo_line(repo)))} > {shlex.quote(marca)}"
+    )
     return "\n".join(lineas)
 
 
@@ -708,11 +806,19 @@ def linux_ops(node: dict, current: dict, credenciales: dict | None = None) -> li
     # puede instalar antes de que el repo esté puesto.
     for repo in configure.get("repositories") or []:
         esperado = _repo_line(repo) + "\n"
-        if (repos_ahora.get(repo["name"]) or "").strip() != esperado.strip():
-            ops.append({
-                "cmd": _sh(_repo_script(repo)),
-                "effect": f"repositorio {repo['name']} -> {repo['url']} {repo['suite']}",
-            })
+        puesto = (repos_ahora.get(repo["name"]) or "").strip() == esperado.strip()
+        # El fichero bien escrito no basta: sin el índice actualizado, un paquete que
+        # sólo vive en este repositorio no existe para `apt-get install`. Se reintenta
+        # mientras el `.list` no coincida **o** la marca de índice completado no esté,
+        # y el script entero se vuelve a ejecutar (es idempotente) porque un `update`
+        # que falló dejó el `.list` ya correcto.
+        actualizado = (current.get("repos_ok") or {}).get(repo["name"]) == _sha256(_repo_line(repo))
+        if puesto and actualizado:
+            continue
+        ops.append({
+            "cmd": _sh(_repo_script(repo)),
+            "effect": f"repositorio {repo['name']} -> {repo['url']} {repo['suite']}",
+        })
 
     faltan = [p for p in configure.get("packages") or [] if not paquetes_ahora.get(p)]
     if faltan:
@@ -728,25 +834,40 @@ def linux_ops(node: dict, current: dict, credenciales: dict | None = None) -> li
     # configuración que aún no está escrita falla y se queda en bucle de reinicio.
     for fichero in configure.get("files") or []:
         esperado = _sha256(fichero["content"])
-        if ((current.get("files") or {}).get(fichero["path"]) == esperado
-                and _modo_igual(fichero, current)):
-            continue
-        ops.append({
-            "cmd": _sh(_file_script(fichero)),
-            "effect": f"fichero {fichero['path']}",
-        })
-        # Un fichero que **es** la configuración de un servicio no se nota hasta que el
-        # servicio lo vuelve a leer. `try-restart` y no `restart`: en el primer apply el
-        # servicio puede no estar en pie todavía (su base de datos se inicializa más
-        # abajo, en los comandos), y `try-restart` sobre algo que no corre no arranca
-        # nada —los servicios se convergen al final— mientras que sobre lo que corre sí
-        # relee. Medido: sale 0 si la unidad existe y 5 si no existe, así que una errata
-        # en el nombre se dice en vez de pasar por buena.
-        if fichero.get("restart"):
+        coincide = ((current.get("files") or {}).get(fichero["path"]) == esperado
+                    and _modo_igual(fichero, current))
+        if not coincide:
             ops.append({
-                "cmd": _sh(f"systemctl try-restart {shlex.quote(fichero['restart'])}"),
-                "effect": f"releer la configuración de {fichero['restart']}: cambió {fichero['path']}",
+                "cmd": _sh(_file_script(fichero)),
+                "effect": f"fichero {fichero['path']}",
             })
+        if not fichero.get("restart"):
+            continue
+        # Un fichero que **es** la configuración de un servicio no se nota hasta que el
+        # servicio lo vuelve a leer, y haberlo escrito no es que se haya releído: si la
+        # conexión se cortó antes de `try-restart`, el fichero ya coincide en la pasada
+        # siguiente y la unidad se queda con la configuración vieja para siempre. La
+        # recarga completada se registra en su propia marca y se reintenta hasta que
+        # esté —y la segunda pasada, entonces, no escribe nada—.
+        # `try-restart` y no `restart`: en el primer apply el servicio puede no estar en
+        # pie todavía (su base de datos se inicializa más abajo, en los comandos), y
+        # `try-restart` sobre algo que no corre no arranca nada —los servicios se
+        # convergen al final— mientras que sobre lo que corre sí relee. Medido: sale 0 si
+        # la unidad existe y 5 si no existe, así que una errata en el nombre se dice en
+        # vez de pasar por buena.
+        if coincide and (current.get("reloads") or {}).get(fichero["path"]) == esperado:
+            continue
+        marca = _marca_recarga(fichero["path"])
+        recarga = (f"systemctl try-restart {shlex.quote(fichero['restart'])} && "
+                   f"install -d {shlex.quote(os.path.dirname(marca))} && "
+                   f"printf '%s' {shlex.quote(esperado)} > {shlex.quote(marca)}")
+        ops.append({
+            "cmd": _sh(recarga),
+            "effect": (f"releer la configuración de {fichero['restart']}: cambió "
+                       f"{fichero['path']}" if not coincide
+                       else f"releer la configuración de {fichero['restart']} "
+                            "(quedó pendiente de la pasada anterior)"),
+        })
 
     # Los comandos con `creates` son el trabajo de una sola vez (inicializar una
     # base de datos, desplegar un WAR): se ejecutan si su marca no existe y nunca
@@ -844,13 +965,18 @@ def rutas_ops(actuales: list, deseadas: list, espacios: list) -> list[dict]:
         red = ipaddress.ip_network(destino, strict=False)
         if not _en_mis_espacios(red, espacios):
             continue
-        ahora[red] = ruta.get("gateway")
+        # Una lista, no un valor: dos rutas al mismo prefijo con métricas distintas son
+        # dos entradas de la tabla, y quedarse con una dejaba la otra sin retirar —el
+        # `del` se emitía una sola vez y la sobrante se quedaba dentro del espacio para
+        # siempre—. La métrica es lo que las distingue, así que se conserva.
+        ahora.setdefault(red, []).append({"gateway": ruta.get("gateway"),
+                                          "metric": ruta.get("metric")})
 
     declaradas = {}
     for deseada in deseadas or []:
         red = ipaddress.ip_network(deseada["space"], strict=False)
         declaradas[red] = deseada
-        if ahora.get(red) == deseada["via"]:
+        if any(entrada["gateway"] == deseada["via"] for entrada in ahora.get(red, [])):
             continue
         # `replace` y no `add`: una ruta que ya existe con otro salto no se puede
         # añadir, y el salto viejo —un router que ya no está— es justo lo que hay
@@ -864,10 +990,13 @@ def rutas_ops(actuales: list, deseadas: list, espacios: list) -> list[dict]:
     for red in sorted(ahora):
         if red in declaradas:
             continue
-        ops.append({
-            "cmd": _sh(f"ip route del {red}"),
-            "effect": f"retirar la ruta {red}: el laboratorio ya no la declara",
-        })
+        # Una retirada por entrada: `ip route del <prefijo>` quita una de las que
+        # encajan en el prefijo, así que hacen falta tantas órdenes como entradas haya.
+        for _entrada in ahora[red]:
+            ops.append({
+                "cmd": _sh(f"ip route del {red}"),
+                "effect": f"retirar la ruta {red}: el laboratorio ya no la declara",
+            })
     return ops
 
 
@@ -906,6 +1035,10 @@ def cruce_cmd(ruta: dict, intentos: int = 15, espera: int = 2) -> list:
 # otras credenciales no se pueda corregir por el API y se diga en voz alta.
 
 NETXMS_PUERTO_SSH = 22
+# El tope de tiempo de cada llamada al API: sin él, un servicio que escucha pero no
+# contesta deja el `curl` colgado y el `apply` con él. Un fallo se dice en vez de
+# esperar a ciegas.
+NETXMS_TOPE = "--connect-timeout 10 --max-time 60"
 # Las rutas del API que el motor usa, en un solo sitio: son la parte del motor que
 # sabe cómo se llama esto por dentro. Cambiar de versión del servicio se toca aquí.
 NETXMS_RUTA_LOGIN = "/login"
@@ -915,8 +1048,14 @@ NETXMS_RUTA_CREAR = "/objects"
 
 
 def netxms_login_cmd(api: str) -> list:
-    """El login: el único que no lleva testigo. El cuerpo entra por la entrada estándar."""
-    return _sh(f"curl -sS -X POST -H 'Content-Type: application/json' -d @- {api}{NETXMS_RUTA_LOGIN}")
+    """El login: el único que no lleva testigo. El cuerpo entra por la entrada estándar.
+
+    Con tope de tiempo: sin él, un servicio que escucha pero no contesta deja el
+    `curl` colgado para siempre y el `apply` con él. Un fallo se dice en vez de
+    esperar a ciegas.
+    """
+    return _sh(f"curl -sS {NETXMS_TOPE} -X POST -H 'Content-Type: application/json' "
+               f"-d @- {api}{NETXMS_RUTA_LOGIN}")
 
 
 def netxms_login_cuerpo(usuario: str, clave: str) -> str:
@@ -938,7 +1077,7 @@ def netxms_cmd(api: str, ruta: str) -> list:
         "IFS= read -r t; exec 3<<EOF\n"
         "Authorization: Bearer $t\n"
         "EOF\n"
-        "curl -sS --fail-with-body -H @/dev/fd/3 "
+        f"curl -sS {NETXMS_TOPE} --fail-with-body -H @/dev/fd/3 "
         f"-H 'Content-Type: application/json' -d @- {api}{ruta}"
     )
 

@@ -131,6 +131,71 @@ class ElInteriorLinux(unittest.TestCase):
         self.assertEqual(estado["files"]["/etc/x.conf"], "abc123")
         self.assertEqual(estado["files"]["/etc/y.conf"], "-")
 
+    def test_el_sondeo_pregunta_solo_por_las_fuentes_declaradas(self):
+        # Mirar `/etc/apt/sources.list.d/*.list` leería del huésped fuentes que no son
+        # del motor: una con credenciales en la URL viaja en base64, que no la esconde.
+        nodo = self.nodo(repositories=[{"name": "netxms", "url": "https://x/y",
+                                        "suite": "stable", "components": "main"}])
+        sondeo = converge.linux_probe(nodo)
+        # Sólo las declaradas: la lista del bucle sale de la declaración.
+        self.assertIn("for r in netxms", sondeo)
+        self.assertIn("/etc/apt/sources.list.d/$r.list", sondeo)
+        self.assertIn("REPO:$r", sondeo)
+        self.assertNotIn("sources.list.d/*.list", sondeo)
+
+    def test_una_ruta_con_espacios_va_entrecomillada_en_el_sondeo(self):
+        # Sin comillas, el shell parte la ruta en dos palabras, el sondeo no la encuentra
+        # y el estado no tiene su clave: cada apply volvería a escribir el fichero.
+        nodo = self.nodo(files=[{"path": "/etc/x y/z.conf", "content": "a=1\n"}])
+        self.assertIn("'/etc/x y/z.conf'", converge.linux_probe(nodo))
+
+    def test_una_fuente_escrita_sin_indice_actualizado_se_reintenta(self):
+        # El `.list` bien escrito no basta: sin el `apt-get update` terminado, un paquete
+        # que sólo está en esa fuente no existe para apt. La marca de índice completado es
+        # lo que distingue las dos cosas, y sin ella el reintento no ocurriría nunca.
+        nodo = self.nodo(repositories=[{"name": "netxms", "url": "https://x/y",
+                                        "suite": "stable", "components": "main"}])
+        linea = converge._repo_line(nodo["configure"]["repositories"][0])
+        actual = {"hostname": "netxms", "repositories": {"netxms": linea + "\n"},
+                  "repos_ok": {}}
+        ops = converge.linux_ops(nodo, actual)
+        self.assertEqual(len(ops), 1)
+        self.assertIn("apt-get update", ops[0]["cmd"][2])
+        self.assertIn(converge._marca_repo("netxms"), ops[0]["cmd"][2])
+
+    def test_una_fuente_escrita_y_con_el_indice_al_dia_no_se_toca(self):
+        nodo = self.nodo(repositories=[{"name": "netxms", "url": "https://x/y",
+                                        "suite": "stable", "components": "main"}])
+        linea = converge._repo_line(nodo["configure"]["repositories"][0])
+        actual = {"hostname": "netxms", "repositories": {"netxms": linea + "\n"},
+                  "repos_ok": {"netxms": converge._sha256(linea)}}
+        self.assertEqual(converge.linux_ops(nodo, actual), [])
+
+    def test_el_estado_lee_la_marca_de_indice_del_repositorio(self):
+        estado = converge.linux_state("REPO:netxms:-\nREPO_OK:netxms:abc\n")
+        self.assertEqual(estado["repos_ok"]["netxms"], "abc")
+
+    def test_una_recarga_pendiente_se_reintenta_aunque_el_fichero_coincida(self):
+        # Haber escrito el fichero no es que el servicio lo haya releído: si la conexión
+        # se cortó antes de `try-restart`, el fichero ya coincide en la pasada siguiente y
+        # la unidad se quedaría con la configuración vieja para siempre.
+        nodo = self.nodo(files=[{"path": "/etc/x.conf", "content": "a=1\n",
+                                 "restart": "x.service"}])
+        huella = converge._sha256("a=1\n")
+        actual = {"hostname": "netxms", "files": {"/etc/x.conf": huella}, "reloads": {}}
+        ops = converge.linux_ops(nodo, actual)
+        self.assertEqual(len(ops), 1)
+        self.assertIn("try-restart x.service", ops[0]["cmd"][2])
+        self.assertIn(converge._marca_recarga("/etc/x.conf"), ops[0]["cmd"][2])
+
+    def test_una_recarga_ya_hecha_no_escribe(self):
+        nodo = self.nodo(files=[{"path": "/etc/x.conf", "content": "a=1\n",
+                                 "restart": "x.service"}])
+        huella = converge._sha256("a=1\n")
+        actual = {"hostname": "netxms", "files": {"/etc/x.conf": huella},
+                  "reloads": {"/etc/x.conf": huella}}
+        self.assertEqual(converge.linux_ops(nodo, actual), [])
+
     def test_los_ficheros_van_antes_que_los_servicios(self):
         nodo = self.nodo(
             files=[{"path": "/etc/x.conf", "content": "a=1\n"}],
@@ -260,26 +325,31 @@ class ElInteriorLinux(unittest.TestCase):
 class LaClaveDelRouter(unittest.TestCase):
     """El laboratorio nombra la credencial; el valor vive en secrets.yml."""
 
-    def nodo(self, password_from="secrets.routeros_clave"):
+    def nodo(self, password_from="secrets.clave_del_router"):
         nodo = router()
         nodo["configure"] = {"users": [{"name": "admin", "password_from": password_from}]}
         return nodo
 
     def test_la_clave_sale_del_nombre_que_declara_el_laboratorio(self):
+        # El alias declarado es distinto del predeterminado del sitio, y su valor también:
+        # si `ros_clave` ignorara `password_from` y tomara siempre `routeros_clave`,
+        # devolvería el del sitio y esta prueba pasaría sin comprobar nada.
         self.assertEqual(
-            converge.ros_clave(self.nodo(), {"routeros_clave": "s3cr3t"}), "s3cr3t"
+            converge.ros_clave(self.nodo(), {"clave_del_router": "del_lab",
+                                             "routeros_clave": "del_sitio"}),
+            "del_lab",
         )
 
     def test_sin_usuarios_declarados_se_usa_la_clave_del_sitio(self):
         self.assertEqual(converge.ros_clave(router(), {"routeros_clave": "s3cr3t"}), "s3cr3t")
 
     def test_un_nombre_que_no_esta_en_secrets_es_un_fallo_con_el_nombre_delante(self):
-        with self.assertRaisesRegex(converge.LabError, "routeros_clave"):
+        with self.assertRaisesRegex(converge.LabError, "clave_del_router"):
             converge.ros_clave(self.nodo(), {"otra_cosa": "x"})
 
     def test_una_clave_vacia_no_se_toma_por_buena(self):
-        with self.assertRaisesRegex(converge.LabError, "routeros_clave"):
-            converge.ros_clave(self.nodo(), {"routeros_clave": ""})
+        with self.assertRaisesRegex(converge.LabError, "clave_del_router"):
+            converge.ros_clave(self.nodo(), {"clave_del_router": ""})
 
 
 class LaObservabilidadDelRouter(unittest.TestCase):
@@ -403,6 +473,47 @@ class LaObservabilidadDelRouter(unittest.TestCase):
         with self.assertRaisesRegex(converge.LabError, "snmp_comunidad"):
             converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave", {}, self.CIDR)
 
+    def test_el_encendido_va_marcado_para_su_propio_paso(self):
+        # Encender antes de acotar deja el servicio expuesto mientras se acota. Y no
+        # basta con ponerlo el último: una llamada que falla dentro del bucle no detiene
+        # los elementos siguientes, así que el encendido llegaría igual con una comunidad
+        # abierta. La marca es lo que `ros.yml` usa para partirlo en dos pasos.
+        ops = converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave",
+                               self.SECRETOS, self.CIDR)
+        self.assertEqual((ops[-1]["method"], ops[-1]["path"]), ("POST", "/rest/snmp/set"))
+        self.assertTrue(ops[-1]["tras_restricciones"])
+        for op in ops[:-1]:
+            self.assertNotIn("tras_restricciones", op)
+
+    def test_el_encendido_solo_sale_cuando_hace_falta(self):
+        # Con SNMP ya encendido no hay marca ninguna: el paso propio del encendido se
+        # queda sin elementos y el segundo apply no escribe.
+        ops = converge.ros_ops(self.nodo(self.AREA), self.actual(enabled="true"),
+                               "clave", self.SECRETOS, self.CIDR)
+        self.assertEqual([o for o in ops if o.get("tras_restricciones")], [])
+
+    def test_el_efecto_de_acotar_una_comunidad_no_lleva_su_nombre(self):
+        # El nombre de una comunidad es su valor secreto y el efecto se imprime antes de
+        # escribir: se nombra por su id interno, que no es secreto.
+        ops = converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave",
+                               self.SECRETOS, self.CIDR)
+        patch = next(o for o in ops if o["method"] == "PATCH")
+        self.assertNotIn("public", patch["effect"])
+        self.assertIn("*0", patch["effect"])
+
+    def test_una_comunidad_declarada_apagada_se_vuelve_a_encender(self):
+        # La propia es la que el laboratorio declara, y declararla es quererla viva: una
+        # rotación, o alguien que la apagó a mano, no la deja fuera para siempre.
+        actual = self.actual(enabled="true", comunidades=[
+            {".id": "*1", "name": "lab-ro", "addresses": self.CIDR,
+             "read-access": "true", "write-access": "false",
+             "authentication-protocol": "MD5", "encryption-protocol": "DES",
+             "security": "none", "disabled": "true"},
+        ])
+        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR)
+        self.assertEqual([(o["method"], o["body"]) for o in ops],
+                         [("PATCH", {"disabled": "no"})])
+
 
 class ElSwitchConmuta(unittest.TestCase):
     """El switch mete sus patas de laboratorio en un puente y deja fuera la de gestión."""
@@ -505,6 +616,21 @@ class LasRutasDelLaboratorio(unittest.TestCase):
                   {"dst": "10.30.0.0/16", "dev": "eth0"},
                   {"dst": "10.46.0.0/16", "gateway": "10.30.0.108"}]
         self.assertEqual(converge.rutas_ops(actual, [], self.ESPACIOS), [])
+
+    def test_dos_rutas_al_mismo_prefijo_se_retiran_las_dos(self):
+        # Dos entradas con métricas distintas son dos rutas distintas: quedarse con una
+        # dejaba la otra dentro del espacio para siempre, porque el `del` se emitía una
+        # sola vez y `ip route del <prefijo>` quita una de las que encajan.
+        actual = [{"dst": "10.44.0.0/16", "gateway": "10.30.0.104", "metric": 100},
+                  {"dst": "10.44.0.0/16", "gateway": "10.30.0.120", "metric": 200}]
+        ops = converge.rutas_ops(actual, [], self.ESPACIOS)
+        self.assertEqual([o["cmd"] for o in ops],
+                         [converge._sh("ip route del 10.44.0.0/16")] * 2)
+
+    def test_una_ruta_declarada_con_otra_metrica_no_se_toca(self):
+        # Lo que decide si la ruta declarada está puesta es su salto, no su métrica.
+        actual = [{"dst": "10.44.0.0/16", "gateway": "10.30.0.104", "metric": 100}]
+        self.assertEqual(converge.rutas_ops(actual, self.DESEADAS, self.ESPACIOS), [])
 
     def test_destroy_retira_lo_que_declaro_y_solo_eso(self):
         actual = [{"dst": "default", "gateway": "10.30.0.1"},
@@ -609,6 +735,13 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertIn("/login", converge.netxms_login_cmd(self.API)[2])
         cuerpo = json.loads(converge.netxms_login_cuerpo("admin", "clave"))
         self.assertEqual(cuerpo, {"username": "admin", "password": "clave"})
+
+    def test_las_llamadas_al_api_llevan_tope_de_tiempo(self):
+        # Un servicio que escucha pero no contesta dejaría el `curl` colgado para siempre
+        # y el `apply` con él: un fallo se dice en vez de esperar a ciegas.
+        self.assertIn("--max-time", converge.netxms_censo_cmd(self.API)[2])
+        self.assertIn("--max-time", converge.netxms_login_cmd(self.API)[2])
+        self.assertIn("--connect-timeout", converge.netxms_login_cmd(self.API)[2])
 
     def test_las_fichas_se_piden_solo_por_los_equipos_de_este_laboratorio(self):
         # La búsqueda devuelve resúmenes sin credenciales: la ficha hay que pedirla, y se

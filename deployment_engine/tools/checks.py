@@ -183,10 +183,19 @@ def comprobar_letras(env) -> list[str]:
     errores = []
     vistos = {}
     for nombre, (ruta, lab) in laboratorios().items():
-        letra = (lab.get("lab") or "")[:1]
+        # El nombre tiene que ser una cadena antes de mirarle la primera letra: un `lab: 4`
+        # o `lab: [a_bootstrap]` es un nombre mal escrito, y tomarlo por una ruta de fichero
+        # o un índice hacía fallar la comprobación consigo misma —una lista no tiene
+        # `[:1]`— en vez de decir el error. Un YAML se escribe a mano y esto no se negocia.
+        valor = lab.get("lab")
+        if not isinstance(valor, str):
+            errores.append(f"{ruta.relative_to(RAIZ)}: el nombre del laboratorio "
+                           f"{valor!r} ({type(valor).__name__}) no es una cadena")
+            continue
+        letra = valor[:1]
         if not re.fullmatch(r"[a-z]", letra):
             errores.append(f"{ruta.relative_to(RAIZ)}: el nombre del laboratorio "
-                           f"{lab.get('lab')!r} no empieza por una letra de la a a la z")
+                           f"{valor!r} no empieza por una letra de la a a la z")
             continue
         if letra in vistos:
             errores.append(
