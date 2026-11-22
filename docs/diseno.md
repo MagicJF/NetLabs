@@ -178,10 +178,12 @@ La región generada lleva además un **plano**, también sacado de la declaraci�
 puerta, y dentro quién cuelga de ella), con un símbolo por equipo y una línea por cable, cada
 una con el puerto de sus dos puntas. Un solo plano: hubo también un dibujo de cableado, hecho
 por un segundo motor plano, que enseñaba los mismos equipos y los mismos puertos con otra
-colocación —dos retratos del mismo dato que no coincidían y hacían dudar de los dos—. Los dibuja `tools/plano.py` y los escribe **dentro
-de la propia página**, como SVG en texto. No hay fichero de imagen: el plano es código generado
-que se revisa en el diff como cualquier otra línea, no se puede quedar viejo por separado y
-`./netlabs docs --check` lo compara con lo que la declaración produce hoy. Mermaid no sirve para
+colocación —dos retratos del mismo dato que no coincidían y hacían dudar de los dos—. Lo dibuja `tools/plano.py` y va en **su propio fichero**, `<lab>-topologia.svg`, al lado de la
+página, que lo menciona como imagen. Incrustado en el `.md` se leía en blanco en los visores que
+no pintan SVG en línea —y hay muchos—, y quien abría el documento creía que el dibujo no existía.
+Como fichero sigue siendo vector y lo enseña cualquiera. Se genera con el mismo comando y
+`./netlabs docs --check` lo compara con lo que la declaración produce hoy: no se puede quedar
+viejo sin que la comprobación lo diga. Mermaid no sirve para
 esto: no sabe dibujar los símbolos de una red (router, switch, cortafuegos, servidor) y sus áreas
 no pueden tocarse, así que un router con pata en dos redes no se puede poner entre ellas.
 

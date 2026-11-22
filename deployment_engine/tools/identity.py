@@ -1537,7 +1537,13 @@ def render_docs(lab: dict, env: dict) -> str:
         # y las mismas direcciones, pero con otra colocación, y quien abría el
         # documento veía dos dibujos que no coincidían. El bueno es este, que ya dibuja
         # un símbolo por equipo y una línea por cable con el puerto de cada punta.
-        lines += ["", "### Topología", "", plano.plano(lab, "topologia"), "",
+        # El plano va como imagen aparte, no incrustado: un `.md` con un `<svg>` dentro
+        # se lee en blanco en cuanto el visor no pinta SVG en línea —y hay muchos que
+        # no—, y el que lo abre cree que el dibujo no existe. Como fichero de imagen lo
+        # enseña cualquiera; el vector sigue siendo vector.
+        nombre = lab["lab"]
+        lines += ["", "### Topología", "",
+                  f"![Plano de topología de {nombre}]({nombre}-topologia.svg)", "",
                   _pie_plano(True)]
     lines += ["", "### Networks", "", "| network | address |", "| --- | --- |"]
     for net in lab["networks"]:

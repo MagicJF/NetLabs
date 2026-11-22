@@ -14,6 +14,7 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import identity  # noqa: E402
+import plano as plano_mod  # noqa: E402
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 
@@ -34,7 +35,19 @@ def escribir(nombre: str, env: dict, comprobar: bool = False) -> int:
     lab = yaml.safe_load(ruta.read_text())
     generado = identity.render_docs(lab, env)
     pagina = ruta.with_suffix(".md")
+    plano = ruta.with_name(f"{nombre}-topologia.svg")
     codigo = 0
+
+    # El plano se escribe tambien como fichero suelto: el `.md` lo menciona como imagen.
+    dibujo = plano_mod.plano(lab, "topologia") if lab.get("networks") else None
+    if dibujo is not None:
+        if comprobar:
+            if not plano.exists() or plano.read_text() != dibujo:
+                print(f"{plano.relative_to(RAIZ)}: el plano no coincide con la declaracion")
+                codigo = 1
+        elif not plano.exists() or plano.read_text() != dibujo:
+            plano.write_text(dibujo)
+            print(f"escrito {plano.relative_to(RAIZ)}")
 
     if not pagina.exists():
         if comprobar:

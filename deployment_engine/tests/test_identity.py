@@ -543,20 +543,24 @@ class Documentacion(unittest.TestCase):
         self.assertEqual(identity.render_docs(laboratorio(), entorno()),
                          identity.render_docs(laboratorio(), entorno()))
 
-    def test_la_pagina_lleva_dentro_los_dos_planos(self):
-        """Los dibujos son SVG en texto dentro de la página, no imágenes ni ficheros.
+    def test_la_pagina_lleva_el_plano_como_imagen_aparte(self):
+        """El plano va en su `.svg`, al lado, y la página lo menciona.
 
-        Al ser texto, el plano no se puede quedar viejo por separado: entra en el mismo
-        diff que la declaración que lo produce y no hay que regenerar nada aparte.
+        Incrustado en el `.md` se lee en blanco en los visores que no pintan SVG en
+        línea, y hay muchos: quien abre el documento cree que el dibujo no existe.
+        Como fichero lo enseña cualquiera, y sigue siendo vector.
         """
-        texto = identity.render_docs(laboratorio(), entorno())
-        self.assertEqual(texto.count("<svg"), 1)
-        self.assertEqual(texto.count("</svg>"), 1)
+        lab = laboratorio()
+        texto = identity.render_docs(lab, entorno())
+        # El plano va como imagen aparte: dentro del `.md` se lee en blanco en los
+        # visores que no pintan SVG en línea, y hay muchos.
+        self.assertEqual(texto.count("<svg"), 0)
+        self.assertIn(f"]({lab['lab']}-topologia.svg)", texto)
         self.assertIn(">Topología<", texto.replace("### Topología", ">Topología<"))
         # Un solo dibujo: dos planos del mismo dato acababan discrepando entre sí.
         self.assertNotIn("Cableado (L2)", texto)
-        # Ni enlaces a una imagen ni bloques de otro lenguaje de dibujo: una sola verdad.
-        self.assertNotIn(".svg)", texto)
+        # Nada de bloques de otro lenguaje de dibujo: una sola verdad, la del motor.
+        self.assertNotIn("```mermaid", texto)
         self.assertNotIn("```", texto)
         self.assertNotIn("mermaid", texto)
 
