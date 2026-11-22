@@ -317,8 +317,8 @@ def plano(lab: dict, modo: str = "topologia") -> str:
         amontonarían—: cada dirección vive en la cabecera del área que abre. En el
         cableado el nombre va solo: los puertos los dice cada punta de su cable.
         """
-        if modo == "cableado":
-            return [nodo["role"]]
+        # Lo que no cambia se escribe en los dos planos: un cableado con los equipos
+        # mudos obliga a saltar al otro dibujo para saber quién es quién por dentro.
         # Lo que no cambia se escribe: una línea por pata con dirección. Un equipo con
         # varias redes lleva una por red, en el orden en que las declara; el que sale
         # por DHCP lo dice con esa palabra, que también es información.
