@@ -114,7 +114,10 @@ class ElPlan(unittest.TestCase):
         bridges = [{"iface": s["bridge"], "comments": s["comment"]}
                    for s in primero["steps"] if s["op"] == "bridge_ensure"]
         plan = identity.plan(mundo(guests=guests, bridges=bridges, pools=[pool]), lab, env)
-        self.assertEqual(plan["steps"], [])
+        # Lo único que queda son las rutas: viven dentro del invitado de gestión, así
+        # que el plan no puede leerlas sin entrar y no puede callarlas —decir "nada
+        # que hacer" con una ruta sin poner sería la mentira que este caso evita—.
+        self.assertEqual([s for s in plan["steps"] if s["op"] != "rutas_converge"], [])
         self.assertEqual([e for e in plan["effects"] if e not in primero["effects"]], [])
 
     def test_plan_es_determinista(self):
@@ -313,6 +316,72 @@ class ElPlanDeControl(unittest.TestCase):
         self.assertEqual(plan["nodes"][0]["networks"], [])
 
 
+class LasRutas(unittest.TestCase):
+    """Una ruta por espacio declarado, con el router del laboratorio como salto.
+
+    Las pone el invitado de gestión —por donde entra el SSH del motor y donde vive
+    lo que observa—: sin ellas el laboratorio se despliega y no se ve.
+    """
+
+    @staticmethod
+    def nodo(role, tipo, address, mgmt, management=True):
+        return {"role": role, "type": tipo, "address": address,
+                "mgmt_address": mgmt, "management": management}
+
+    def test_una_ruta_por_espacio_con_el_router_como_salto(self):
+        lab = {"address_spaces": ["10.44.0.0/16"]}
+        nodes = [self.nodo("edge", "router", "10.44.1.1/24", "10.30.0.104")]
+        self.assertEqual(identity._rutas(lab, nodes),
+                         [{"space": "10.44.0.0/16", "via": "10.30.0.104",
+                           "role": "edge", "prueba": "10.44.1.1"}])
+        # El salto es la dirección de gestión: por la del laboratorio no se llega
+        # desde la red de gestión, que es de donde sale todo lo que observa.
+        self.assertNotEqual(identity._rutas(lab, nodes)[0]["via"], "10.44.1.1")
+
+    def test_el_salto_es_el_primer_router_declarado_dentro_del_espacio(self):
+        lab = {"address_spaces": ["10.44.0.0/16"]}
+        nodes = [self.nodo("nucleo", "switch", None, "10.30.0.109"),
+                 self.nodo("borde", "router", "10.44.9.1/24", "10.30.0.108"),
+                 self.nodo("edge", "router", "10.44.1.1/24", "10.30.0.104")]
+        # Un switch no enruta; entre dos routers decide el orden de la declaración.
+        self.assertEqual(identity._rutas(lab, nodes)[0]["role"], "borde")
+
+    def test_un_router_sin_pata_de_gestion_no_puede_ser_el_salto(self):
+        lab = {"address_spaces": ["10.44.0.0/16"]}
+        nodes = [self.nodo("edge", "router", "10.44.1.1/24", None, management=False)]
+        self.assertEqual(identity._rutas(lab, nodes), [])
+
+    def test_un_espacio_sin_router_no_inventa_salto(self):
+        lab = {"address_spaces": ["10.44.0.0/16", "10.99.0.0/16"]}
+        nodes = [self.nodo("edge", "router", "10.44.1.1/24", "10.30.0.104")]
+        self.assertEqual([r["space"] for r in identity._rutas(lab, nodes)], ["10.44.0.0/16"])
+
+    def test_el_plan_del_laboratorio_lleva_sus_rutas_y_lo_dice(self):
+        plan = identity.plan(mundo(), laboratorio(), entorno())
+        edge = next(n for n in plan["nodes"] if n["role"] == "edge")
+        self.assertEqual(plan["rutas"],
+                         [{"space": "10.44.0.0/16", "via": edge["mgmt_address"],
+                           "role": "edge", "prueba": "10.44.1.1"}])
+        self.assertTrue([e for e in plan["effects"] if "vista desde la gestión" in e])
+        # Las rutas viven dentro del invitado de gestión: el plan no las puede leer
+        # sin entrar, así que las declara como trabajo pendiente.
+        self.assertEqual([s["op"] for s in plan["steps"] if s["op"] == "rutas_converge"],
+                         ["rutas_converge"])
+
+    def test_un_espacio_sin_router_se_dice_en_el_plan(self):
+        lab = laboratorio()
+        lab["address_spaces"].append("10.99.0.0/16")
+        plan = identity.plan(mundo(), lab, entorno())
+        self.assertEqual([r["space"] for r in plan["rutas"]], ["10.44.0.0/16"])
+        self.assertTrue([e for e in plan["effects"]
+                         if "10.99.0.0/16 no tiene ningún router dentro" in e])
+
+    def test_el_plan_de_control_no_tiene_rutas(self):
+        # El invitado de gestión no se observa a sí mismo: no declara espacios.
+        plan = identity.plan(mundo(), laboratorio("00_bootstrap"), entorno())
+        self.assertEqual(plan["rutas"], [])
+
+
 class Documentacion(unittest.TestCase):
     def test_la_documentacion_generada_no_lleva_nada_derivado(self):
         texto = identity.render_docs(laboratorio(), entorno())
@@ -332,6 +401,10 @@ class Documentacion(unittest.TestCase):
         self.assertEqual(texto.count("```mermaid\narchitecture-beta"), 2)
         self.assertNotIn("flowchart", texto)
         self.assertIn("[edge (p1, p2)]", texto)
+        # El diagrama es código dentro de la página: ni imagen enlazada ni fichero aparte.
+        self.assertNotIn("![", texto)
+        self.assertNotIn(".svg", texto)
+        self.assertNotIn(".png", texto)
 
     def test_los_dibujos_salen_enteros_de_la_declaracion(self):
         """Ni un servicio inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""

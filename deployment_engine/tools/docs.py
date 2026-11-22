@@ -34,38 +34,43 @@ def escribir(nombre: str, env: dict, comprobar: bool = False) -> int:
     lab = yaml.safe_load(ruta.read_text())
     generado = identity.render_docs(lab, env)
     pagina = ruta.with_suffix(".md")
+    codigo = 0
+
     if not pagina.exists():
         if comprobar:
             print(f"falta {pagina.relative_to(RAIZ)} (ejecuta `./netlabs docs`)")
-            return 1
-        pagina.write_text(cabecera(nombre) + generado)
-        print(f"creado {pagina.relative_to(RAIZ)}")
-        return 0
-
-    texto = pagina.read_text()
-    if identity.DOC_BEGIN in texto and identity.DOC_END in texto:
-        antes, resto = texto.split(identity.DOC_BEGIN, 1)
-        _, despues = resto.split(identity.DOC_END, 1)
-        # Entre la marca y la prosa va UNA línea en blanco: si se deja lo que hubiera,
-        # cada pasada de `docs` añade una más y la página engorda sin que se note.
-        despues = despues.lstrip("\n")
-        nuevo = antes + generado + ("\n" + despues if despues else "")
+            codigo = 1
+        else:
+            pagina.write_text(cabecera(nombre) + generado)
+            print(f"creado {pagina.relative_to(RAIZ)}")
     else:
-        nuevo = texto.rstrip() + "\n\n" + generado
+        texto = pagina.read_text()
+        if identity.DOC_BEGIN in texto and identity.DOC_END in texto:
+            antes, resto = texto.split(identity.DOC_BEGIN, 1)
+            _, despues = resto.split(identity.DOC_END, 1)
+            # Entre la marca y la prosa va UNA línea en blanco: si se deja lo que hubiera,
+            # cada pasada de `docs` añade una más y la página engorda sin que se note.
+            despues = despues.lstrip("\n")
+            nuevo = antes + generado + ("\n" + despues if despues else "")
+        else:
+            nuevo = texto.rstrip() + "\n\n" + generado
 
-    # La página termina en un solo salto de línea: si no, cada pasada de `docs` deja
-    # una línea en blanco más al final y el fichero crece sin que nadie lo note.
-    nuevo = nuevo.rstrip("\n") + "\n"
+        # La página termina en un solo salto de línea: si no, cada pasada de `docs` deja
+        # una línea en blanco más al final y el fichero crece sin que nadie lo note.
+        nuevo = nuevo.rstrip("\n") + "\n"
 
-    if comprobar:
-        if nuevo != texto:
-            print(f"{pagina.relative_to(RAIZ)}: la tabla no coincide con la declaración")
-            return 1
-        print(f"ok     {pagina.relative_to(RAIZ)}")
-        return 0
-    if nuevo != texto:
-        pagina.write_text(nuevo)
-        print(f"escrito {pagina.relative_to(RAIZ)}")
-    else:
-        print(f"sin cambios {pagina.relative_to(RAIZ)}")
-    return 0
+        if comprobar:
+            if nuevo != texto:
+                print(f"{pagina.relative_to(RAIZ)}: la tabla no coincide con la declaración")
+                codigo = 1
+            else:
+                print(f"ok     {pagina.relative_to(RAIZ)}")
+        elif nuevo != texto:
+            pagina.write_text(nuevo)
+            print(f"escrito {pagina.relative_to(RAIZ)}")
+        else:
+            print(f"sin cambios {pagina.relative_to(RAIZ)}")
+
+    # Los dibujos van dentro de la propia página, como bloques ```mermaid: son código,
+    # no ficheros de imagen que puedan quedarse viejos sin que nadie lo note.
+    return codigo

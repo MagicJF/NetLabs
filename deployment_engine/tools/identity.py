@@ -59,6 +59,10 @@ END_KEYS = {"node", "port"}
 
 ROLE_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
+# El nombre de un laboratorio de topología es su identidad completa: `labNN-<título>`.
+# El número va delante y es consecutivo hasta 99; el prefijo `lab` no es decorativo,
+# es lo que hace que el nombre del pool empiece por letra (Proxmox lo exige).
+LAB_NAME_RE = re.compile(r"^lab(\d{2})-[a-z0-9][a-z0-9-]{0,14}$")
 # Un laboratorio de control es el servicio persistente: se llama por su nombre de
 # siempre (`00_bootstrap`), que puede empezar por cifra y llevar guion bajo. Un
 # laboratorio de topología sigue con el vocabulario de siempre.
@@ -653,6 +657,47 @@ def _reject_stage_cycles(nodes: list) -> None:
 # El plan
 # ---------------------------------------------------------------------------
 
+def _dentro(address, red: ipaddress.IPv4Network | ipaddress.IPv6Network) -> bool:
+    """¿La dirección declarada de una pata cae dentro de ese espacio?
+
+    Un `dhcp` no es una dirección: no sitúa a nadie. Una dirección sin máscara
+    tampoco: la declaración de una pata de laboratorio la lleva.
+    """
+    if not address or address == "dhcp":
+        return False
+    return ipaddress.ip_interface(address).ip in red
+
+
+def _rutas(lab: dict, nodes: list[dict]) -> list[dict]:
+    """Una ruta por espacio declarado, con el router del laboratorio como salto.
+
+    Se deriva de lo declarado: el espacio y la dirección de gestión del primer
+    router declarado que lleva una pata dentro de él (el orden de la declaración
+    decide cuando hay más de uno). Nadie teclea una ruta.
+
+    Un espacio sin ningún router dentro no se puede alcanzar desde la gestión: no
+    se inventa un salto ni se calla — el plan lo dice. Y el salto de prueba es la
+    dirección que ese router tiene dentro del espacio: si no responde desde la
+    gestión, o falta la ruta o el router no deja pasar.
+    """
+    routers = [n for n in nodes if n["type"] == "router" and n.get("management")]
+    rutas = []
+    for espacio in lab.get("address_spaces") or []:
+        red = ipaddress.ip_network(espacio, strict=False)
+        salto = next((r for r in routers if _dentro(r.get("address"), red)), None)
+        if salto is None:
+            continue
+        rutas.append({
+            "space": str(red),
+            "via": salto["mgmt_address"],
+            "role": salto["role"],
+            # La dirección que se sondea para saber que el cruce está abierto: la
+            # primera pata del router dentro del espacio.
+            "prueba": str(ipaddress.ip_interface(salto["address"]).ip),
+        })
+    return rutas
+
+
 def plan(world: dict, lab: dict, env: dict) -> dict:
     """Calcula qué hay que hacer, sin tocar el mundo.
 
@@ -733,6 +778,25 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
             f"{built['name']:<18} vmid {built['vmid']:<5} "
             f"{' '.join(i['label'] for i in built['interfaces'])}"
         )
+
+    # Las rutas hacia las redes del laboratorio: una por espacio declarado, con el
+    # router como salto. Las pone el invitado de gestión —por donde entra el SSH
+    # del motor y donde vive lo que observa—, y sin ellas el laboratorio es un
+    # agujero negro: se despliega y no se ve.
+    rutas = [] if control else _rutas(lab, nodes)
+    for ruta in rutas:
+        effects.append(
+            f"ruta {ruta['space']} -> {ruta['via']} ({ruta['role']}): la red del "
+            "laboratorio, vista desde la gestión"
+        )
+    con_router = {r["space"] for r in rutas}
+    for espacio in lab.get("address_spaces") or []:
+        red = str(ipaddress.ip_network(espacio, strict=False))
+        if red not in con_router:
+            effects.append(
+                f"el espacio {red} no tiene ningún router dentro: desde la gestión "
+                "no hay camino hacia él y no se verá"
+            )
 
     # Un puente es un cable: ni dirección, ni puerta, ni MAC. Sólo su nombre y
     # su marca, para que el motor sepa que es suyo y pueda retirarlo.
@@ -824,6 +888,14 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
                 "repositorios, paquetes y servicios"
             )
 
+    # Las rutas hacia las redes del laboratorio viven dentro del invitado de
+    # gestión, así que el plan no puede leerlas sin entrar y no sabe si hay
+    # diferencia. Como con el interior de un nodo de control, se dice que hay
+    # trabajo por hacer; la idempotencia la sostiene el apply, que escribe sólo la
+    # diferencia que encuentra.
+    if rutas:
+        steps.append({"op": "rutas_converge", "rutas": rutas})
+
     return {
         "lab": name,
         "pool": pool,
@@ -832,6 +904,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         "steps": steps,
         "stages": sorted({n["stage"] for n in nodes}),
         "surplus": [int(g["vmid"]) for g in sobra],
+        "rutas": rutas,
         "tunnel_forwards": [
             {"vmid": n["vmid"], "role": n["role"], "address": n["mgmt_address"]}
             for n in nodes
@@ -1271,10 +1344,13 @@ def render_docs(lab: dict, env: dict) -> str:
     lines = [DOC_BEGIN, "", f"## {lab['lab']}"]
     lines.append(f"Slot: {lab.get('slot', 0)}")
     lines.append("Address spaces: " + ", ".join(f"`{s}`" for s in lab["address_spaces"]))
-    lines += ["", "### Topología", ""]
-    lines += _mermaid_topologia(lab)
-    lines += ["", "### Cableado (L2)", ""]
-    lines += _mermaid_cableado(lab)
+    if lab.get("networks"):
+        # El dibujo es código, no una imagen: se ve en el visor de Markdown y se puede
+        # leer y comparar como cualquier otra línea del documento.
+        lines += ["", "### Topología", ""]
+        lines += _mermaid_topologia(lab)
+        lines += ["", "### Cableado (L2)", ""]
+        lines += _mermaid_cableado(lab)
     lines += ["", "### Networks", "", "| network | address |", "| --- | --- |"]
     for net in lab["networks"]:
         lines.append(f"| `{net['name']}` | `{net['address']}` |")

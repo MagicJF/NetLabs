@@ -1,0 +1,29 @@
+# PROPÓSITO:   comprobar el cruce: que desde la red de gestión se llega a la red del
+#              laboratorio. Sin él, el laboratorio es un agujero negro —se despliega y
+#              no se ve, ni lo alcanza el motor ni lo ve quien observa— y por eso se
+#              para en vez de seguir.
+# INVARIANTES: se sondea con tope, y el tope va dentro del script porque `until` no es
+#              válido sobre un `include_tasks` (medido). Un silencio no es un verde.
+#              Si no responde, se dice la ruta que falta y el router que no contesta.
+# VER:         docs/diseno.md §4.2, §4.3
+
+- name: "cruce · {{ cruce.space }} desde la gestión"
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "cruce · {{ cruce.space }} por {{ cruce.prueba }}"
+    objetivo: 127.0.0.1
+    interior_salto: false
+    # Quien sondea decide qué hacer con el silencio: aquí no se para en la puerta,
+    # se para abajo con el motivo escrito.
+    interior_falla: false
+    comando: "{{ cruce | netlabs_cruce_cmd }}"
+
+- name: "cruce · {{ cruce.space }} no responde desde la gestión"
+  ansible.builtin.fail:
+    msg: >-
+      Desde el invitado de gestión no se llega a {{ cruce.prueba }} —la pata de
+      {{ cruce.role }} dentro de {{ cruce.space }}—. O falta la ruta
+      {{ cruce.space }} por {{ cruce.via }}, o el router no deja pasar el tráfico que
+      viene de la red de gestión. El laboratorio quedaría desplegado y no se vería:
+      no se sigue. {{ interior.stderr | default('') | trim }}
+  when: interior.rc | default(1) | int != 0

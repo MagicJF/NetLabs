@@ -211,11 +211,16 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
                     "effect": "SNMP encendido"})
 
     propia = next((c for c in comunidades if c.get("name") == comunidad), None)
+    # La comunidad del laboratorio es v2c, y en RouterOS el campo que lo decide es
+    # `security`: con `none` el equipo atiende peticiones v1/v2c con esa comunidad. Los
+    # protocolos de autenticación y cifrado son de SNMPv3 — RouterOS trae MD5/DES puestos
+    # y rechaza `none` con un 400 — así que no se tocan: con `security=none` no cuentan.
+    v2c = {"security": "none"}
     if propia is None:
         ops.append({"method": "PUT", "path": "/rest/snmp/community",
                     "body": {"name": comunidad, "addresses": mgmt_cidr,
-                             "read-access": "yes", "write-access": "no"},
-                    "effect": f"comunidad SNMP de sólo lectura, desde {mgmt_cidr}"})
+                             "read-access": "yes", "write-access": "no", **v2c},
+                    "effect": f"comunidad SNMP de sólo lectura (v2c), desde {mgmt_cidr}"})
     else:
         cambios: dict = {}
         if propia.get("addresses") != mgmt_cidr:
@@ -224,10 +229,13 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
             cambios["read-access"] = "yes"
         if str(propia.get("write-access", "")).lower() in ("true", "yes"):
             cambios["write-access"] = "no"
+        for campo, valor in v2c.items():
+            if str(propia.get(campo, "")).lower() != valor:
+                cambios[campo] = valor
         if cambios:
             ops.append({"method": "PATCH", "path": f"/rest/snmp/community/{propia['.id']}",
                         "body": cambios,
-                        "effect": f"comunidad SNMP -> {mgmt_cidr} (sólo lectura)"})
+                        "effect": f"comunidad SNMP -> {mgmt_cidr} (v2c, sólo lectura)"})
 
     # Dentro del área, lo que sobra se apaga: RouterOS no deja borrar la comunidad
     # `default` (responde 400), y una `public` abierta a ::/0 es justo lo que no
@@ -724,3 +732,76 @@ def linux_ops(node: dict, current: dict, credenciales: dict | None = None) -> li
         ops.append({"cmd": ["hostnamectl", "set-hostname", identidad],
                     "effect": f"nombre del equipo -> {identidad}"})
     return ops
+
+
+# ---------------------------------------------------------------------------
+# Las rutas hacia las redes del laboratorio
+# ---------------------------------------------------------------------------
+
+def _en_mis_espacios(red, espacios: list) -> bool:
+    """¿Esa ruta cae dentro de un espacio que este laboratorio declara?
+
+    Es la frontera: dentro se quita lo que sobra, fuera no se entra. Así la ruta
+    por defecto y la de la red de gestión —que también están en la tabla— no se
+    tocan, y las de otro laboratorio tampoco.
+    """
+    return any(red.subnet_of(ipaddress.ip_network(e, strict=False)) for e in espacios or [])
+
+
+def rutas_ops(actuales: list, deseadas: list, espacios: list) -> list[dict]:
+    """La diferencia entre las rutas declaradas y las que tiene el invitado de gestión.
+
+    `actuales` es la tabla real (`ip -4 -j route show`); `deseadas`, las que derivó
+    el plan (una por espacio, con el router del laboratorio como salto); `espacios`,
+    la frontera declarada. Cada operación lleva su comando y su efecto legible: si no
+    hay diferencia, no hay operación y el segundo apply no escribe nada.
+    """
+    ops: list[dict] = []
+    ahora: dict = {}
+    for ruta in actuales or []:
+        destino = ruta.get("dst") or ruta.get("destination")
+        if not destino or destino == "default":
+            continue
+        red = ipaddress.ip_network(destino, strict=False)
+        if not _en_mis_espacios(red, espacios):
+            continue
+        ahora[red] = ruta.get("gateway")
+
+    declaradas = {}
+    for deseada in deseadas or []:
+        red = ipaddress.ip_network(deseada["space"], strict=False)
+        declaradas[red] = deseada
+        if ahora.get(red) == deseada["via"]:
+            continue
+        # `replace` y no `add`: una ruta que ya existe con otro salto no se puede
+        # añadir, y el salto viejo —un router que ya no está— es justo lo que hay
+        # que corregir.
+        verbo = "replace" if red in ahora else "add"
+        ops.append({
+            "cmd": _sh(f"ip route {verbo} {red} via {deseada['via']}"),
+            "effect": f"ruta {red} -> {deseada['via']} ({deseada['role']})",
+        })
+
+    for red in sorted(ahora):
+        if red in declaradas:
+            continue
+        ops.append({
+            "cmd": _sh(f"ip route del {red}"),
+            "effect": f"retirar la ruta {red}: el laboratorio ya no la declara",
+        })
+    return ops
+
+
+def cruce_cmd(ruta: dict, intentos: int = 15, espera: int = 2) -> list:
+    """El sondeo del cruce: se pregunta por la pata del router dentro del espacio.
+
+    Con tope —un número de intentos y una espera entre ellos— y con un `exit` que
+    dice si respondió. El tope va dentro del script porque `until` no es válido
+    sobre un `include_tasks` (medido): no se espera a ciegas, y el silencio no se
+    da por bueno.
+    """
+    return _sh(
+        f"for i in $(seq 1 {int(intentos)}); do "
+        f"ping -c1 -W1 {shlex.quote(ruta['prueba'])} >/dev/null 2>&1 && exit 0; "
+        f"sleep {int(espera)}; done; exit 1"
+    )

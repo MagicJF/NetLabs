@@ -108,7 +108,8 @@ def comprobar_estructura() -> list[str]:
         for dentro in sorted(carpeta.iterdir()):
             if dentro.name not in permitidos:
                 errores.append(f"labs/{carpeta.name}/{dentro.name}: un laboratorio sólo "
-                               f"declara {carpeta.name}.yml y su {carpeta.name}.md")
+                               f"declara {carpeta.name}.yml y su {carpeta.name}.md; los "
+                               "dibujos van dentro del .md como código Mermaid")
         if not (carpeta / f"{carpeta.name}.yml").exists():
             errores.append(f"labs/{carpeta.name}: falta {carpeta.name}.yml")
 

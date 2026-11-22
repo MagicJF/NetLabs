@@ -133,5 +133,8 @@ class FilterModule:
             "netlabs_linux_probe": lambda node: converge.linux_probe(node),
             "netlabs_linux_probe_cmd": lambda node: converge.linux_probe_cmd(node),
             "netlabs_linux_state": lambda text: converge.linux_state(text),
+            "netlabs_rutas_ops": lambda actuales, deseadas, espacios: converge.rutas_ops(
+                actuales, deseadas, espacios),
+            "netlabs_cruce_cmd": lambda cruce: converge.cruce_cmd(cruce),
             "netlabs_tunnel_port": lambda vmid: identity.tunnel_port(int(vmid)),
         }

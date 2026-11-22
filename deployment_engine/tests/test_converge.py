@@ -247,7 +247,9 @@ class LaObservabilidadDelRouter(unittest.TestCase):
             "snmp": {"enabled": enabled},
             "snmp_community": comunidades if comunidades is not None else [
                 {".id": "*0", "name": "public", "addresses": "::/0",
-                 "read-access": "true", "write-access": "false"},
+                 "read-access": "true", "write-access": "false",
+                 "authentication-protocol": "MD5", "encryption-protocol": "DES",
+                 "security": "none"},
             ],
         }
 
@@ -267,6 +269,8 @@ class LaObservabilidadDelRouter(unittest.TestCase):
         self.assertEqual(creada["body"]["addresses"], self.CIDR)
         self.assertEqual(creada["body"]["read-access"], "yes")
         self.assertEqual(creada["body"]["write-access"], "no")
+        # La comunidad es v2c: en RouterOS lo decide `security`, no los protocolos de v3.
+        self.assertEqual(creada["body"]["security"], "none")
         # RouterOS no deja borrar la comunidad `default`: se apaga.
         apagada = next(o for o in ops if o["path"] == "/rest/snmp/community/*0")
         self.assertEqual(apagada["body"], {"disabled": "yes"})
@@ -274,16 +278,33 @@ class LaObservabilidadDelRouter(unittest.TestCase):
     def test_si_ya_esta_no_escribe_nada(self):
         actual = self.actual(enabled="true", comunidades=[
             {".id": "*1", "name": "lab-ro", "addresses": self.CIDR,
-             "read-access": "true", "write-access": "false"},
+             "read-access": "true", "write-access": "false",
+             "authentication-protocol": "MD5", "encryption-protocol": "DES",
+             "security": "none"},
         ])
         self.assertEqual(
             converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR), []
         )
 
+    def test_una_comunidad_abierta_en_v3_se_baja_a_v2c(self):
+        """Con `security` distinto de none, RouterOS no atiende la comunidad por v2c."""
+        actual = self.actual(enabled="true", comunidades=[
+            {".id": "*1", "name": "lab-ro", "addresses": self.CIDR,
+             "read-access": "true", "write-access": "false",
+             "authentication-protocol": "MD5", "encryption-protocol": "DES",
+             "security": "authorized"},
+        ])
+        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR)
+        self.assertEqual(len(ops), 1)
+        self.assertEqual(ops[0]["method"], "PATCH")
+        self.assertEqual(ops[0]["body"], {"security": "none"})
+
     def test_una_comunidad_propia_abierta_se_restringe(self):
         actual = self.actual(enabled="true", comunidades=[
             {".id": "*1", "name": "lab-ro", "addresses": "::/0",
-             "read-access": "true", "write-access": "true"},
+             "read-access": "true", "write-access": "true",
+             "authentication-protocol": "MD5", "encryption-protocol": "DES",
+             "security": "none"},
         ])
         ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR)
         self.assertEqual(len(ops), 1)
@@ -352,6 +373,76 @@ class ElSwitchConmuta(unittest.TestCase):
         ops = converge.ros_ops(self.nodo(), actual, "clave", {}, None)
         self.assertEqual([(o["method"], o["path"]) for o in ops],
                          [("DELETE", "/rest/interface/bridge/port/*3")])
+
+
+class LasRutasDelLaboratorio(unittest.TestCase):
+    """La diferencia entre las rutas declaradas y las que tiene el invitado de gestión.
+
+    Dentro de los espacios del laboratorio se quita lo que sobra; fuera no se entra:
+    la ruta por defecto y la de la red de gestión también están en la tabla y no son
+    suyas.
+    """
+
+    ESPACIOS = ["10.44.0.0/16"]
+    DESEADAS = [{"space": "10.44.0.0/16", "via": "10.30.0.104", "role": "edge",
+                 "prueba": "10.44.1.1"}]
+
+    def test_si_ya_esta_no_se_escribe_nada(self):
+        actual = [{"dst": "default", "gateway": "10.30.0.1", "dev": "eth0"},
+                  {"dst": "10.30.0.0/16", "dev": "eth0", "protocol": "kernel"},
+                  {"dst": "10.44.0.0/16", "gateway": "10.30.0.104", "dev": "eth0"}]
+        self.assertEqual(converge.rutas_ops(actual, self.DESEADAS, self.ESPACIOS), [])
+
+    def test_una_ruta_que_falta_se_pone(self):
+        ops = converge.rutas_ops([{"dst": "default", "gateway": "10.30.0.1"}],
+                                 self.DESEADAS, self.ESPACIOS)
+        self.assertEqual(len(ops), 1)
+        self.assertEqual(ops[0]["cmd"],
+                         converge._sh("ip route add 10.44.0.0/16 via 10.30.0.104"))
+        self.assertIn("10.44.0.0/16", ops[0]["effect"])
+
+    def test_una_ruta_con_otro_salto_se_corrige(self):
+        # Un router que ya no está: la ruta existe con el salto viejo. Se corrige, no
+        # se añade otra —una ruta que ya existe no se puede añadir, y el salto viejo
+        # es justo lo que hay que quitar—.
+        actual = [{"dst": "10.44.0.0/16", "gateway": "10.30.0.199"}]
+        ops = converge.rutas_ops(actual, self.DESEADAS, self.ESPACIOS)
+        self.assertEqual([o["cmd"] for o in ops],
+                         [converge._sh("ip route replace 10.44.0.0/16 via 10.30.0.104")])
+
+    def test_lo_que_sobra_dentro_de_mis_espacios_se_retira(self):
+        actual = [{"dst": "10.44.0.0/16", "gateway": "10.30.0.104"},
+                  {"dst": "10.44.1.0/24", "gateway": "10.30.0.104"}]
+        ops = converge.rutas_ops(actual, self.DESEADAS, self.ESPACIOS)
+        # La que está bien no se toca; la que sobra —una más concreta que ya nadie
+        # declara— se retira.
+        self.assertEqual([o["cmd"] for o in ops],
+                         [converge._sh("ip route del 10.44.1.0/24")])
+
+    def test_fuera_de_mis_espacios_no_se_entra(self):
+        actual = [{"dst": "default", "gateway": "10.30.0.1"},
+                  {"dst": "10.30.0.0/16", "dev": "eth0"},
+                  {"dst": "10.46.0.0/16", "gateway": "10.30.0.108"}]
+        self.assertEqual(converge.rutas_ops(actual, [], self.ESPACIOS), [])
+
+    def test_destroy_retira_lo_que_declaro_y_solo_eso(self):
+        actual = [{"dst": "default", "gateway": "10.30.0.1"},
+                  {"dst": "10.30.0.0/16", "dev": "eth0"},
+                  {"dst": "10.44.0.0/16", "gateway": "10.30.0.104"},
+                  {"dst": "10.46.0.0/16", "gateway": "10.30.0.108"}]
+        ops = converge.rutas_ops(actual, [], self.ESPACIOS)
+        self.assertEqual([o["cmd"] for o in ops],
+                         [converge._sh("ip route del 10.44.0.0/16")])
+
+    def test_el_cruce_se_sondea_con_tope(self):
+        # El tope va dentro del script porque `until` no vale sobre un include: si no
+        # responde en N intentos, sale con error y el que llama lo dice.
+        cmd = converge.cruce_cmd({"prueba": "10.44.1.1"}, intentos=4, espera=1)
+        self.assertEqual(cmd[:2], ["sh", "-c"])
+        self.assertIn("seq 1 4", cmd[2])
+        self.assertIn("ping -c1 -W1 10.44.1.1", cmd[2])
+        self.assertIn("sleep 1", cmd[2])
+        self.assertTrue(cmd[2].rstrip("'\n").endswith("exit 1"))
 
 
 if __name__ == "__main__":

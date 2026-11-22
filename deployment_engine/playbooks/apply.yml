@@ -201,6 +201,26 @@
       # existir: ansible lo intenta y deja un error de plantilla en el título.
       loop_control: {loop_var: puesto, label: "{{ puesto.name }}"}
 
+    # --- las rutas hacia las redes del laboratorio -------------------------
+    # Van después de que los routers tengan su dirección de gestión: el salto de
+    # una ruta es esa dirección, y una ruta hacia un salto que no responde no es
+    # una ruta. Las pone el invitado de gestión, que es por donde entra el SSH del
+    # motor y donde vive lo que observa; `destroy` las retira.
+    - name: apply · las rutas hacia las redes del laboratorio
+      include_tasks: ../tasks/rutas.yml
+      vars:
+        rutas_deseadas: "{{ plan.rutas | default([]) }}"
+        espacios: "{{ lab.address_spaces | default([]) }}"
+
+    # --- el cruce ---------------------------------------------------------
+    # Y se comprueba: una ruta puesta no es una red alcanzable. Si el router no
+    # deja pasar el tráfico de la gestión, el laboratorio se despliega y no se ve,
+    # y eso se dice aquí en vez de descubrirlo en la consola de NetXMS.
+    - name: apply · el cruce desde la gestión hacia cada red del laboratorio
+      include_tasks: ../tasks/cruce.yml
+      loop: "{{ plan.rutas | default([]) }}"
+      loop_control: {loop_var: cruce, label: "{{ cruce.space }}"}
+
     - name: apply · el laboratorio está desplegado
       ansible.builtin.debug:
         msg: "{{ plan.nodes | map(attribute='name') | list }} en {{ plan.pool }}"
