@@ -25,10 +25,10 @@ Y una frontera de carpetas que no se cruza: **cada carpeta de primer nivel tiene
 laboratorio concreto. La raíz no guarda código. `./netlabs check` comprueba esta estructura: un
 fichero fuera de su sitio es un fallo, no una convención.
 
-## 2. Las cuatro vías
+## 2. Las cinco vías
 
-Sólo hay cuatro formas de hablar con el mundo, y cada una vive en un fichero. Si necesitas una
-quinta, para y plantéala; no la abras por tu cuenta.
+Sólo hay cinco formas de hablar con el mundo, y cada una vive en un fichero. Si necesitas una
+sexta, para y plantéala; no la abras por tu cuenta.
 
 | A dónde | Por dónde | Fichero |
 | --- | --- | --- |
@@ -36,10 +36,22 @@ quinta, para y plantéala; no la abras por tu cuenta.
 | RouterOS | su REST, por la red de gestión | `tasks/ros.yml` |
 | Interior Linux (LXC) | SSH a su dirección, con ruta estática al router | `tasks/interior_ssh.yml` |
 | Primer arranque de un router | el agente del invitado, por la API | `tasks/bootstrap.yml` |
+| El servicio que observa el sitio (NetXMS) | su API REST, por el túnel, desde dentro de su invitado | `tasks/netxms.yml` |
 
 La cuarta existe por una razón concreta: un router recién creado **no tiene dirección**, así que no
 hay a dónde hacer SSH ni dónde pedir su REST. El agente del hipervisor escribe un fichero y lo
 ejecuta; es la única puerta que se abre antes de que exista red, y se cierra en cuanto la hay.
+
+La quinta la abre el motor para **registrar cada equipo de red en lo que observa el sitio**, con su
+usuario y su clave, de modo que quien mira lo vea en la consola y pueda abrir su terminal sin teclear
+nada. Va contra el API del servicio de gestión, que escucha **dentro** de su invitado: se llama con
+`curl` por la puerta de siempre (`interior_ssh.yml`), desde dentro. El servicio es **del sitio**, no
+de un laboratorio (`netlabs.yml` → `management.api` y `secrets.yml`), y por eso el motor sí puede
+nombrarlo aunque el laboratorio de control lo adopte como su nodo. Es una vía de **escritura de la
+diferencia**: se dan de alta los equipos que faltan y se dice en voz alta lo que no se puede
+corregir por el API (un equipo ya descubierto con otras credenciales). Sólo se abre donde el
+laboratorio tiene algo que registrar —los equipos de red, no los puestos—, así que un laboratorio de
+control no la usa. El porqué completo está en `docs/decisiones/0003`.
 
 ## 3. Lo que no se hace, y por qué
 

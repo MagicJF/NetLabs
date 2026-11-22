@@ -178,6 +178,18 @@
         router: "{{ item }}"
         ros_user: "{{ (item.configure.users | default([{'name': 'admin'}]))[0].name }}"
 
+    # --- el registro de los equipos en lo que observa el sitio -------------
+    # Va después del interior del router y no antes: la credencial que se registra es
+    # la que el router ya tiene puesta (la pone su REST), no una que valdrá más tarde.
+    # Y va pronto en el apply: un equipo que nace se registra antes de que lo descubra
+    # el censo del observador, que es cuando ya no se puede hacer — su API sólo acepta
+    # las credenciales al crear el equipo.
+    - name: apply · el registro de los equipos en lo que observa el sitio
+      include_tasks: ../tasks/netxms.yml
+      vars:
+        equipos: "{{ plan.nodes | selectattr('management') | list }}"
+      when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
+
     # --- el interior de los nodos de control, por SSH ----------------------
     # Un nodo de control no tiene router ni DHCP: su interior se converge por SSH
     # con la misma puerta que usa el resto del motor. Sólo se escribe la diferencia.

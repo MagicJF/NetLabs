@@ -133,4 +133,14 @@ class FilterModule:
                 actuales, deseadas, espacios),
             "netlabs_cruce_cmd": lambda cruce: converge.cruce_cmd(cruce),
             "netlabs_tunnel_port": lambda vmid: identity.tunnel_port(int(vmid)),
+            # La quinta vía: el registro de los equipos en lo que observa el sitio.
+            "netlabs_netxms_login_cmd": lambda api: converge.netxms_login_cmd(api),
+            "netlabs_netxms_login_cuerpo": lambda usuario, clave: converge.netxms_login_cuerpo(usuario, clave),
+            "netlabs_netxms_censo_cmd": lambda api: converge.netxms_censo_cmd(api),
+            "netlabs_netxms_censo_cuerpo": lambda api=None: converge.netxms_censo_cuerpo(),
+            "netlabs_netxms_fichas_cmd": lambda api: converge.netxms_fichas_cmd(api),
+            "netlabs_netxms_fichas_cuerpo": lambda ids=None, api=None: converge.netxms_fichas_cuerpo(ids),
+            "netlabs_netxms_ids": lambda nodes, encontrados: converge.netxms_ids(nodes, encontrados),
+            "netlabs_netxms_ops": lambda nodes, encontrados, detalles, api, secrets=None:
+                converge.netxms_ops(nodes, encontrados, detalles, api, secrets),
         }

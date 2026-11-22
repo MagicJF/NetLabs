@@ -3,6 +3,8 @@
 # INVARIANTES: la clave y el puerto del túnel salen de netlabs.yml; la dirección es la
 #              declarada, no la inventada.
 #              Una lectura no cambia nada (`changed_when: false`).
+#              Lo que la orden devuelve se imprime salvo que quien la pide lo calle
+#              (`interior_imprime: false`), para las respuestas que traen una credencial.
 # VER:         docs/diseno.md §4.3
 
 # El túnel aterriza EN el servicio de gestión. Cuando el interior que se converge es
@@ -45,3 +47,7 @@
 - name: "SSH · lo que dijo {{ objetivo }}"
   ansible.builtin.debug:
     var: interior.stdout_lines
+  # Una respuesta que trae una credencial no se imprime: quien la pide lo dice
+  # (`interior_imprime: false`). Una lectura no lleva clave; una respuesta de un API
+  # que devuelve la ficha de un equipo, sí.
+  when: interior_imprime | default(true) | bool

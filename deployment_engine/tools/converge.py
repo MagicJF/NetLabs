@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import ipaddress
+import json
 import os
 import shlex
 
@@ -702,6 +703,18 @@ def linux_ops(node: dict, current: dict, credenciales: dict | None = None) -> li
             "cmd": _sh(_file_script(fichero)),
             "effect": f"fichero {fichero['path']}",
         })
+        # Un fichero que **es** la configuración de un servicio no se nota hasta que el
+        # servicio lo vuelve a leer. `try-restart` y no `restart`: en el primer apply el
+        # servicio puede no estar en pie todavía (su base de datos se inicializa más
+        # abajo, en los comandos), y `try-restart` sobre algo que no corre no arranca
+        # nada —los servicios se convergen al final— mientras que sobre lo que corre sí
+        # relee. Medido: sale 0 si la unidad existe y 5 si no existe, así que una errata
+        # en el nombre se dice en vez de pasar por buena.
+        if fichero.get("restart"):
+            ops.append({
+                "cmd": _sh(f"systemctl try-restart {shlex.quote(fichero['restart'])}"),
+                "effect": f"releer la configuración de {fichero['restart']}: cambió {fichero['path']}",
+            })
 
     # Los comandos con `creates` son el trabajo de una sola vez (inicializar una
     # base de datos, desplegar un WAR): se ejecutan si su marca no existe y nunca
@@ -832,3 +845,159 @@ def cruce_cmd(ruta: dict, intentos: int = 15, espera: int = 2) -> list:
         f"ping -c1 -W1 {shlex.quote(ruta['prueba'])} >/dev/null 2>&1 && exit 0; "
         f"sleep {int(espera)}; done; exit 1"
     )
+
+
+# ---------------------------------------------------------------------------
+# La quinta vía: registrar los equipos en lo que observa el sitio (NetXMS)
+# ---------------------------------------------------------------------------
+#
+# El API del servicio de gestión escucha **dentro** de su invitado, y el túnel del
+# motor aterriza ahí: por eso se llama con `curl` desde dentro y por la puerta de
+# siempre (`interior_ssh.yml`), no desde el nodo de control.
+#
+# Nada viaja en la línea de órdenes donde lo vería `ps`: el testigo de la sesión va
+# en la **primera línea de la entrada estándar** y el cuerpo —que lleva la clave del
+# equipo— detrás. Cada llamada se lleva su testigo, así que no queda ningún fichero
+# de sesión en el invitado que haya que limpiar.
+#
+# Medido contra NetXMS 7.0.4 (la última publicada): el login devuelve un testigo; la
+# búsqueda por IP no trae las credenciales (hay que pedir la ficha del objeto); y las
+# credenciales SSH **sólo se aceptan al crear el equipo** —un `PATCH` con ellas
+# responde 200 y no toca la base—, que es lo que hace que un equipo ya registrado con
+# otras credenciales no se pueda corregir por el API y se diga en voz alta.
+
+NETXMS_PUERTO_SSH = 22
+# Las rutas del API que el motor usa, en un solo sitio: son la parte del motor que
+# sabe cómo se llama esto por dentro. Cambiar de versión del servicio se toca aquí.
+NETXMS_RUTA_LOGIN = "/login"
+NETXMS_RUTA_CENSO = "/objects/search"
+NETXMS_RUTA_FICHAS = "/objects/details"
+NETXMS_RUTA_CREAR = "/objects"
+
+
+def netxms_login_cmd(api: str) -> list:
+    """El login: el único que no lleva testigo. El cuerpo entra por la entrada estándar."""
+    return _sh(f"curl -sS -X POST -H 'Content-Type: application/json' -d @- {api}{NETXMS_RUTA_LOGIN}")
+
+
+def netxms_login_cuerpo(usuario: str, clave: str) -> str:
+    """El cuerpo del login, en JSON y sin escapar a mano."""
+    return json.dumps({"username": usuario, "password": clave})
+
+
+def netxms_cmd(api: str, ruta: str) -> list:
+    """Una llamada con testigo: el testigo en la primera línea de la entrada, y el cuerpo detrás.
+
+    El testigo no se guarda en ningún fichero del invitado —cada llamada se lleva el
+    suyo— y ni él ni el cuerpo aparecen en la línea de órdenes, donde los vería `ps`.
+    """
+    return _sh(
+        'IFS= read -r t; curl -sS -H "Authorization: Bearer $t" '
+        f"-H 'Content-Type: application/json' -d @- {api}{ruta}"
+    )
+
+
+def netxms_censo_cmd(api: str) -> list:
+    """El censo de equipos de la vista."""
+    return netxms_cmd(api, NETXMS_RUTA_CENSO)
+
+
+def netxms_censo_cuerpo() -> str:
+    """Sólo los equipos: lo que el motor registra son equipos, no subredes ni mapas."""
+    return json.dumps({"class": ["Node"]})
+
+
+def netxms_fichas_cmd(api: str) -> list:
+    """Las fichas de los equipos que ya están, de una vez."""
+    return netxms_cmd(api, NETXMS_RUTA_FICHAS)
+
+
+def netxms_fichas_cuerpo(ids: list) -> str:
+    return json.dumps({"ids": [int(i) for i in ids or []]})
+
+
+def netxms_crear_cmd(api: str) -> list:
+    """Dar de alta un equipo con sus credenciales."""
+    return netxms_cmd(api, NETXMS_RUTA_CREAR)
+
+
+def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | None,
+               api: str, secrets: dict | None = None,
+               puerto: int = NETXMS_PUERTO_SSH) -> dict:
+    """Qué equipos del laboratorio faltan en la vista, y cuáles están a medias.
+
+    `encontrados` es el censo que devuelve la búsqueda (resúmenes, sin credenciales);
+    `detalles`, las fichas de los que ya están (que sí las traen, y por eso se piden).
+    El resultado lleva dos listas: `ops` (lo que hay que escribir) y `pendientes` (lo
+    que no se puede arreglar por el API y se dice).
+
+    El motor sólo **crea lo que falta**: no borra un equipo que ya está para volver a
+    crearlo con credenciales. Un equipo que ya está como debe no produce ninguna
+    llamada —eso es lo que hace que el segundo `apply` no escriba— y uno que ya está
+    con otras credenciales sale como pendiente, porque el API de esta versión sólo las
+    acepta al crear el equipo.
+    """
+    por_ip: dict = {}
+    for objeto in encontrados or []:
+        direccion = (objeto.get("ipAddress") or {}).get("address")
+        if direccion:
+            por_ip.setdefault(str(direccion), objeto)
+    leidos: dict = {}
+    for detalle in detalles or []:
+        if isinstance(detalle, dict) and detalle.get("id") is not None:
+            leidos[int(detalle["id"])] = detalle
+
+    ops: list[dict] = []
+    pendientes: list[str] = []
+    for node in nodes or []:
+        direccion = node.get("mgmt_address")
+        if not direccion:
+            continue
+        nombre = node.get("name") or node.get("role")
+        usuario = _declared_user(node) or "admin"
+        clave = ros_clave(node, secrets or {})
+        objeto = por_ip.get(str(direccion))
+
+        if objeto is None:
+            cuerpo = {
+                "class": "Node",
+                "name": nombre,
+                "ipAddress": str(direccion),
+                "sshLogin": usuario,
+                "sshPassword": clave,
+                "sshPort": int(puerto),
+            }
+            ops.append({
+                "cmd": netxms_crear_cmd(api),
+                "cuerpo": json.dumps(cuerpo),
+                "effect": f"registrar {nombre} ({direccion}) en la vista, como {usuario}",
+            })
+            continue
+
+        actual = leidos.get(int(objeto["id"])) or {}
+        if (str(actual.get("sshLogin") or "") == usuario
+                and str(actual.get("sshPassword") or "") == clave
+                and int(actual.get("sshPort") or 0) == int(puerto)):
+            continue
+        pendientes.append(
+            f"{nombre} ({direccion}): ya está en la vista con otras credenciales "
+            f"(usuario {actual.get('sshLogin') or 'ninguno'}), y el API de esta versión "
+            "sólo las acepta al crear el equipo: cámbialas a mano en su consola"
+        )
+    return {"ops": ops, "pendientes": pendientes}
+
+
+def netxms_ids(nodes: list[dict], encontrados: list | None) -> list:
+    """Los identificadores de los equipos de este laboratorio que ya están en la vista.
+
+    La búsqueda devuelve resúmenes sin credenciales, así que la ficha hay que pedirla:
+    se pide **de una vez** por los que interesan, y no la de todo el censo — que sería
+    leer lo de todos los laboratorios para escribir lo de uno.
+    """
+    direcciones = {str(n["mgmt_address"]) for n in nodes or [] if n.get("mgmt_address")}
+    ids = []
+    for objeto in encontrados or []:
+        direccion = (objeto.get("ipAddress") or {}).get("address")
+        if direccion and str(direccion) in direcciones and objeto.get("id") is not None:
+            ids.append(int(objeto["id"]))
+    return sorted(ids)

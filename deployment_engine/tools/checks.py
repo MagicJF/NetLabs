@@ -216,7 +216,16 @@ def comprobar_documentacion(env) -> list[str]:
 
 def comprobar_pureza(env) -> list[str]:
     """El motor no puede mencionar nada de un laboratorio concreto: si lo hace, es un bug
-    aunque funcione, porque el siguiente laboratorio lo hereda."""
+    aunque funcione, porque el siguiente laboratorio lo hereda.
+
+    La excepción es el vocabulario del **sitio**: el invitado de gestión y su pool se
+    declaran en `netlabs.yml`, no en un laboratorio, y el motor sí habla con el servicio
+    que observa el sitio (la quinta vía, `tasks/netxms.yml`). Que el laboratorio de control
+    adopte ese invitado como su nodo no lo convierte en palabra de ese laboratorio; si un
+    laboratorio lo reusara para otra cosa, su declaración y la del sitio discreparían y lo
+    diría `comprobar_declaraciones`, no esto.
+    """
+    del_sitio = {env["management"]["guest"], env["management"]["pool"]}
     errores = []
     for nombre, (ruta, lab) in laboratorios().items():
         vocabulario = {nombre}
@@ -224,6 +233,7 @@ def comprobar_pureza(env) -> list[str]:
         vocabulario |= {n["name"] for n in lab.get("networks") or []}
         vocabulario |= set(lab.get("address_spaces") or [])
         vocabulario |= {n["address"] for n in lab.get("networks") or []}
+        vocabulario -= del_sitio
         for fichero in sorted(MOTOR.rglob("*")):
             if not fichero.is_file() or fichero.suffix not in (".py", ".yml", ".yaml", ".j2"):
                 continue

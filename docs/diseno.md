@@ -149,8 +149,11 @@ vez de recordar, comparar antes de escribir—, no un extra.
 
 Al hipervisor se le habla **sólo** por su API REST, desde un fichero del motor. A un RouterOS,
 **sólo** por su API REST —salvo su primer arranque, que va por el agente del hipervisor, es
-decir, también por la API (§3.8)—. A un Linux, **sólo** por SSH. Una vía nueva para lo mismo es
-un defecto, no una comodidad.
+decir, también por la API (§3.8)—. A un Linux, **sólo** por SSH. Al servicio que observa el sitio
+(NetXMS), **sólo** por su API REST y **desde dentro de su invitado** —ahí aterriza el túnel del
+motor—: por esa puerta registra el motor cada equipo de red con su credencial, y no toca su base
+por ninguna otra (§3.4; `docs/decisiones/0003`). Una vía nueva para lo mismo es un defecto, no una
+comodidad.
 
 *Evita:* llamadas a la API repartidas por todo el motor, imposibles de seguir y de auditar.
 

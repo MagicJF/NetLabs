@@ -11,7 +11,7 @@ trabajo del repositorio, en [`AGENTS.md`](AGENTS.md).
 **En curso.** El motor está completo y verificado contra el hipervisor real. El laboratorio de
 referencia `uno` se despliega con `./netlabs apply uno` y se retira con `./netlabs destroy uno`.
 
-## Las cuatro vías de acceso
+## Las cinco vías de acceso
 
 | A dónde | Por dónde |
 | --- | --- |
@@ -19,6 +19,7 @@ referencia `uno` se despliega con `./netlabs apply uno` y se retira con `./netla
 | RouterOS | su REST, por la red de gestión |
 | Interior de un Linux | SSH, con una ruta estática al router del laboratorio |
 | Primer arranque de un router | el agente del invitado, por la API |
+| El servicio que observa el sitio | su API REST, por el túnel, desde dentro de su invitado |
 
 Ninguna otra. El motor no entra nunca por SSH al hipervisor ni usa su consola.
 
@@ -44,7 +45,7 @@ netlabs.yml                # configuración del SITIO (nodo, almacenes, gestión
 secrets.yml                # credenciales; gitignored
 deployment_engine/         # el motor: no conoce ningún laboratorio concreto
   playbooks/               #   los verbos de Ansible: plan, apply, destroy, site
-  tasks/                   #   las cuatro vías: pve, ros, interior_ssh, bootstrap
+  tasks/                   #   las cinco vías: pve, ros, interior_ssh, bootstrap, netxms
   filter_plugins/          #   el puente entre la capa pura y Ansible
   tools/                   #   identidad, convergencia, comprobaciones, documentación
   tests/                   #   pruebas de la capa pura, sin hipervisor

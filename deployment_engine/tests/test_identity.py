@@ -114,10 +114,17 @@ class ElPlan(unittest.TestCase):
         bridges = [{"iface": s["bridge"], "comments": s["comment"]}
                    for s in primero["steps"] if s["op"] == "bridge_ensure"]
         plan = identity.plan(mundo(guests=guests, bridges=bridges, pools=[pool]), lab, env)
-        # Lo único que queda son las rutas: viven dentro del invitado de gestión, así
-        # que el plan no puede leerlas sin entrar y no puede callarlas —decir "nada
-        # que hacer" con una ruta sin poner sería la mentira que este caso evita—.
-        self.assertEqual([s for s in plan["steps"] if s["op"] != "rutas_converge"], [])
+        # Lo único que queda son las dos cosas que viven FUERA del hipervisor —las
+        # rutas, dentro del invitado de gestión, y el registro de los equipos en lo
+        # que observa el sitio—: el plan no puede leerlas sin entrar, así que no puede
+        # callarlas. Decir "nada que hacer" con una ruta sin poner o un equipo sin
+        # registrar sería la mentira que este caso evita.
+        self.assertEqual(
+            [s for s in plan["steps"] if s["op"] not in ("rutas_converge", "netxms_registro")], []
+        )
+        # El paso dice qué equipos son: los de red, con su dirección de gestión.
+        registro = next(s for s in plan["steps"] if s["op"] == "netxms_registro")
+        self.assertEqual(registro["equipos"], [{"role": "rte1", "address": "10.30.0.101"}])
         self.assertEqual([e for e in plan["effects"] if e not in primero["effects"]], [])
 
     def test_plan_es_determinista(self):
@@ -521,6 +528,59 @@ class Documentacion(unittest.TestCase):
         self.assertIn('    n_s{{"s<br/>p1, p2"}}', lineas)
         self.assertEqual([l.strip() for l in lineas if " ---|" in l],
                          ["n_r ---|rp1 ↔ sp1| n_s", "n_s ---|sp2 ↔ hp1| n_h"])
+
+
+class ElRegistroDeLosEquipos(unittest.TestCase):
+    """El plan declara el registro de los equipos de red en lo que observa el sitio.
+
+    Es una de las dos cosas que viven fuera del hipervisor, así que el plan no puede
+    saber si falta: la declara como trabajo y el apply escribe sólo la diferencia.
+    """
+
+    def test_el_plan_declara_el_registro_de_los_equipos_de_red(self):
+        plan = identity.plan(mundo(), laboratorio(), entorno())
+        paso = next(s for s in plan["steps"] if s["op"] == "netxms_registro")
+        # Sólo los equipos de red: los puestos no tienen credencial que registrar.
+        self.assertEqual([e["role"] for e in paso["equipos"]], ["rte1"])
+        self.assertTrue([e for e in plan["effects"] if "registrar en lo que observa" in e])
+
+    def test_los_puestos_no_se_registran(self):
+        plan = identity.plan(mundo(), laboratorio(), entorno())
+        registrados = {n["role"] for n in plan["nodes"] if n["management"]}
+        declarados = {e["role"] for s in plan["steps"]
+                      if s["op"] == "netxms_registro" for e in s["equipos"]}
+        self.assertEqual(declarados, registrados)
+        self.assertNotIn("wsp1", declarados)
+
+    def test_un_laboratorio_de_control_no_registra_nada(self):
+        # El nodo de control ES el servicio que observa: no se registra a sí mismo.
+        plan = identity.plan(mundo(), laboratorio("a_bootstrap"), entorno())
+        self.assertEqual([s for s in plan["steps"] if s["op"] == "netxms_registro"], [])
+
+
+class ElReinicioDeUnFichero(unittest.TestCase):
+    """`restart` en un fichero: la configuración de un servicio se relee al cambiarla."""
+
+    def laboratorio_base(self):
+        lab = laboratorio("a_bootstrap")
+        return copy.deepcopy(lab)
+
+    def test_un_fichero_puede_decir_qué_servicio_lo_relee(self):
+        lab = self.laboratorio_base()
+        lab["nodes"][0]["configure"]["files"][0]["restart"] = "netxms-server"
+        identity.validate(lab, entorno())  # no levanta: la clave es válida
+
+    def test_un_reinicio_que_no_es_un_nombre_de_unidad_se_rechaza(self):
+        lab = self.laboratorio_base()
+        lab["nodes"][0]["configure"]["files"][0]["restart"] = 7
+        with self.assertRaises(identity.LabError):
+            identity.validate(lab, entorno())
+
+    def test_una_clave_de_mas_en_un_fichero_se_rechaza(self):
+        lab = self.laboratorio_base()
+        lab["nodes"][0]["configure"]["files"][0]["reiniciar"] = "netxms-server"
+        with self.assertRaisesRegex(identity.LabError, "mode\\?, restart\\?"):
+            identity.validate(lab, entorno())
 
 
 if __name__ == "__main__":

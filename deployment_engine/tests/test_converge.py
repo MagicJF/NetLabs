@@ -4,6 +4,7 @@
 #              Cada caso fija el MOTIVO: la pata de gestión es la que no tiene red.
 # VER:         deployment_engine/tools/converge.py
 
+import json
 import pathlib
 import sys
 import unittest
@@ -474,6 +475,97 @@ class LasRutasDelLaboratorio(unittest.TestCase):
         self.assertIn("ping -c1 -W1 10.44.1.1", cmd[2])
         self.assertIn("sleep 1", cmd[2])
         self.assertTrue(cmd[2].rstrip("'\n").endswith("exit 1"))
+
+
+class ElRegistroEnLaVista(unittest.TestCase):
+    """La quinta vía: registrar los equipos de red en lo que observa el sitio.
+
+    El motor crea con credenciales los que faltan y a los ya descubiertos con otras
+    credenciales los reporta como pendientes: su API sólo acepta las credenciales al
+    crear el equipo. Todo esto es capa pura —(lo declarado, lo leído) → diferencia—, así
+    que se prueba con un censo inventado, sin servicio.
+    """
+
+    API = "http://127.0.0.1:8000/v1"
+    SECRETS = {"routeros_clave": "s3cr3t"}
+
+    def equipo(self, role="rte1", address="10.30.0.101", usuario="admin"):
+        return {
+            "role": role, "name": role, "type": "router", "mgmt_address": address,
+            "configure": {"users": [{"name": usuario, "password_from": "secrets.routeros_clave"}]},
+        }
+
+    def test_un_equipo_que_falta_se_da_de_alta_con_su_credencial(self):
+        plan = converge.netxms_ops([self.equipo()], [], [], self.API, self.SECRETS)
+        self.assertEqual(len(plan["ops"]), 1)
+        cuerpo = json.loads(plan["ops"][0]["cuerpo"])
+        self.assertEqual(cuerpo["class"], "Node")
+        self.assertEqual(cuerpo["ipAddress"], "10.30.0.101")
+        self.assertEqual(cuerpo["sshLogin"], "admin")
+        self.assertEqual(cuerpo["sshPassword"], "s3cr3t")
+        self.assertEqual(cuerpo["sshPort"], 22)
+        self.assertEqual(plan["pendientes"], [])
+
+    def test_un_equipo_que_ya_esta_como_debe_no_escribe_nada(self):
+        # Idempotencia: un equipo que ya está con las credenciales puestas no produce
+        # ninguna llamada, y por eso el segundo `apply` no escribe.
+        encontrados = [{"id": 7, "ipAddress": {"address": "10.30.0.101"}}]
+        detalles = [{"id": 7, "sshLogin": "admin", "sshPassword": "s3cr3t", "sshPort": 22}]
+        plan = converge.netxms_ops([self.equipo()], encontrados, detalles, self.API, self.SECRETS)
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(plan["pendientes"], [])
+
+    def test_un_equipo_ya_descubierto_con_otras_credenciales_se_reporta_y_no_se_toca(self):
+        # El API de esta versión sólo acepta las credenciales al crear el equipo: uno ya
+        # descubierto sin ellas no se borra para rehacerlo —se perdería lo recolectado—,
+        # se dice en voz alta y lo cambia una persona en la consola.
+        encontrados = [{"id": 7, "ipAddress": {"address": "10.30.0.101"}}]
+        detalles = [{"id": 7, "sshLogin": "", "sshPassword": "", "sshPort": 22}]
+        plan = converge.netxms_ops([self.equipo()], encontrados, detalles, self.API, self.SECRETS)
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(len(plan["pendientes"]), 1)
+        self.assertIn("10.30.0.101", plan["pendientes"][0])
+        self.assertIn("otras credenciales", plan["pendientes"][0])
+
+    def test_sin_usuario_declarado_se_registra_como_administrador(self):
+        equipo = {"role": "rte1", "name": "rte1", "mgmt_address": "10.30.0.101", "configure": {}}
+        plan = converge.netxms_ops([equipo], [], [], self.API, self.SECRETS)
+        self.assertEqual(json.loads(plan["ops"][0]["cuerpo"])["sshLogin"], "admin")
+
+    def test_la_clave_del_equipo_no_viaja_en_la_linea_de_ordenes(self):
+        # La clave va en el cuerpo, que entra por la entrada estándar; en la orden —donde
+        # la vería `ps` dentro del invitado de gestión— no aparece.
+        op = converge.netxms_ops([self.equipo()], [], [], self.API, self.SECRETS)["ops"][0]
+        self.assertNotIn("s3cr3t", " ".join(op["cmd"]))
+        self.assertIn("s3cr3t", op["cuerpo"])
+
+    def test_el_testigo_se_lee_de_la_entrada_y_no_de_la_orden(self):
+        cmd = converge.netxms_censo_cmd(self.API)
+        self.assertEqual(cmd[:2], ["sh", "-c"])
+        self.assertIn("IFS= read -r t", cmd[2])
+        self.assertIn("Bearer $t", cmd[2])
+        self.assertIn("/objects/search", cmd[2])
+
+    def test_el_censo_pregunta_solo_por_equipos(self):
+        self.assertEqual(json.loads(converge.netxms_censo_cuerpo()), {"class": ["Node"]})
+
+    def test_el_login_va_a_su_ruta_y_el_cuerpo_lleva_usuario_y_clave(self):
+        self.assertIn("/login", converge.netxms_login_cmd(self.API)[2])
+        cuerpo = json.loads(converge.netxms_login_cuerpo("admin", "clave"))
+        self.assertEqual(cuerpo, {"username": "admin", "password": "clave"})
+
+    def test_las_fichas_se_piden_solo_por_los_equipos_de_este_laboratorio(self):
+        # La búsqueda devuelve resúmenes sin credenciales: la ficha hay que pedirla, y se
+        # pide de una vez y sólo por los equipos de este laboratorio —leer la de todos
+        # para escribir uno sería leer de más—.
+        encontrados = [
+            {"id": 7, "ipAddress": {"address": "10.30.0.101"}},   # de este laboratorio
+            {"id": 9, "ipAddress": {"address": "10.30.0.108"}},   # de otro
+            {"id": 5, "ipAddress": {"address": "10.30.0.101"}},   # de este laboratorio
+        ]
+        ids = converge.netxms_ids([self.equipo()], encontrados)
+        self.assertEqual(ids, [5, 7])
+        self.assertEqual(json.loads(converge.netxms_fichas_cuerpo(ids)), {"ids": [5, 7]})
 
 
 if __name__ == "__main__":

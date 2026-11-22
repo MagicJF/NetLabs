@@ -4,9 +4,11 @@
 # motor y que sobrevive a todos los laboratorios. Su única pata está en la red de
 # gestión y su dirección se deriva de su vmid, igual que la del resto.
 #
-# El motor no sabe qué es NetXMS: aquí sólo se declaran un repositorio, unos
-# paquetes y un servicio. Si mañana el servicio cambia, cambia este fichero, no
-# el motor.
+# Aquí se declaran un repositorio, unos paquetes y unos ficheros de configuración. El
+# motor **sí sabe** que este servicio tiene un API y que su nombre es NetXMS
+# (`tasks/netxms.yml`, la quinta vía del diseño): con él registra cada equipo del
+# laboratorio con su credencial. Lo que sigue viviendo sólo aquí es *cómo* se instala
+# y *cómo* se configura este servicio; lo que el motor habla con él, está en el motor.
 
 lab: a_bootstrap
 kind: control
@@ -28,11 +30,21 @@ nodes:
         # que necesita un contenedor. Tomcat 11 está en trixie y trae el suyo.
         - tomcat11
         - default-jre-headless
+        # El agente no es un extra de monitorización del propio servidor: es quien
+        # abre el canal SSH interactivo de la consola, y sin él la terminal que el
+        # motor deja preparada (usuario y clave en el equipo) no tiene quien la abra.
+        # El servidor NO depende de él: hay que declararlo (medido).
+        - netxms-agent
       # El servidor no arranca sin base de datos: sin esta sección sale con
       # status=3 (NOTIMPLEMENTED) y se queda en bucle de reinicio. SQLite porque
       # es una sola máquina y no hay un motor de base de datos que mantener.
       files:
+        # `Module = webapi` enciende el API REST del servidor (`/v1/...` en el 8000,
+        # escuchando sólo dentro del invitado): por ahí entra el motor para registrar
+        # los equipos. Sin el módulo cargado el puerto contesta 404 a todo, así que
+        # `restart` no es un lujo: sin releer, el fichero nuevo no cambia nada.
         - path: /etc/netxmsd.conf
+          restart: netxms-server
           content: |
             ## Logging
             LogFile=/var/log/netxmsd
@@ -41,6 +53,20 @@ nodes:
             ## Database configuration - SQLite (single host, no DBA to maintain)
             DBDriver=sqlite.ddr
             DBName=/var/lib/netxms/netxms.db
+
+            ## API REST (module webapi): /v1/... en 127.0.0.1:8000
+            Module = webapi
+        # El subagente SSH es lo que convierte al agente en el proxy de la consola:
+        # es él quien abre la sesión hacia el equipo. Va en el directorio de ficheros
+        # adicionales que lee el agente, y no tocando el del paquete: sus valores
+        # cambian con la versión y el motor no puede reescribirlos sin perderlos.
+        # Medido: sin esta línea, la consola contesta «Unknown command» al abrir la
+        # terminal aunque el equipo tenga sus credenciales y el agente esté en pie.
+        - path: /etc/nxagentd.conf.d/10-netlabs.conf
+          restart: netxms-agent
+          content: |
+            ### netlabs — el canal SSH interactivo lo abre el agente (subagente ssh)
+            SubAgent=ssh
         # La consola tiene que saber a qué servidor hablar. Va en el classpath
         # común de Tomcat; el servidor está en la misma máquina.
         - path: /usr/share/tomcat11/lib/nxmc.properties

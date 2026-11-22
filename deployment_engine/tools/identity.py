@@ -604,15 +604,24 @@ def _validate_area(role: str, area: str, body, networks: dict) -> None:
         _require_list(role, area, body)
         for item in body:
             if not isinstance(item, dict) or set(item) not in (
-                {"path", "content"}, {"path", "content", "mode"}
+                {"path", "content"},
+                {"path", "content", "mode"},
+                {"path", "content", "restart"},
+                {"path", "content", "mode", "restart"},
             ):
-                raise LabError(f"cada fichero de {role!r} es {{path, content, mode?}}")
+                raise LabError(f"cada fichero de {role!r} es {{path, content, mode?, restart?}}")
             if not isinstance(item["path"], str) or not item["path"].startswith("/"):
                 raise LabError(f"la ruta de un fichero de {role!r} tiene que ser absoluta")
             if not isinstance(item["content"], str):
                 raise LabError(f"el contenido de {item['path']!r} de {role!r} tiene que ser texto")
             if "mode" in item and (not isinstance(item["mode"], str) or not item["mode"]):
                 raise LabError(f"el 'mode' de {item['path']!r} de {role!r} tiene que ser texto octal")
+            # `restart` es el nombre de la unidad que tiene que releer ESTE fichero
+            # cuando cambia: sin él, un fichero de configuración escrito no cambia
+            # nada hasta el siguiente reinicio a mano, y el apply diría que ya está.
+            if "restart" in item and (not isinstance(item["restart"], str) or not item["restart"]):
+                raise LabError(f"el 'restart' de {item['path']!r} de {role!r} tiene que ser "
+                               "el nombre de una unidad de systemd")
     elif area == "commands":
         _require_list(role, area, body)
         for item in body:
@@ -938,6 +947,24 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     # diferencia que encuentra.
     if rutas:
         steps.append({"op": "rutas_converge", "rutas": rutas})
+
+    # Los equipos de red del laboratorio se registran en lo que observa el sitio para
+    # que quien mira los vea con su credencial y pueda abrir su terminal sin teclear
+    # nada. El plan tampoco puede leer ese censo sin entrar por su API, así que vuelve
+    # a decir que hay trabajo y el apply escribe sólo la diferencia. Es una vía del
+    # motor —la quinta— y tiene su propio paso porque no es converger un interior ni
+    # poner una ruta: es hablar con un servicio del sitio.
+    equipos = [n for n in nodes if n["management"]]
+    if equipos:
+        steps.append({
+            "op": "netxms_registro",
+            "equipos": [{"role": n["role"], "address": n["mgmt_address"]} for n in equipos],
+        })
+        effects.append(
+            "registrar en lo que observa el sitio los equipos del laboratorio que falten, "
+            "con su usuario y su clave: "
+            + ", ".join(f"{n['name']} ({n['mgmt_address']})" for n in equipos)
+        )
 
     return {
         "lab": name,
