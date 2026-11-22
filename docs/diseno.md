@@ -172,13 +172,14 @@ de lo que hay en el fichero.
 
 La región generada lleva además dos diagramas, también sacados de la declaración: la
 **topología** (una nube por red con su CIDR y quién cuelga de ella) y el **cableado** (un
-equipo por nodo con sus puertos y una arista por cable). Los dos son **código**: bloques
-`` ```mermaid `` con la extensión `architecture-beta`, dentro del propio `.md`, sin PNG ni SVG
-generados ni guardados. Un diagrama es una línea más del documento: se lee, se compara y se
-revisa en el diff como cualquier otra. `architecture-beta` no admite texto en las aristas,
-así que el puerto de cada punta va en la etiqueta del equipo y el emparejamiento exacto queda
-en la tabla de cables. Un diagrama que no sale de la declaración no se dibuja: se pudre el
-primero que alguien cambie algo a mano.
+equipo por nodo con sus puertos y una arista por cable que dice las dos puntas que une). Los
+dos son **código**: bloques `` ```mermaid `` dentro del propio `.md`, sin PNG ni SVG generados
+ni guardados. Un diagrama es una línea más del documento: se lee, se compara y se revisa en el
+diff como cualquier otra. La topología va en `architecture-beta` —iconos vectoriales nativos,
+sin depender de una fuente— y el cableado en `flowchart`, porque en `architecture-beta` no se
+puede escribir texto en la arista y ahí lo que importa es justo eso: qué puerto va con cuál.
+Un diagrama que no sale de la declaración no se dibuja: se pudre el primero que alguien cambie
+algo a mano.
 
 *Evita:* el documento que describe un sistema que ya no existe.
 

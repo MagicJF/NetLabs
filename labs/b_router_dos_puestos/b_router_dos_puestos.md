@@ -26,12 +26,12 @@ architecture-beta
 ### Cableado (L2)
 
 ```mermaid
-architecture-beta
-    service n_rte1(server)[rte1 (p1, p2)]
-    service n_wsp1(server)[wsp1 (p1)]
-    service n_wsp2(server)[wsp2 (p1)]
-    n_rte1:R -- L:n_wsp1
-    n_rte1:R -- L:n_wsp2
+flowchart LR
+    n_rte1["rte1<br/>p1, p2"]
+    n_wsp1["wsp1<br/>p1"]
+    n_wsp2["wsp2<br/>p1"]
+    n_rte1 ---|rte1p1 ↔ wsp1p1| n_wsp1
+    n_rte1 ---|rte1p2 ↔ wsp2p1| n_wsp2
 ```
 
 ### Networks

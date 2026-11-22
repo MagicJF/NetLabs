@@ -90,11 +90,11 @@ class ElPlan(unittest.TestCase):
         self.assertEqual([s for s in segundo["steps"]
                           if s["op"] in ("guest_create", "pool_ensure", "bridge_ensure", "guest_start")], [])
 
-    def test_plan_reconoce_sus_invitados_por_la_etiqueta_sin_descripcion(self):
-        # `/cluster/resources` no devuelve la descripción: si el plan sólo mirara
-        # ahí, cada apply crearía un juego nuevo de invitados. La etiqueta sí vuelve.
+    def test_plan_reconoce_sus_invitados_por_su_nombre(self):
+        # El invitado se reconoce por su nombre —que es el del equipo— dentro del pool
+        # del laboratorio. No hace falta ninguna marca más: el pool ya dice de quién es.
         viejos = [{"vmid": 210, "name": "rte1", "type": "qemu", "pool": "b_router_dos_puestos",
-                   "description": "", "tags": "netlabs;role=rte1", "status": "running"}]
+                   "status": "running"}]
         plan = identity.plan(mundo(guests=viejos), laboratorio(), entorno())
         self.assertEqual({n["role"]: n["vmid"] for n in plan["nodes"]}["rte1"], 210)
         # El router que ya vive no se vuelve a crear; los puestos que faltan, sí.
@@ -109,7 +109,7 @@ class ElPlan(unittest.TestCase):
         primero = identity.plan(mundo(), lab, env)
         pool = primero["pool"]
         guests = [{"vmid": n["vmid"], "name": n["name"], "type": n["guest"],
-                   "pool": pool, "status": "running", "tags": f"netlabs;role={n['role']}"}
+                   "pool": pool, "status": "running"}
                   for n in primero["nodes"]]
         bridges = [{"iface": s["bridge"], "comments": s["comment"]}
                    for s in primero["steps"] if s["op"] == "bridge_ensure"]
@@ -411,7 +411,7 @@ class ElSitio(unittest.TestCase):
         # reconociera su invitado por el pool, lo daría por ausente y crearía un segundo
         # servicio de observación junto al que ya está en pie.
         viejos = [{"vmid": 102, "name": "netxms", "type": "lxc", "pool": "lab-00_bootstrap",
-                   "description": "", "tags": "netlabs;role-netxms", "status": "running"}]
+                   "status": "running"}]
         sitio = identity.site(mundo(guests=viejos), entorno())
         self.assertEqual(sitio["vmid"], 102)
         self.assertTrue(sitio["exists"])
@@ -440,11 +440,14 @@ class Documentacion(unittest.TestCase):
 
     def test_la_documentacion_dibuja_la_topologia_y_el_cableado(self):
         texto = identity.render_docs(laboratorio(), entorno())
-        # Dos dibujos con iconos vectoriales nativos: quién está en qué red y qué
-        # equipo va cableado con cuál. Ni uno solo fuera de `architecture-beta`.
-        self.assertEqual(texto.count("```mermaid\narchitecture-beta"), 2)
-        self.assertNotIn("flowchart", texto)
-        self.assertIn("[rte1 (p1, p2)]", texto)
+        # Dos dibujos sacados de la declaración: quién está en qué red (topología, en
+        # `architecture-beta`, con sus iconos vectoriales) y qué puerto va con qué puerto
+        # (cableado, en `flowchart`, que sí admite texto en la arista).
+        self.assertEqual(texto.count("```mermaid\narchitecture-beta"), 1)
+        self.assertEqual(texto.count("```mermaid\nflowchart LR"), 1)
+        self.assertIn('n_rte1["rte1<br/>p1, p2"]', texto)
+        # El cable dice sus dos puntas sin haber que mirar la tabla.
+        self.assertIn("rte1p1 ↔ wsp1p1", texto)
         # El diagrama es código dentro de la página: ni imagen enlazada ni fichero aparte.
         self.assertNotIn("![", texto)
         self.assertNotIn(".svg", texto)
@@ -454,21 +457,30 @@ class Documentacion(unittest.TestCase):
         """Ni un servicio inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""
         lab = laboratorio()
         texto = identity.render_docs(lab, entorno())
-        bloques = re.findall(r"```mermaid\narchitecture-beta\n(.*?)```", texto, re.S)
-        self.assertEqual(len(bloques), 2)
-        topologia, cableado = bloques
+        bloques = dict(re.findall(r"```mermaid\n(architecture-beta|flowchart LR)\n(.*?)```",
+                                  texto, re.S))
+        self.assertEqual(sorted(bloques), ["architecture-beta", "flowchart LR"])
+        topologia = bloques["architecture-beta"]
+        cableado = bloques["flowchart LR"]
 
         nodos = {identity._id(n["role"]) for n in lab["nodes"]}
         redes = {f"red_{identity._id(n['name'])[2:]}" for n in lab["networks"]}
         self.assertEqual(set(re.findall(r"service (\w+)\(", topologia)), nodos | redes)
-        self.assertEqual(set(re.findall(r"service (\w+)\(", cableado)), nodos)
+        self.assertEqual(set(re.findall(r"(?m)^\s+(\w+)\[\"", cableado)), nodos)
 
         # Topología: una arista por pata (nodo -> red). Cableado: una por cable.
         patas = sum(len(dict.fromkeys(n.get("networks") or [])) for n in lab["nodes"])
         self.assertEqual(len(re.findall(r"[RLTB] -- [RLTB]:", topologia)), patas)
-        cables = [(identity._id(c["a"]["node"]), identity._id(c["z"]["node"]))
-                  for c in lab["links"]]
-        self.assertEqual(re.findall(r"(\w+):[RLTB] -- [RLTB]:(\w+)", cableado), cables)
+        aristas = re.findall(r"(\w+) ---\|([^|]+)\| (\w+)", cableado)
+        self.assertEqual(len(aristas), len(lab["links"]))
+        self.assertEqual([(a, z) for a, _, z in aristas],
+                         [(identity._id(c["a"]["node"]), identity._id(c["z"]["node"]))
+                          for c in lab["links"]])
+        # Y cada arista dice las dos puntas que une, que es lo que la hace útil.
+        for (_, etiqueta, _), cable in zip(aristas, lab["links"]):
+            self.assertEqual(etiqueta.split(" ↔ "),
+                             [identity._endpoint(cable["a"]["node"], cable["a"]["port"]),
+                              identity._endpoint(cable["z"]["node"], cable["z"]["port"])])
 
     def test_el_dibujo_del_cableado_no_inventa_ni_omite(self):
         lab = {"networks": [{"name": "lan", "address": "10.9.0.0/24"}],
@@ -480,9 +492,9 @@ class Documentacion(unittest.TestCase):
                "links": [{"a": {"node": "r", "port": 1}, "z": {"node": "s", "port": 1}},
                          {"a": {"node": "s", "port": 2}, "z": {"node": "h", "port": 1}}]}
         lineas = identity._mermaid_cableado(lab)
-        self.assertIn("    service n_s(server)[s (p1, p2)]", lineas)
-        self.assertEqual([l.strip() for l in lineas if " -- " in l],
-                         ["n_r:R -- L:n_s", "n_s:R -- L:n_h"])
+        self.assertIn('    n_s["s<br/>p1, p2"]', lineas)
+        self.assertEqual([l.strip() for l in lineas if " ---|" in l],
+                         ["n_r ---|rp1 ↔ sp1| n_s", "n_s ---|sp2 ↔ hp1| n_h"])
 
 
 if __name__ == "__main__":

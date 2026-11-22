@@ -23,10 +23,6 @@ def _world(resources, networks, pools):
             "name": item.get("name"),
             "type": "lxc" if item.get("type") == "lxc" else "qemu",
             "pool": item.get("pool") or "",
-            # `/cluster/resources` no trae la descripción; sí las etiquetas. Es la
-            # marca que el plan puede leer sin una llamada por invitado.
-            "description": item.get("description") or "",
-            "tags": item.get("tags") or "",
             "status": item.get("status"),
         }
         for item in resources
@@ -63,11 +59,6 @@ def _create_body(node, env, pool, ssh_public_key=None):
         "memory": node["memory"],
         "description": node["description"],
         "pool": pool,
-        # La etiqueta lleva el rol: `/cluster/resources` sí la devuelve, así que el
-        # plan reconoce sus invitados sin una llamada de configuración por cada uno.
-        # Una etiqueta de Proxmox no admite `=`: se separa con guion. El `=` vive
-        # en la descripción, que sí es texto libre.
-        "tags": f"netlabs;role-{node['role']}",
     }
     if node["guest"] == "lxc":
         body.update({

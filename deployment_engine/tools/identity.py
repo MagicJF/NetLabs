@@ -774,13 +774,13 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     mine = {g["vmid"]: g for g in guests if g.get("pool") == pool}
     by_role = {}
     sobra = []
-    # El nombre del invitado es el del equipo, así que el respaldo por nombre es el
-    # propio nombre: se conserva para reconocer invitados creados antes del cambio
-    # sin una llamada de configuración por cada uno.
+    # El invitado se reconoce por su nombre, que es el del equipo, dentro del pool del
+    # laboratorio: no hay traducción que hacer entre el rol y el nombre porque son el
+    # mismo, y no hace falta ninguna marca más — el pool ya dice de quién es.
     nombres = {n["role"]: n["role"] for n in lab["nodes"]}
     roles = {n["role"] for n in lab["nodes"]}
     for guest in sorted(mine.values(), key=lambda g: int(g["vmid"])):
-        role = _role_of(guest) or nombres.get(guest.get("name") or "")
+        role = nombres.get(guest.get("name") or "")
         if role in roles and role not in by_role:
             by_role[role] = guest
         else:
@@ -1164,37 +1164,6 @@ def _space_from_comment(comment: str):
     return match.group(1) if match else None
 
 
-def _role_from_description(description: str):
-    match = re.search(r"(?:^|\s)role=([A-Za-z0-9][A-Za-z0-9_.-]*)", description)
-    return match.group(1) if match else None
-
-
-def _role_from_tags(tags: str):
-    """El rol que el motor escribió en las etiquetas del invitado.
-
-    `/cluster/resources` NO devuelve la descripción (medido), pero SÍ las etiquetas.
-    Leer el rol de ahí es lo que hace que el segundo `apply` reconozca sus propios
-    invitados en vez de crear un juego nuevo cada pasada. La descripción sigue
-    siendo la marca legible para un humano; las etiquetas son la marca que el motor
-    puede leer sin una llamada por invitado.
-    """
-    for tag in (tags or "").split(";"):
-        # Proxmox no admite `=` en una etiqueta, así que el motor escribe
-        # `role-<rol>`; se acepta también la forma vieja `role=<rol>` para no
-        # dejar de reconocer invitados creados antes de este cambio.
-        for prefijo in ("role=", "role-"):
-            if tag.startswith(prefijo):
-                return tag[len(prefijo):]
-    return None
-
-
-def _role_of(guest: dict):
-    """El rol de un invitado: primero la etiqueta, luego la descripción."""
-    return _role_from_tags(guest.get("tags") or "") or _role_from_description(
-        guest.get("description") or ""
-    )
-
-
 def _ids_of(guests) -> set:
     return {int(g["vmid"]) for g in guests if g.get("vmid") is not None}
 
@@ -1343,25 +1312,30 @@ def _mermaid_topologia(lab: dict) -> list[str]:
 
 
 def _mermaid_cableado(lab: dict) -> list[str]:
-    """Qué va con qué: el cableado tal y como se declara, en `architecture-beta`.
+    """Qué puerto va con qué puerto: el cableado físico, tal y como se declara.
 
-    Se dibuja un equipo por nodo, con sus puertos entre paréntesis, y una arista por
-    cable. `architecture-beta` no admite texto en las aristas, así que el puerto de
-    cada punta va en la etiqueta del equipo; el emparejamiento exacto (qué puerto con
-    cuál) está en la tabla de cables, que es la que no admite interpretación.
+    Cada equipo es una caja con los puertos que se le cablean y cada cable una arista
+    que dice sus dos puntas. Se dibuja con `flowchart` y no con `architecture-beta`
+    porque aquí lo que importa es el texto de la arista —qué puerto con cuál— y en
+    `architecture-beta` no se puede escribir: allí el puerto acaba en la etiqueta del
+    equipo y el emparejamiento hay que buscarlo en la tabla. Sigue siendo código
+    dentro de la página: no hay fichero de imagen que se quede viejo.
     """
-    lineas = ["```mermaid", "architecture-beta"]
+    lineas = ["```mermaid", "flowchart LR"]
     patas: dict[str, list[int]] = {}
     for link in lab.get("links") or []:
         for extremo in (link["a"], link["z"]):
             patas.setdefault(extremo["node"], []).append(extremo["port"])
     for node in lab["nodes"]:
         suyos = sorted(set(patas.get(node["role"], [])))
-        etiqueta = f"{node['role']} (p{', p'.join(str(p) for p in suyos)})" if suyos else node["role"]
-        lineas.append(f"    service {_id(node['role'])}(server)[{etiqueta}]")
+        etiqueta = (f"{node['role']}<br/>p{', p'.join(str(p) for p in suyos)}"
+                    if suyos else node["role"])
+        lineas.append(f'    {_id(node["role"])}["{etiqueta}"]')
     for link in lab.get("links") or []:
-        a, z = link["a"]["node"], link["z"]["node"]
-        lineas.append(f"    {_id(a)}:R -- L:{_id(z)}")
+        a, z = link["a"], link["z"]
+        punta_a = _endpoint(a["node"], a["port"])
+        punta_z = _endpoint(z["node"], z["port"])
+        lineas.append(f'    {_id(a["node"])} ---|{punta_a} ↔ {punta_z}| {_id(z["node"])}')
     lineas.append("```")
     return lineas
 
