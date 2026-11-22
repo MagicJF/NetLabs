@@ -538,14 +538,15 @@ class Documentacion(unittest.TestCase):
             self.assertIn(identity._subred(net["address"]), topologia)
             self.assertIn(f">{net["name"]}<", topologia)
 
-        # Las conexiones son las declaradas por cables (`links`), no por `after`: la
-        # topología dibuja una por cable más la salida a Internet; el cableado, una
-        # por cable. `after` sólo ordena el arranque y la colocación, no dibuja líneas.
+        # La topología dibuja la jerarquía: la pata del equipo que cruza de un área a
+        # otra, una por área que toca, más los cables entre equipos de la misma área.
+        # El cableado dibuja los cables declarados, uno por línea. `after` sólo ordena
+        # el arranque y la colocación, no dibuja líneas.
         def conexiones(svg):
             # El gris de línea es el de una conexión: los símbolos no lo usan.
             return svg.count('stroke="#94a3b8"')
 
-        self.assertEqual(conexiones(topologia), len(lab["links"]) + 1)  # +1: Internet
+        self.assertEqual(conexiones(topologia), 2)  # rte1: una pata a lan1 y otra a lan2
         self.assertEqual(conexiones(cableado), len(lab["links"]))
 
         # La clase la dice el símbolo, plano y de línea: el router es el círculo con las
@@ -577,10 +578,10 @@ class Documentacion(unittest.TestCase):
         self.assertIn(">dhcp<", svg)
 
     def test_un_equipo_en_tres_redes_se_rodea_de_ellas(self):
-        """Con tres redes el equipo de varias patas va al cruce, y las áreas no se pisan.
+        """Un espacio de direcciones es una caja, y las redes que contiene van dentro.
 
-        Una red sin equipos sigue tocando al equipo que la declara: su pata se dibuja
-        hasta el borde del área, que es lo único que hay dentro.
+        Las áreas hermanas no se pisan —dos redes solapadas se leen como una—, pero
+        un área SÍ contiene a las suyas: eso es lo que dice la numeración.
         """
         lab = {"lab": "tres_redes", "address_spaces": ["10.70.0.0/16"],
                "networks": [{"name": "lan", "address": "10.70.1.0/24"},
@@ -601,10 +602,21 @@ class Documentacion(unittest.TestCase):
         cajas = [tuple(float(v) for v in c) for c in re.findall(
             r'<rect x="(-?[\d.]+)" y="(-?[\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="14"',
             svg)]
-        self.assertEqual(len(cajas), 3)
-        for i, (x1, y1, w1, h1) in enumerate(cajas):
-            for x2, y2, w2, h2 in cajas[i + 1:]:
-                # Dos redes que se solapan en el dibujo se leen como una sola.
+        # Tres redes declaradas y el espacio que las contiene: 10.70.x.x.
+        self.assertEqual(len(cajas), 4)
+
+        def dentro(pequena, grande):
+            x1, y1, w1, h1 = pequena
+            x2, y2, w2, h2 = grande
+            return (x2 <= x1 and y2 <= y1 and x1 + w1 <= x2 + w2
+                    and y1 + h1 <= y2 + h2)
+
+        madres = [c for c in cajas if all(dentro(o, c) for o in cajas if o is not c)]
+        self.assertEqual(len(madres), 1, "el espacio tiene que envolver a sus tres redes")
+        redes = [c for c in cajas if c is not madres[0]]
+        for i, (x1, y1, w1, h1) in enumerate(redes):
+            for x2, y2, w2, h2 in redes[i + 1:]:
+                # Dos redes hermanas que se solapan en el dibujo se leen como una sola.
                 self.assertFalse(x1 < x2 + w2 and x2 < x1 + w1
                                  and y1 < y2 + h2 and y2 < y1 + h1,
                                  "dos áreas de red se solapan")
