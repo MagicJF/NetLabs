@@ -334,6 +334,27 @@ class ElPlanDeControl(unittest.TestCase):
         # Adoptar no es crear: ningún paso de creación ni de arranque.
         self.assertEqual([s["op"] for s in plan["steps"]], ["interior_converge"])
 
+    def test_control_usa_los_recursos_que_declara_el_sitio(self):
+        # El invitado de control ES el de gestión, que se declara en `netlabs.yml`: si el
+        # laboratorio no dice otra cosa, sus recursos son los del sitio. Sin esto, el plan
+        # pedía 1 core contra los 2 del invitado vivo y `plan`/`apply a_bootstrap` se paraba
+        # diciendo que hacía falta destroy —un desacuerdo que no existe en la realidad—.
+        env = entorno()
+        vivos = [{"vmid": 102, "name": "netxms", "type": "lxc", "pool": "a_bootstrap",
+                  "description": "netlabs lab=a_bootstrap role=netxms", "status": "running",
+                  "cores": env["management"]["cores"],
+                  "memory_bytes": env["management"]["memory"] * 1024 * 1024}]
+        plan = identity.plan(mundo(guests=vivos, pools=["a_bootstrap"]),
+                             laboratorio("a_bootstrap"), entorno())
+        self.assertEqual(plan["nodes"][0]["cores"], env["management"]["cores"])
+        self.assertEqual(plan["nodes"][0]["memory"], env["management"]["memory"])
+
+    def test_control_puede_sobreescribir_los_recursos_del_sitio(self):
+        lab = laboratorio("a_bootstrap")
+        lab["nodes"][0]["resources"] = {"cores": 4}
+        plan = identity.plan(mundo(), lab, entorno())
+        self.assertEqual(plan["nodes"][0]["cores"], 4)
+
     def test_control_sin_pool_ni_invitado_crea_el_que_falta(self):
         plan = identity.plan(mundo(), laboratorio("a_bootstrap"), entorno())
         self.assertEqual([s["op"] for s in plan["steps"]],

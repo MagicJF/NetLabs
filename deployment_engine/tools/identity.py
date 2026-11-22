@@ -1091,6 +1091,12 @@ def _build_control_node(node, vmid, lab_name, env, mgmt_net) -> dict:
     management = env["management"]
     address = derive_management(vmid, management["address_space"])
     prefix = ipaddress.ip_network(management["address_space"], strict=False).prefixlen
+    # El invitado de control **es** el de gestión, y ese se declara en `netlabs.yml`
+    # (`management`): sus recursos salen de ahí, no de un número por defecto. Si el
+    # laboratorio no declarara unos, el plan pediría 1 core contra los 2 del invitado
+    # vivo y `apply a_bootstrap` se pararía diciendo que hace falta destroy —un desacuerdo
+    # entre el sitio y el laboratorio que no existe en la realidad—. El laboratorio puede
+    # sobreescribirlos con `resources` si algún día hace falta.
     resources = node.get("resources") or {}
     return {
         "role": node["role"],
@@ -1101,9 +1107,9 @@ def _build_control_node(node, vmid, lab_name, env, mgmt_net) -> dict:
         "description": f"netlabs lab={lab_name} role={node['role']}",
         "stage": node["stage"],
         "after": node.get("after") or [],
-        "cores": resources.get("cores", 1),
-        "memory": resources.get("memory", 512),
-        "disk": resources.get("disk", 8),
+        "cores": resources.get("cores", management["cores"]),
+        "memory": resources.get("memory", management["memory"]),
+        "disk": resources.get("disk", management["disk"]),
         "image": node.get("image"),
         "interfaces": [{
             "index": 0,
