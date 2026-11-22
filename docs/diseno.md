@@ -173,10 +173,12 @@ La página de cada laboratorio tiene dos regiones: una **generada** desde la dec
 así, qué se aprendió). La comprobación re-renderiza la región generada y **falla si difiere**
 de lo que hay en el fichero.
 
-La región generada lleva además dos **planos**, también sacados de la declaración: la
+La región generada lleva además un **plano**, también sacado de la declaración: la
 **topología** (cada red como área translúcida con su nombre, su subred y la dirección de su
-puerta, y dentro quién cuelga de ella) y el **cableado** (un equipo por nodo y una línea por
-cable, con el puerto que ocupa cada punta). Los dibuja `tools/plano.py` y los escribe **dentro
+puerta, y dentro quién cuelga de ella), con un símbolo por equipo y una línea por cable, cada
+una con el puerto de sus dos puntas. Un solo plano: hubo también un dibujo de cableado, hecho
+por un segundo motor plano, que enseñaba los mismos equipos y los mismos puertos con otra
+colocación —dos retratos del mismo dato que no coincidían y hacían dudar de los dos—. Los dibuja `tools/plano.py` y los escribe **dentro
 de la propia página**, como SVG en texto. No hay fichero de imagen: el plano es código generado
 que se revisa en el diff como cualquier otra línea, no se puede quedar viejo por separado y
 `./netlabs docs --check` lo compara con lo que la declaración produce hoy. Mermaid no sirve para

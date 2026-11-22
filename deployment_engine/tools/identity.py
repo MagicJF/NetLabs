@@ -1479,13 +1479,14 @@ def render_docs(lab: dict, env: dict) -> str:
         # El plano va escrito aquí dentro, como SVG en texto: no hay fichero que se
         # pueda quedar viejo ni que haya que regenerar aparte, y el diff del commit
         # enseña exactamente qué cambió en el dibujo cuando cambia la declaración.
-        nombre = lab["lab"]
-        if lab.get("networks"):
-            import plano  # noqa: PLC0415  (los módulos viven en tools/)
-            lines += ["", "### Topología", "", plano.plano(lab, "topologia"), "",
-                      _pie_plano(True)]
-            lines += ["", "### Cableado (L2)", "", plano.plano(lab, "cableado"), "",
-                      _pie_plano(False)]
+        import plano  # noqa: PLC0415  (los módulos viven en tools/)
+        # Un solo plano. Hubo dos —topología y cableado— y el de cableado lo dibujaba
+        # otro motor, plano y antiguo: enseñaba los mismos equipos, los mismos puertos
+        # y las mismas direcciones, pero con otra colocación, y quien abría el
+        # documento veía dos dibujos que no coincidían. El bueno es este, que ya dibuja
+        # un símbolo por equipo y una línea por cable con el puerto de cada punta.
+        lines += ["", "### Topología", "", plano.plano(lab, "topologia"), "",
+                  _pie_plano(True)]
     lines += ["", "### Networks", "", "| network | address |", "| --- | --- |"]
     for net in lab["networks"]:
         lines.append(f"| `{net['name']}` | `{net['address']}` |")

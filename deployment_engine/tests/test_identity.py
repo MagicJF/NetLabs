@@ -516,10 +516,11 @@ class Documentacion(unittest.TestCase):
         diff que la declaración que lo produce y no hay que regenerar nada aparte.
         """
         texto = identity.render_docs(laboratorio(), entorno())
-        self.assertEqual(texto.count("<svg"), 2)
-        self.assertEqual(texto.count("</svg>"), 2)
+        self.assertEqual(texto.count("<svg"), 1)
+        self.assertEqual(texto.count("</svg>"), 1)
         self.assertIn(">Topología<", texto.replace("### Topología", ">Topología<"))
-        self.assertIn("### Cableado (L2)", texto)
+        # Un solo dibujo: dos planos del mismo dato acababan discrepando entre sí.
+        self.assertNotIn("Cableado (L2)", texto)
         # Ni enlaces a una imagen ni bloques de otro lenguaje de dibujo: una sola verdad.
         self.assertNotIn(".svg)", texto)
         self.assertNotIn("```", texto)
