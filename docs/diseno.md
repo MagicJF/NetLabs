@@ -178,12 +178,16 @@ La región generada lleva además un **plano**, también sacado de la declaraci�
 puerta, y dentro quién cuelga de ella), con un símbolo por equipo y una línea por cable, cada
 una con el puerto de sus dos puntas. Un solo plano: hubo también un dibujo de cableado, hecho
 por un segundo motor plano, que enseñaba los mismos equipos y los mismos puertos con otra
-colocación —dos retratos del mismo dato que no coincidían y hacían dudar de los dos—. Lo dibuja `tools/plano.py` y va en **su propio fichero**, `<lab>-topologia.svg`, al lado de la
-página, que lo menciona como imagen. Incrustado en el `.md` se leía en blanco en los visores que
-no pintan SVG en línea —y hay muchos—, y quien abría el documento creía que el dibujo no existía.
-Como fichero sigue siendo vector y lo enseña cualquiera. Se genera con el mismo comando y
-`./netlabs docs --check` lo compara con lo que la declaración produce hoy: no se puede quedar
-viejo sin que la comprobación lo diga. Mermaid no sirve para
+colocación —dos retratos del mismo dato que no coincidían y hacían dudar de los dos—. Lo dibuja `tools/plano.py` y va en **su propio fichero**, `<lab>-topologia.svg`, con un
+`<lab>-topologia.png` al lado, y la página menciona el PNG. Incrustado en el `.md` se leía en
+blanco en los visores que no pintan SVG en línea; y como fichero, en blanco también en los que
+no pintan un SVG como imagen —enseñan el texto alternativo y el que abre el documento ve un
+hueco—. El PNG lo enseña cualquiera; el SVG sigue al lado, enlazado, para quien quiera el
+vector. Los dos se generan con el mismo comando y `./netlabs docs --check` compara el SVG con lo
+que la declaración produce hoy y exige que el PNG esté: no se pueden quedar viejos sin que la
+comprobación lo diga. El PNG lo hace un rasterizador del sistema (`resvg`, `rsvg-convert` o
+`inkscape`) con una fuente de verdadera; sin uno de ellos el plano es cajas y cables sin una sola
+letra, así que sin rasterizador o sin fuentes se avisa y **no** se escribe un PNG a medias. Mermaid no sirve para
 esto: no sabe dibujar los símbolos de una red (router, switch, cortafuegos, servidor) y sus áreas
 no pueden tocarse, así que un router con pata en dos redes no se puede poner entre ellas.
 

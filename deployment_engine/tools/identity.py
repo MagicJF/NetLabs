@@ -1543,8 +1543,9 @@ def render_docs(lab: dict, env: dict) -> str:
         # enseña cualquiera; el vector sigue siendo vector.
         nombre = lab["lab"]
         lines += ["", "### Topología", "",
-                  f"![Plano de topología de {nombre}]({nombre}-topologia.svg)", "",
-                  _pie_plano(True)]
+                  f"![Plano de topología de {nombre}]({nombre}-topologia.png)", "",
+                  f"También en vector: [`{nombre}-topologia.svg`]({nombre}-topologia.svg).",
+                  "", _pie_plano(True)]
     lines += ["", "### Networks", "", "| network | address |", "| --- | --- |"]
     for net in lab["networks"]:
         lines.append(f"| `{net['name']}` | `{net['address']}` |")

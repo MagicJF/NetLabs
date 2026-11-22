@@ -10,7 +10,9 @@ Address spaces: `10.46.0.0/16`
 
 ### Topología
 
-![Plano de topología de c_enrutar_y_conmutar](c_enrutar_y_conmutar-topologia.svg)
+![Plano de topología de c_enrutar_y_conmutar](c_enrutar_y_conmutar-topologia.png)
+
+También en vector: [`c_enrutar_y_conmutar-topologia.svg`](c_enrutar_y_conmutar-topologia.svg).
 
 *cada área es una red; su cabecera dice la subred y el rango que reparte. Cada equipo lleva escrito lo que no cambia —su dirección estática, o `dhcp`— y la forma de su símbolo dice su clase. La línea dice que están conectados y va sin flechas: el plano no inventa un sentido de tráfico.*
 

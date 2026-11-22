@@ -10,7 +10,9 @@ Address spaces: `10.44.0.0/16`
 
 ### Topología
 
-![Plano de topología de b_router_dos_puestos](b_router_dos_puestos-topologia.svg)
+![Plano de topología de b_router_dos_puestos](b_router_dos_puestos-topologia.png)
+
+También en vector: [`b_router_dos_puestos-topologia.svg`](b_router_dos_puestos-topologia.svg).
 
 *cada área es una red; su cabecera dice la subred y el rango que reparte. Cada equipo lleva escrito lo que no cambia —su dirección estática, o `dhcp`— y la forma de su símbolo dice su clase. La línea dice que están conectados y va sin flechas: el plano no inventa un sentido de tráfico.*
 

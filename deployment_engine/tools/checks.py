@@ -112,12 +112,13 @@ def comprobar_estructura() -> list[str]:
         # plano va en su fichero porque incrustado en el `.md` se lee en blanco en los
         # visores que no pintan SVG en línea.
         permitidos = {f"{carpeta.name}.yml", f"{carpeta.name}.md",
-                      f"{carpeta.name}-topologia.svg"}
+                      f"{carpeta.name}-topologia.svg",
+                      f"{carpeta.name}-topologia.png"}
         for dentro in sorted(carpeta.iterdir()):
             if dentro.name not in permitidos:
                 errores.append(f"labs/{carpeta.name}/{dentro.name}: un laboratorio sólo "
                                f"declara {carpeta.name}.yml, su {carpeta.name}.md y su "
-                               f"{carpeta.name}-topologia.svg")
+                               f"{carpeta.name}-topologia.svg/.png")
         if not (carpeta / f"{carpeta.name}.yml").exists():
             errores.append(f"labs/{carpeta.name}: falta {carpeta.name}.yml")
 

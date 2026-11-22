@@ -10,7 +10,9 @@ Address spaces: `10.20.0.0/16`, `10.40.0.0/16`, `203.0.113.0/30`
 
 ### Topología
 
-![Plano de topología de d_acme_dos_sedes](d_acme_dos_sedes-topologia.svg)
+![Plano de topología de d_acme_dos_sedes](d_acme_dos_sedes-topologia.png)
+
+También en vector: [`d_acme_dos_sedes-topologia.svg`](d_acme_dos_sedes-topologia.svg).
 
 *cada área es una red; su cabecera dice la subred y el rango que reparte. Cada equipo lleva escrito lo que no cambia —su dirección estática, o `dhcp`— y la forma de su símbolo dice su clase. La línea dice que están conectados y va sin flechas: el plano no inventa un sentido de tráfico.*
 

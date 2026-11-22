@@ -555,6 +555,9 @@ class Documentacion(unittest.TestCase):
         # El plano va como imagen aparte: dentro del `.md` se lee en blanco en los
         # visores que no pintan SVG en línea, y hay muchos.
         self.assertEqual(texto.count("<svg"), 0)
+        # La imagen es PNG: hay visores que no pintan un SVG como imagen y lo dejan en
+        # el texto alternativo, o sea, en blanco. El vector sigue al lado, enlazado.
+        self.assertIn(f"![Plano de topología de {lab['lab']}]({lab['lab']}-topologia.png)", texto)
         self.assertIn(f"]({lab['lab']}-topologia.svg)", texto)
         self.assertIn(">Topología<", texto.replace("### Topología", ">Topología<"))
         # Un solo dibujo: dos planos del mismo dato acababan discrepando entre sí.

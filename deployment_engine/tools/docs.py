@@ -15,6 +15,7 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import identity  # noqa: E402
 import plano as plano_mod  # noqa: E402
+from raster import rasterizar  # noqa: E402
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 
@@ -36,9 +37,11 @@ def escribir(nombre: str, env: dict, comprobar: bool = False) -> int:
     generado = identity.render_docs(lab, env)
     pagina = ruta.with_suffix(".md")
     plano = ruta.with_name(f"{nombre}-topologia.svg")
+    dibujo_png = ruta.with_name(f"{nombre}-topologia.png")
     codigo = 0
 
-    # El plano se escribe tambien como fichero suelto: el `.md` lo menciona como imagen.
+    # El plano se escribe tambien como fichero suelto, y ademas en PNG: hay visores que
+    # no pintan un SVG como imagen y lo dejan en el texto alternativo, o sea, en blanco.
     dibujo = plano_mod.plano(lab, "topologia") if lab.get("networks") else None
     if dibujo is not None:
         if comprobar:
@@ -48,6 +51,11 @@ def escribir(nombre: str, env: dict, comprobar: bool = False) -> int:
         elif not plano.exists() or plano.read_text() != dibujo:
             plano.write_text(dibujo)
             print(f"escrito {plano.relative_to(RAIZ)}")
+        if rasterizar is not None:
+            aviso = rasterizar(dibujo, dibujo_png, comprobar)
+            if aviso:
+                print(aviso)
+                codigo |= 1 if comprobar else 0
 
     if not pagina.exists():
         if comprobar:
