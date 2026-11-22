@@ -13,6 +13,10 @@
 - name: "RouterOS · resolver la clave declarada para {{ router.name }}"
   ansible.builtin.set_fact:
     ros_clave: "{{ router | netlabs_ros_clave(secrets) }}"
+  # El valor es una credencial: sin `no_log` sale en la salida detallada de Ansible
+  # —y `netlabs` la guarda en logs/— cada vez que se resuelve. Se calla la tarea
+  # entera, como ya se hace con la clave del servicio de gestión.
+  no_log: true
 
 # La clave del router no puede ponerla el script de arranque: el agente ejecuta con
 # una política sin `sensitive` y `/user set` falla con "not enough permissions (9)"
