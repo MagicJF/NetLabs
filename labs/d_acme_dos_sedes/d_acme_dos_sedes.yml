@@ -1,0 +1,179 @@
+# ACME, Inc. — dos sedes, la misma numeración por departamento.
+#
+# Es el laboratorio de la fase 2 del diseño (docs/diseno.md §13): Nueva York y Tokio
+# con los mismos tres departamentos (ventas, ingeniería, marketing), unidas por una
+# red de tránsito —la nube «Internet» del plano— y **no** por un puente compartido.
+# Cada sede tiene su router de borde, una pata en el tránsito y una por departamento;
+# el camino entre sedes es una ruta estática hacia la sede contraria.
+#
+#   Internet (10.99.0.0/30)
+#        |                 |
+#      rte1              rte2            Nueva York / Tokio
+#     /  |  \           /  |  \
+#  wsp1 wsp2 swa1     wsp4 wsp5 wsp6     wsp2 y svs1 comparten el segmento de
+#        |    |                          ingeniería de Nueva York por el switch
+#      svs1  wsp3                        de acceso, como en un departamento real.
+#
+# La numeración es la del plano: 10.20.x.x en Nueva York y 10.40.x.x en Tokio, con
+# .55 ventas, .66 ingeniería y .77 marketing en las dos sedes. Que los dos /16 estén
+# declarados como espacios distintos es lo que hace que el motor derive una ruta de
+# gestión por sede, con su router como salto.
+#
+# El servidor va en ingeniería de Nueva York: 10.20.66.10, dirección declarada y no
+# prestada, para que el cruce desde la gestión se compruebe contra algo que hay
+# detrás del router y no contra el propio router.
+
+lab: d_acme_dos_sedes
+
+address_spaces:
+  - 10.20.0.0/16        # sede de Nueva York
+  - 10.40.0.0/16        # sede de Tokio
+  - 10.99.0.0/30        # tránsito entre las dos sedes (la nube «Internet» del plano)
+
+networks:
+  - {name: transito, address: 10.99.0.0/30, title: Internet}
+  - {name: ny_ventas, address: 10.20.55.0/24, title: "Nueva York · ventas"}
+  - {name: ny_ingenieria, address: 10.20.66.0/24, title: "Nueva York · ingeniería"}
+  - {name: ny_marketing, address: 10.20.77.0/24, title: "Nueva York · marketing"}
+  - {name: tk_ventas, address: 10.40.55.0/24, title: "Tokio · ventas"}
+  - {name: tk_ingenieria, address: 10.40.66.0/24, title: "Tokio · ingeniería"}
+  - {name: tk_marketing, address: 10.40.77.0/24, title: "Tokio · marketing"}
+
+nodes:
+  - role: rte1                    # el router de borde de Nueva York
+    type: router
+    stage: 1
+    resources: {cores: 2, memory: 512, disk: 1}
+    # puerto 1 = tránsito; 2, 3 y 4 = los tres departamentos
+    networks: [transito, ny_ventas, ny_ingenieria, ny_marketing]
+    address: 10.99.0.1/30
+    configure:
+      addresses:
+        - {network: transito, address: 10.99.0.1/30}
+        - {network: ny_ventas, address: 10.20.55.1/24}
+        - {network: ny_ingenieria, address: 10.20.66.1/24}
+        - {network: ny_marketing, address: 10.20.77.1/24}
+      # El camino a la otra sede: sin esta ruta, Tokio no existe para Nueva York.
+      # El motor sólo toca las rutas que llevan su marca (`netlabs-ruta`).
+      routes:
+        - {destination: 10.40.0.0/16, gateway: 10.99.0.2}
+      dhcp_server:
+        - {network: ny_ventas, pool: 10.20.55.100-10.20.55.199, gateway: 10.20.55.1}
+        - {network: ny_ingenieria, pool: 10.20.66.100-10.20.66.199, gateway: 10.20.66.1}
+        - {network: ny_marketing, pool: 10.20.77.100-10.20.77.199, gateway: 10.20.77.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: rte2                    # el router de borde de Tokio
+    type: router
+    stage: 1
+    resources: {cores: 2, memory: 512, disk: 1}
+    networks: [transito, tk_ventas, tk_ingenieria, tk_marketing]
+    address: 10.99.0.2/30
+    configure:
+      addresses:
+        - {network: transito, address: 10.99.0.2/30}
+        - {network: tk_ventas, address: 10.40.55.1/24}
+        - {network: tk_ingenieria, address: 10.40.66.1/24}
+        - {network: tk_marketing, address: 10.40.77.1/24}
+      routes:
+        - {destination: 10.20.0.0/16, gateway: 10.99.0.1}
+      dhcp_server:
+        - {network: tk_ventas, pool: 10.40.55.100-10.40.55.199, gateway: 10.40.55.1}
+        - {network: tk_ingenieria, pool: 10.40.66.100-10.40.66.199, gateway: 10.40.66.1}
+        - {network: tk_marketing, pool: 10.40.77.100-10.40.77.199, gateway: 10.40.77.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  # El switch del departamento que tiene dos equipos: sin él, el servidor y el
+  # puesto no podrían compartir segmento, porque un puerto de router es un cable.
+  - role: swa1
+    type: switch
+    stage: 2
+    after: [rte1]
+    resources: {cores: 2, memory: 512, disk: 1}
+    networks: [ny_ingenieria, ny_ingenieria, ny_ingenieria]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: wsp1                    # Nueva York · ventas
+    type: workstation
+    stage: 3
+    after: [rte1]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [ny_ventas]
+    address: dhcp
+
+  - role: wsp2                    # Nueva York · ingeniería
+    type: workstation
+    stage: 3
+    after: [swa1]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [ny_ingenieria]
+    address: dhcp
+
+  - role: wsp3                    # Nueva York · marketing
+    type: workstation
+    stage: 3
+    after: [rte1]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [ny_marketing]
+    address: dhcp
+
+  - role: svs1                    # el servidor del departamento de ingeniería
+    type: server
+    stage: 3
+    after: [swa1]
+    resources: {cores: 1, memory: 512, disk: 4}
+    networks: [ny_ingenieria]
+    address: 10.20.66.10/24
+
+  - role: wsp4                    # Tokio · ventas
+    type: workstation
+    stage: 3
+    after: [rte2]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [tk_ventas]
+    address: dhcp
+
+  - role: wsp5                    # Tokio · ingeniería
+    type: workstation
+    stage: 3
+    after: [rte2]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [tk_ingenieria]
+    address: dhcp
+
+  - role: wsp6                    # Tokio · marketing
+    type: workstation
+    stage: 3
+    after: [rte2]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [tk_marketing]
+    address: dhcp
+
+links:
+  - a: {node: rte1, port: 1}
+    z: {node: rte2, port: 1}
+  - a: {node: rte1, port: 2}
+    z: {node: wsp1, port: 1}
+  - a: {node: rte1, port: 3}
+    z: {node: swa1, port: 1}
+  - a: {node: rte1, port: 4}
+    z: {node: wsp3, port: 1}
+  - a: {node: swa1, port: 2}
+    z: {node: wsp2, port: 1}
+  - a: {node: swa1, port: 3}
+    z: {node: svs1, port: 1}
+  - a: {node: rte2, port: 2}
+    z: {node: wsp4, port: 1}
+  - a: {node: rte2, port: 3}
+    z: {node: wsp5, port: 1}
+  - a: {node: rte2, port: 4}
+    z: {node: wsp6, port: 1}

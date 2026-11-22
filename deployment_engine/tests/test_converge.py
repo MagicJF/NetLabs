@@ -567,6 +567,77 @@ class ElSwitchConmuta(unittest.TestCase):
                          [("DELETE", "/rest/interface/bridge/port/*3")])
 
 
+class LasRutasEstaticasDelRouter(unittest.TestCase):
+    """El área `routes` de un RouterOS: lo declarado se pone y lo marcado que sobra se quita.
+
+    La marca es el comentario `netlabs-`: una ruta puesta a mano no es del motor y no
+    se toca, aunque su destino caiga en una red del laboratorio.
+    """
+
+    RUTAS = [{"destination": "10.40.0.0/16", "gateway": "10.99.0.2"}]
+
+    def test_una_ruta_que_falta_se_crea_con_su_marca(self):
+        ops = converge.ros_ops(
+            {**router(), "configure": {"routes": self.RUTAS}},
+            {"identity": {"name": "rte1"}, "addresses": [], "routes": []}, "clave", {}, None)
+        self.assertEqual([(o["method"], o["path"]) for o in ops], [("PUT", "/rest/ip/route")])
+        self.assertEqual(ops[0]["body"], {"dst-address": "10.40.0.0/16",
+                                          "gateway": "10.99.0.2",
+                                          "comment": "netlabs-ruta"})
+
+    def test_la_ruta_ya_puesta_no_escribe(self):
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "netlabs-ruta", ".id": "*1"}]
+        self.assertEqual(converge._route_ops(self.RUTAS, actual), [])
+
+    def test_el_salto_con_la_pata_pegada_cuenta_igual(self):
+        # RouterOS devuelve el salto como `10.99.0.2%ether1` cuando la pata está fija.
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2%ether1",
+                   "comment": "netlabs-ruta", ".id": "*1"}]
+        self.assertEqual(converge._route_ops(self.RUTAS, actual), [])
+
+    def test_una_ruta_dinamica_no_cuenta_como_puesta(self):
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "dynamic": "true", ".id": "*1"}]
+        self.assertEqual([o["method"] for o in converge._route_ops(self.RUTAS, actual)], ["PUT"])
+
+    def test_el_mismo_destino_con_otro_salto_se_corrige(self):
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.9",
+                   "comment": "netlabs-ruta", ".id": "*7"}]
+        ops = converge._route_ops(self.RUTAS, actual)
+        self.assertEqual([(o["method"], o["path"]) for o in ops], [("PATCH", "/rest/ip/route/*7")])
+        self.assertEqual(ops[0]["body"], {"gateway": "10.99.0.2"})
+
+    def test_lo_que_sobra_marcado_se_retira(self):
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "netlabs-ruta", ".id": "*1"},
+                  {"dst-address": "10.41.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "netlabs-ruta", ".id": "*2"}]
+        ops = converge._route_ops(self.RUTAS, actual)
+        self.assertEqual([(o["method"], o["path"]) for o in ops], [("DELETE", "/rest/ip/route/*2")])
+
+    def test_una_ruta_sin_marca_no_se_toca(self):
+        # La ajena se queda donde está; lo que falta de lo declarado se pone.
+        actual = [{"dst-address": "10.55.0.0/16", "gateway": "10.99.0.9",
+                   "comment": "puesta a mano", ".id": "*1"}]
+        ops = converge._route_ops(self.RUTAS, actual)
+        self.assertEqual([(o["method"], o["body"]["dst-address"]) for o in ops],
+                         [("PUT", "10.40.0.0/16")])
+
+    def test_una_ruta_ajena_que_ya_cubre_el_destino_no_se_duplica(self):
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "puesta a mano", ".id": "*1"}]
+        self.assertEqual(converge._route_ops(self.RUTAS, actual), [])
+
+    def test_un_destino_ajeno_con_otro_salto_se_dice(self):
+        # El motor no puede cumplir lo declarado sin tocar lo que no es suyo: se para
+        # con el destino delante en vez de dejar una ruta que no es la declarada.
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.9",
+                   "comment": "puesta a mano", ".id": "*1"}]
+        with self.assertRaises(converge.LabError):
+            converge._route_ops(self.RUTAS, actual)
+
+
 class LasRutasDelLaboratorio(unittest.TestCase):
     """La diferencia entre las rutas declaradas y las que tiene el invitado de gestión.
 

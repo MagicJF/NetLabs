@@ -27,6 +27,7 @@ from identity import LabError, ROS_SECRET, TYPES
 ROS_READS = (
     "/rest/system/identity",
     "/rest/ip/address",
+    "/rest/ip/route",
     "/rest/ip/pool",
     "/rest/ip/dhcp-server",
     "/rest/ip/dhcp-server/network",
@@ -184,6 +185,8 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
         ops += _address_ops(node, configure["addresses"], current.get("addresses") or [])
     if "dhcp_server" in configure:
         ops += _dhcp_ops(node, configure["dhcp_server"], current)
+    if "routes" in configure:
+        ops += _route_ops(configure["routes"], current.get("routes") or [])
     if "users" in configure:
         ops += _user_ops(configure["users"], current.get("users") or [], routeros_clave)
     return ops
@@ -361,6 +364,71 @@ def _address_ops(node: dict, deseadas: list, actuales: list) -> list[dict]:
         if actual.get("address") not in sum(deseadas_por_pata.values(), []):
             ops.append({"method": "DELETE", "path": f"/rest/ip/address/{actual['.id']}",
                         "effect": f"sobra la dirección {actual.get('address')} en {actual.get('interface')}"})
+    return ops
+
+
+def _route_ops(declaradas: list, actuales: list) -> list[dict]:
+    """Las rutas estáticas declaradas, y sólo las que son del motor.
+
+    Una ruta de RouterOS se reconoce por su destino y su salto. Las que crea el
+    motor llevan el prefijo en el comentario: es lo que separa lo suyo de una ruta
+    puesta a mano, que se respeta aunque caiga en una red del laboratorio. Dentro
+    de lo marcado, lo que sobra se retira, igual que en las demás áreas.
+
+    Un destino ya ocupado por una ruta ajena con otro salto no se pisa: se dice,
+    porque el motor no puede cumplir lo declarado sin tocar lo que no es suyo.
+    """
+    def clave(ruta: dict) -> tuple[str, str]:
+        # El salto puede venir con la pata pegada (`10.99.0.2%ether1`): la
+        # dirección es lo que identifica la ruta, no cómo se alcanza la pata.
+        return (str(ipaddress.ip_network(ruta.get("dst-address", ""), strict=False)),
+                str(ruta.get("gateway", "")).split("%")[0])
+
+    es_dinamica = lambda r: str(r.get("dynamic", "false")).lower() in ("true", "yes")
+    estaticas = [r for r in actuales or [] if not es_dinamica(r)]
+    nuestras = {clave(r): r for r in estaticas
+                if str(r.get("comment", "")).startswith(PREFIX)}
+    ajenas = {clave(r) for r in estaticas if not str(r.get("comment", "")).startswith(PREFIX)}
+
+    deseadas = []
+    for item in declaradas or []:
+        red = str(ipaddress.ip_network(item["destination"], strict=False))
+        via = str(ipaddress.ip_interface(item["gateway"]).ip)
+        deseadas.append((red, via))
+
+    ops: list[dict] = []
+    for red, via in deseadas:
+        if (red, via) in nuestras or any(k[0] == red and k[1] == via for k in nuestras):
+            continue
+        if (red, via) in ajenas:
+            continue
+        if any(destino == red for destino, _ in ajenas):
+            raise LabError(
+                f"ya hay una ruta a {red} que no es del motor: el motor no la toca y no "
+                "puede poner la que declara el laboratorio. Se retira a mano o se cambia "
+                "el destino declarado"
+            )
+        propia = next((r for (otra_red, _), r in nuestras.items() if otra_red == red), None)
+        if propia is not None:
+            # Mismo destino, otro salto: el salto viejo es justo lo que hay que
+            # corregir —es un router que ya no está—, y `PUT` respondería que la
+            # ruta ya existe.
+            ops.append({"method": "PATCH", "path": f"/rest/ip/route/{propia['.id']}",
+                        "body": {"gateway": via},
+                        "effect": f"ruta {red} -> {via} (antes {propia.get('gateway')})"})
+            continue
+        ops.append({"method": "PUT", "path": "/rest/ip/route",
+                    "body": {"dst-address": red, "gateway": via,
+                             "comment": f"{PREFIX}ruta"},
+                    "effect": f"ruta {red} -> {via}"})
+
+    for (red, via), ruta in nuestras.items():
+        if (red, via) in deseadas:
+            continue
+        if any(destino == red for destino, _ in deseadas):
+            continue  # ya se corrigió arriba, o se corrige en este mismo plan
+        ops.append({"method": "DELETE", "path": f"/rest/ip/route/{ruta['.id']}",
+                    "effect": f"sobra la ruta {red} -> {via}"})
     return ops
 
 
