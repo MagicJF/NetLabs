@@ -178,20 +178,22 @@ La región generada lleva además dos diagramas, también sacados de la declarac
 cuelga de ella) y el **cableado** (un equipo por nodo con sus puertos y una arista por cable que
 dice las dos puntas que une). Los dos son **código**: bloques `` ```mermaid `` dentro del propio
 `.md`, sin PNG ni SVG generados ni guardados. Un diagrama es una línea más del documento: se lee,
-se compara y se revisa en el diff como cualquier otra. Los dos van en `flowchart TB` —no en
-`architecture-beta`— porque allí las áreas no admiten color ni transparencia, ni texto en la
-arista, y aquí hacen falta las tres cosas.
+se compara y se revisa en el diff como cualquier otra. La topología va en `flowchart LR` y el
+cableado en `flowchart TB` —ninguno en `architecture-beta`—, porque allí las áreas no admiten
+color ni transparencia, ni texto en la arista, y aquí hacen falta las tres cosas.
 
-El plano se dibuja como un plano de red, no como un organigrama: primero el contorno del
-laboratorio, dentro las redes como áreas translúcidas, y **fuera del contorno** el borde por el
-que se sale a Internet. Un solo color para todas las redes —el color dice «esto es una red», no
-«esta red es distinta»; separarlas es trabajo del nombre y del sitio en el plano—. La clase de
-equipo la dice la forma, no un emoji: círculo el router, hexágono el switch, rectángulo el host.
-Las aristas van **sin flecha**: la jerarquía se lee de arriba abajo y una punta sugeriría un
-tráfico que nadie declaró. El sentido es N-S —arriba lo que da salida y abajo lo más cerrado—,
-con los equipos del mismo nivel alineados en la franja E-O. Debajo de cada bloque va el pie de
-figura: qué se está mirando y la clave de formas. Un diagrama que no sale de la declaración no
-se dibuja: se pudre el primero que alguien cambie algo a mano.
+El plano se dibuja como un plano de red, no como un organigrama: el nombre del laboratorio va en
+el título del bloque, dentro las redes como áreas translúcidas, y **fuera de toda área** el borde
+por el que se sale a Internet. Un solo color para todas las redes —el color dice «esto es una
+red», no «esta red es distinta»; separarlas es trabajo del nombre y del sitio en el plano—. La
+clase de equipo la dice la forma, no un emoji: círculo el router, hexágono el switch, cilindro el
+servidor, paralelogramo el cortafuegos, rectángulo el puesto. Las aristas van **sin flecha**: la
+jerarquía se lee del eje y una punta sugeriría un tráfico que nadie declaró. **El eje lo marca el
+router**: un equipo con pata en varias redes se dibuja en la frontera de esas redes —con sus
+áreas a los lados, la primera a su izquierda y el resto a su derecha—, y dentro de cada red la
+profundidad baja; un equipo de una sola red vive dentro de la suya. Debajo de cada bloque va el
+pie de figura: la clave de clases, con **sólo las que el laboratorio tiene**. Un diagrama que no
+sale de la declaración no se dibuja: se pudre el primero que alguien cambie algo a mano.
 
 *Evita:* el documento que describe un sistema que ya no existe.
 

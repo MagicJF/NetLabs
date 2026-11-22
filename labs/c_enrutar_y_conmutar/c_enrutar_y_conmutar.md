@@ -14,7 +14,7 @@ Address spaces: `10.46.0.0/16`
 ---
 title: c_enrutar_y_conmutar · 10.46.x.x/16
 ---
-flowchart TB
+flowchart LR
     classDef red fill:#3b82f6,fill-opacity:0.12,stroke:#3b82f6,stroke-width:1px,color:#0f172a
     classDef equipo fill:#ffffff,stroke:#3b82f6,stroke-width:1px,color:#0f172a
     classDef puerta fill:#ffffff,stroke:#3b82f6,stroke-width:2px,color:#0f172a
@@ -36,13 +36,13 @@ flowchart TB
     end
     class red0 red
     internet --- n_rte1
-    n_rte1 --- n_swc1
+    n_rte1 --- red0
     n_swc1 --- n_swa1
     n_swa1 --- n_wsp1
     n_swa1 --- n_wsp2
 ```
 
-*círculo: router; hexágono: switch; rectángulo: host; arista sin flecha: jerarquía declarada.*
+*clase por forma — círculo: router; hexágono: switch; rectángulo: workstation. Las áreas son las redes y un equipo con pata en varias va en su frontera; aristas sin flecha: sólo la jerarquía declarada.*
 
 ### Cableado (L2)
 
@@ -66,7 +66,7 @@ flowchart TB
     n_swa1 ---|swa1p3 ↔ wsp2p1| n_wsp2
 ```
 
-*cada arista dice las dos puntas que une; arriba lo que da salida a Internet.*
+*cada arista dice las dos puntas que une.*
 
 ### Networks
 

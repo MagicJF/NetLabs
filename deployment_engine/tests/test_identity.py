@@ -483,9 +483,12 @@ class Documentacion(unittest.TestCase):
         texto = identity.render_docs(laboratorio(), entorno())
         # Dos dibujos sacados de la declaración: quién está en qué red (topología, con
         # las redes como áreas translúcidas) y qué puerto va con qué puerto (cableado,
-        # con texto en la arista). Los dos en `flowchart TB`: N-S arriba-abajo.
+        # con texto en la arista). La topología va en `flowchart LR` —el eje E-O son las
+        # patas del router, para que quede entre las redes que une— y el cableado en
+        # `flowchart TB` (de lo que da salida a lo más cerrado).
         self.assertEqual(texto.count("```mermaid\n"), 2)
-        self.assertEqual(texto.count("flowchart TB"), 2)
+        self.assertEqual(texto.count("flowchart LR"), 1)
+        self.assertEqual(texto.count("flowchart TB"), 1)
         # El router es un círculo, sin emoji: la forma dice la clase.
         self.assertIn('n_rte1(("rte1<br/>p1, p2"))', texto)
         # El cable dice sus dos puntas sin haber que mirar la tabla.
@@ -499,7 +502,7 @@ class Documentacion(unittest.TestCase):
         """Ni un servicio inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""
         lab = laboratorio()
         texto = identity.render_docs(lab, entorno())
-        bloques = re.findall(r"```mermaid\n.*?flowchart TB\n(.*?)```", texto, re.S)
+        bloques = re.findall(r"```mermaid\n.*?flowchart (?:TB|LR)\n(.*?)```", texto, re.S)
         self.assertEqual(len(bloques), 2)
         topologia, cableado = bloques
 
@@ -514,20 +517,27 @@ class Documentacion(unittest.TestCase):
         self.assertEqual(dibujados, nodos)
         self.assertEqual(set(re.findall(r"(?m)^\s+(\w+)[\[(]", cableado)), nodos)
 
-        # Topología: una arista por `after`, más una por cada puerta de salida a
-        # Internet. Cableado: una por cable. Ninguna con flecha: el plano no inventa
-        # un sentido de tráfico.
-        patas = sum(len(n.get("after") or []) for n in lab["nodes"])
-        salidas = sum(1 for n in lab["nodes"] if identity._profundidad(lab)[n["role"]] == 0)
-        self.assertEqual(len(re.findall(r" --- ", topologia)), patas + salidas)
+        # Topología: una arista por cada puerta de salida hacia Internet, una por cada red
+        # que toca esa puerta (el equipo va en su frontera) y una por cada `after` entre
+        # equipos de dentro. Cableado: una por cable. Ninguna con flecha: el plano no
+        # inventa un sentido de tráfico.
+        profundidad = identity._profundidad(lab)
+        por_rol = {n["role"]: n for n in lab["nodes"]}
+        salidas = [n["role"] for n in lab["nodes"] if profundidad[n["role"]] == 0]
+        uniones = sum(1 for rol in salidas for net in lab["networks"]
+                      if net["name"] in (por_rol[rol].get("networks") or []))
+        internas = sum(1 for n in lab["nodes"] for p in (n.get("after") or [])
+                       if profundidad[n["role"]] > 0 and profundidad.get(p, 0) > 0)
+        self.assertEqual(len(re.findall(r" --- ", topologia)),
+                         len(salidas) + uniones + internas)
         self.assertNotIn("-->", topologia)
         self.assertNotIn("-->", cableado)
         aristas = re.findall(r"(\w+) ---\|([^|]+)\| (\w+)", cableado)
         self.assertEqual(len(aristas), len(lab["links"]))
         # El cableado baja: la punta de arriba es la menos profunda.
-        profundidad = {identity._id(rol): d for rol, d in identity._profundidad(lab).items()}
+        prof = {identity._id(rol): d for rol, d in profundidad.items()}
         for (a, _, z), cable in zip(aristas, lab["links"]):
-            self.assertLessEqual(profundidad[a], profundidad[z])
+            self.assertLessEqual(prof[a], prof[z])
             self.assertEqual({a, z},
                              {identity._id(cable["a"]["node"]), identity._id(cable["z"]["node"])})
         # Y cada arista dice las dos puntas que une, que es lo que la hace útil.
