@@ -1163,7 +1163,7 @@ def netxms_login_cuerpo(usuario: str, clave: str) -> str:
     return json.dumps({"username": usuario, "password": clave})
 
 
-def netxms_cmd(api: str, ruta: str) -> list:
+def netxms_cmd(api: str, ruta: str, metodo: str = "POST") -> list:
     """Una llamada con testigo: el testigo en la primera línea de la entrada, y el cuerpo detrás.
 
     El testigo no se guarda en ningún fichero del invitado —cada llamada se lleva el
@@ -1177,9 +1177,19 @@ def netxms_cmd(api: str, ruta: str) -> list:
         "IFS= read -r t; exec 3<<EOF\n"
         "Authorization: Bearer $t\n"
         "EOF\n"
-        f"curl -sS {NETXMS_TOPE} --fail-with-body -H @/dev/fd/3 "
+        f"curl -sS {NETXMS_TOPE} --fail-with-body -X {metodo} -H @/dev/fd/3 "
         f"-H 'Content-Type: application/json' -d @- {api}{ruta}"
     )
+
+
+def netxms_borrar_cmd(api: str, id_objeto) -> list:
+    """Retirar de la vista un equipo que apunta a una máquina que ya no es la suya.
+
+    El API de esta versión **no deja corregir** la dirección de un equipo: ni `PUT` ni
+    `PATCH` la cambian (medido: contestan 200 y la ficha sigue igual). Lo único que
+    funciona es retirarlo y volver a darlo de alta con la dirección buena.
+    """
+    return netxms_cmd(api, f"/objects/{int(id_objeto)}", metodo="DELETE")
 
 
 def netxms_censo_cmd(api: str) -> list:
@@ -1208,7 +1218,8 @@ def netxms_crear_cmd(api: str) -> list:
 
 def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | None,
                api: str, secrets: dict | None = None,
-               puerto: int = NETXMS_PUERTO_SSH) -> dict:
+               puerto: int = NETXMS_PUERTO_SSH, vivas: list | None = None,
+               propias: list | None = None) -> dict:
     """Qué equipos del laboratorio faltan en la vista, y cuáles están a medias.
 
     `encontrados` es el censo que devuelve la búsqueda (resúmenes, sin credenciales);
@@ -1216,23 +1227,48 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
     El resultado lleva dos listas: `ops` (lo que hay que escribir) y `pendientes` (lo
     que no se puede arreglar por el API y se dice).
 
-    El motor sólo **crea lo que falta**: no borra un equipo que ya está para volver a
-    crearlo con credenciales. Un equipo que ya está como debe no produce ninguna
-    llamada —eso es lo que hace que el segundo `apply` no escriba— y uno que ya está
-    con otras credenciales sale como pendiente, porque el API de esta versión sólo las
-    acepta al crear el equipo.
+    **La identidad de un equipo en la vista es su nombre, no su dirección.** La
+    dirección de gestión se deriva del vmid, y el vmid cambia cuando el invitado se
+    rehace: atada a la dirección, cada despliegue daba de alta un equipo nuevo con el
+    mismo nombre y el viejo se quedaba apuntando a la máquina de otro —abrir un router
+    en la consola llevaba al switch de otra sede—. Por eso se busca por nombre y se comprueba la
+    dirección: si el equipo con ese nombre no lleva su dirección, se retira y se vuelve
+    a dar de alta. El API de esta versión no deja corregirla (ver `netxms_borrar_cmd`).
+
+    `vivas` son las direcciones que hoy tiene algún invitado del clúster, y `propias` las
+    de los invitados de **este** laboratorio. Un equipo con el mismo nombre y una
+    dirección viva que no es de este laboratorio es de **otro** laboratorio en marcha, y
+    no se toca; uno que apunta a una dirección de este laboratorio que no es la suya, o a
+    una que ya no tiene nadie, es un resto, y se borra.
+
+    Un equipo que ya está como debe no produce ninguna llamada —eso es lo que hace que
+    el segundo `apply` no escriba— y uno que ya está con otras credenciales sale como
+    pendiente, porque el API de esta versión sólo las acepta al crear el equipo.
     """
-    por_ip: dict = {}
+    por_nombre: dict = {}
     for objeto in encontrados or []:
-        direccion = (objeto.get("ipAddress") or {}).get("address")
-        if direccion:
-            por_ip.setdefault(str(direccion), objeto)
+        nombre_visto = str(objeto.get("name") or "").strip()
+        if nombre_visto:
+            por_nombre.setdefault(nombre_visto, []).append(objeto)
     leidos: dict = {}
     for detalle in detalles or []:
         if isinstance(detalle, dict) and detalle.get("id") is not None:
             leidos[int(detalle["id"])] = detalle
 
-    ops: list[dict] = []
+    vivas_set = {str(d) for d in (vivas or [])}
+    # Las de este laboratorio: las de sus invitados, no sólo las de los equipos que se
+    # registran (una estación de trabajo no se registra, pero su dirección es de aquí, y
+    # un resto apuntando ahí es un resto de este laboratorio).
+    direcciones_del_lab = ({str(d) for d in propias} if propias
+                           else {str(n.get("mgmt_address")) for n in nodes or []
+                                 if n.get("mgmt_address")})
+
+    # Las retiradas van ANTES que las altas, todas juntas: un equipo viejo puede estar
+    # ocupando la dirección del que hay que dar de alta —el API contesta 409 si la
+    # dirección ya es de otro—, y las retiradas se descubren al recorrer los equipos,
+    # así que en un solo recorrido la del último llegaría después del alta del primero.
+    borrados: list[dict] = []
+    altas: list[dict] = []
     pendientes: list[str] = []
     for node in nodes or []:
         direccion = node.get("mgmt_address")
@@ -1241,7 +1277,26 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
         nombre = node.get("name") or node.get("role")
         usuario = _declared_user(node) or "admin"
         clave = ros_clave(node, secrets or {})
-        objeto = por_ip.get(str(direccion))
+        candidatos = por_nombre.get(str(nombre), [])
+        objeto = next(
+            (o for o in candidatos
+             if str((o.get("ipAddress") or {}).get("address")) == str(direccion)), None)
+
+        # Los que llevan el mismo nombre y no son este equipo: o son de este laboratorio
+        # apuntando a la máquina de otro equipo suyo, o son restos de despliegues
+        # anteriores. Si su dirección es de otro laboratorio vivo, no se tocan.
+        for sobrante in candidatos:
+            if sobrante is objeto:
+                continue
+            suya = str((sobrante.get("ipAddress") or {}).get("address") or "")
+            if suya in vivas_set and suya not in direcciones_del_lab:
+                continue
+            borrados.append({
+                "cmd": netxms_borrar_cmd(api, sobrante["id"]),
+                "cuerpo": "",
+                "effect": (f"retirar {nombre}, que apuntaba a {suya or 'ninguna dirección'} "
+                           f"y ya no es esa máquina"),
+            })
 
         if objeto is None:
             cuerpo = {
@@ -1252,7 +1307,7 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
                 "sshPassword": clave,
                 "sshPort": int(puerto),
             }
-            ops.append({
+            altas.append({
                 "cmd": netxms_crear_cmd(api),
                 "cuerpo": json.dumps(cuerpo),
                 "effect": f"registrar {nombre} ({direccion}) en la vista, como {usuario}",
@@ -1269,7 +1324,7 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
             f"(usuario {actual.get('sshLogin') or 'ninguno'}), y el API de esta versión "
             "sólo las acepta al crear el equipo: cámbialas a mano en su consola"
         )
-    return {"ops": ops, "pendientes": pendientes}
+    return {"ops": borrados + altas, "pendientes": pendientes}
 
 
 def netxms_ids(nodes: list[dict], encontrados: list | None) -> list:
@@ -1279,10 +1334,15 @@ def netxms_ids(nodes: list[dict], encontrados: list | None) -> list:
     se pide **de una vez** por los que interesan, y no la de todo el censo — que sería
     leer lo de todos los laboratorios para escribir lo de uno.
     """
-    direcciones = {str(n["mgmt_address"]) for n in nodes or [] if n.get("mgmt_address")}
+    # Se piden las fichas de los equipos que ya están **con su nombre y su dirección**:
+    # son los únicos cuyo estado hay que mirar. Un equipo con ese nombre apuntando a otra
+    # máquina no se arregla leyendo su ficha: se retira y se da de alta de nuevo.
+    claves = {(str(n.get("name") or n.get("role")), str(n["mgmt_address"]))
+              for n in nodes or [] if n.get("mgmt_address")}
     ids = []
     for objeto in encontrados or []:
         direccion = (objeto.get("ipAddress") or {}).get("address")
-        if direccion and str(direccion) in direcciones and objeto.get("id") is not None:
+        clave = (str(objeto.get("name") or ""), str(direccion or ""))
+        if direccion and clave in claves and objeto.get("id") is not None:
             ids.append(int(objeto["id"]))
     return sorted(ids)

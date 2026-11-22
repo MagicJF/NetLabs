@@ -217,6 +217,14 @@
       include_tasks: ../tasks/netxms.yml
       vars:
         equipos: "{{ plan.nodes | selectattr('management') | list }}"
+        # Las direcciones que hoy tiene algún invitado del clúster: separan un resto de
+        # un despliegue anterior de un equipo de otro laboratorio que se llame igual.
+        vivas: "{{ world.guests | netlabs_direcciones_vivas(env.management.address_space) }}"
+        # Y las de los invitados de este laboratorio: las de sus equipos de red no bastan,
+        # porque una estación de trabajo tampoco se registra y su dirección es de aquí.
+        propias: >-
+          {{ world.guests | selectattr('pool', 'equalto', plan.pool) | list
+             | netlabs_direcciones_vivas(env.management.address_space) }}
       when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
 
     # --- el interior de los nodos de control, por SSH ----------------------

@@ -792,7 +792,7 @@ class ElRegistroEnLaVista(unittest.TestCase):
     def test_un_equipo_que_ya_esta_como_debe_no_escribe_nada(self):
         # Idempotencia: un equipo que ya está con las credenciales puestas no produce
         # ninguna llamada, y por eso el segundo `apply` no escribe.
-        encontrados = [{"id": 7, "ipAddress": {"address": "10.30.0.101"}}]
+        encontrados = [{"id": 7, "name": "rte1", "ipAddress": {"address": "10.30.0.101"}}]
         detalles = [{"id": 7, "sshLogin": "admin", "sshPassword": "s3cr3t", "sshPort": 22}]
         plan = converge.netxms_ops([self.equipo()], encontrados, detalles, self.API, self.SECRETS)
         self.assertEqual(plan["ops"], [])
@@ -802,7 +802,7 @@ class ElRegistroEnLaVista(unittest.TestCase):
         # El API de esta versión sólo acepta las credenciales al crear el equipo: uno ya
         # descubierto sin ellas no se borra para rehacerlo —se perdería lo recolectado—,
         # se dice en voz alta y lo cambia una persona en la consola.
-        encontrados = [{"id": 7, "ipAddress": {"address": "10.30.0.101"}}]
+        encontrados = [{"id": 7, "name": "rte1", "ipAddress": {"address": "10.30.0.101"}}]
         detalles = [{"id": 7, "sshLogin": "", "sshPassword": "", "sshPort": 22}]
         plan = converge.netxms_ops([self.equipo()], encontrados, detalles, self.API, self.SECRETS)
         self.assertEqual(plan["ops"], [])
@@ -851,14 +851,78 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertIn("--max-time", converge.netxms_login_cmd(self.API)[2])
         self.assertIn("--connect-timeout", converge.netxms_login_cmd(self.API)[2])
 
+    def test_un_equipo_que_apunta_a_la_maquina_de_otro_se_retira_y_se_rehace(self):
+        """La dirección de gestión se deriva del vmid, y el vmid cambia al rehacer.
+
+        Atada la identidad a la dirección, cada despliegue dejaba en la vista un equipo
+        con el nombre bueno apuntando a la máquina de otro: abrir `rta6` llevaba a
+        `swa2`. Se busca por nombre; si no lleva su dirección, se retira y se da de alta.
+        """
+        sobrante = {"id": 269, "name": "rta6", "ipAddress": {"address": "10.30.0.116"}}
+        bueno_swa2 = {"id": 271, "name": "swa2", "ipAddress": {"address": "10.30.0.116"}}
+        equipo = self.equipo(role="rta6", address="10.30.0.114")
+        # .116 es de un equipo de ESTE laboratorio (swa2): el `rta6` que apunta ahí es
+        # un resto, no un equipo ajeno.
+        swa2 = self.equipo(role="swa2", address="10.30.0.116")
+        plan = converge.netxms_ops([equipo, swa2], [sobrante, bueno_swa2], [], self.API,
+                                   self.SECRETS, vivas=["10.30.0.114", "10.30.0.116"])
+        efectos = [op["effect"] for op in plan["ops"]]
+        self.assertEqual(len(efectos), 2)
+        self.assertIn("retirar rta6", efectos[0])
+        self.assertIn("10.30.0.116", efectos[0])
+        self.assertIn("/objects/269", plan["ops"][0]["cmd"][2])
+        self.assertIn("registrar rta6 (10.30.0.114)", efectos[1])
+
+    def test_con_el_bueno_delante_se_retiran_los_sobrantes_y_no_se_rehace(self):
+        censo = [
+            {"id": 269, "name": "rta6", "ipAddress": {"address": "10.30.0.120"}},
+            {"id": 326, "name": "rta6", "ipAddress": {"address": "10.30.0.114"}},
+            {"id": 272, "name": "swa4", "ipAddress": {"address": "10.30.0.120"}},
+        ]
+        detalles = [{"id": 326, "sshLogin": "admin", "sshPassword": "s3cr3t", "sshPort": 22}]
+        plan = converge.netxms_ops([self.equipo(role="rta6", address="10.30.0.114"),
+                                    self.equipo(role="swa4", address="10.30.0.120")],
+                                   censo, detalles, self.API, self.SECRETS,
+                                   vivas=["10.30.0.114", "10.30.0.120"])
+        self.assertEqual([op["effect"][:7] for op in plan["ops"]], ["retirar"])
+        self.assertIn("/objects/269", plan["ops"][0]["cmd"][2])
+
+    def test_el_equipo_de_otro_laboratorio_con_el_mismo_nombre_no_se_toca(self):
+        """Dos laboratorios pueden tener un `rte1` cada uno: si su dirección es de una
+        máquina viva y no es de este laboratorio, el equipo es del otro y se deja."""
+        ajeno = {"id": 500, "name": "rte1", "ipAddress": {"address": "10.30.0.140"}}
+        plan = converge.netxms_ops([self.equipo()], [ajeno], [], self.API, self.SECRETS,
+                                   vivas=["10.30.0.140"])
+        self.assertEqual(len(plan["ops"]), 1)
+        self.assertIn("registrar rte1 (10.30.0.101)", plan["ops"][0]["effect"])
+
+    def test_las_retiradas_van_antes_que_las_altas(self):
+        """Un equipo viejo puede estar ocupando la dirección del que hay que dar de alta.
+
+        El API contesta 409 si la dirección ya es de otro equipo, y las retiradas se
+        descubren al recorrer los equipos: en un solo recorrido, la del último llegaba
+        después del alta del primero y el apply se paraba a medias.
+        """
+        censo = [
+            {"id": 234, "name": "swa1", "ipAddress": {"address": "10.30.0.107"}},
+            {"id": 208, "name": "swc1", "ipAddress": {"address": "10.30.0.109"}},
+        ]
+        nodes = [self.equipo(role="swc1", address="10.30.0.107"),
+                 self.equipo(role="swa1", address="10.30.0.115")]
+        plan = converge.netxms_ops(nodes, censo, [], self.API, self.SECRETS,
+                                   vivas=["10.30.0.107", "10.30.0.109", "10.30.0.115"])
+        efectos = [op["effect"].split()[0] for op in plan["ops"]]
+        self.assertEqual(efectos, ["retirar", "registrar", "registrar"])
+        self.assertIn("/objects/234", plan["ops"][0]["cmd"][2])
+
     def test_las_fichas_se_piden_solo_por_los_equipos_de_este_laboratorio(self):
         # La búsqueda devuelve resúmenes sin credenciales: la ficha hay que pedirla, y se
         # pide de una vez y sólo por los equipos de este laboratorio —leer la de todos
         # para escribir uno sería leer de más—.
         encontrados = [
-            {"id": 7, "ipAddress": {"address": "10.30.0.101"}},   # de este laboratorio
-            {"id": 9, "ipAddress": {"address": "10.30.0.108"}},   # de otro
-            {"id": 5, "ipAddress": {"address": "10.30.0.101"}},   # de este laboratorio
+            {"id": 7, "name": "rte1", "ipAddress": {"address": "10.30.0.101"}},  # de este
+            {"id": 9, "name": "rte1", "ipAddress": {"address": "10.30.0.108"}},  # de otro
+            {"id": 5, "name": "rte1", "ipAddress": {"address": "10.30.0.101"}},  # de este
         ]
         ids = converge.netxms_ids([self.equipo()], encontrados)
         self.assertEqual(ids, [5, 7])

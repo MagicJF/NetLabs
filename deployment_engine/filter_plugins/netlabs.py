@@ -36,6 +36,16 @@ def netlabs_con_config(world: dict, configs: dict) -> dict:
     return salida
 
 
+def netlabs_direcciones_vivas(guests, espacio: str) -> list:
+    """Las direcciones de gestión que hoy tienen los invitados del clúster.
+
+    Sirve para distinguir un resto de un despliegue anterior —su dirección ya no la tiene
+    nadie— de un equipo de otro laboratorio en marcha, que se llama igual y no se toca.
+    """
+    return [str(identity.derive_management(int(g["vmid"]), espacio))
+            for g in guests or [] if g.get("vmid")]
+
+
 def _world(resources, networks, pools):
     guests = [
         {
@@ -139,6 +149,7 @@ class FilterModule:
         return {
             "netlabs_world": _world,
             "netlabs_con_config": netlabs_con_config,
+            "netlabs_direcciones_vivas": netlabs_direcciones_vivas,
             "netlabs_plan": lambda world, lab, env: identity.plan(world, lab, env),
             "netlabs_site": lambda world, env: identity.site(world, env),
             "netlabs_docs": lambda lab, env: identity.render_docs(lab, env),
@@ -165,6 +176,9 @@ class FilterModule:
             "netlabs_netxms_fichas_cmd": lambda api: converge.netxms_fichas_cmd(api),
             "netlabs_netxms_fichas_cuerpo": lambda ids=None, api=None: converge.netxms_fichas_cuerpo(ids),
             "netlabs_netxms_ids": lambda nodes, encontrados: converge.netxms_ids(nodes, encontrados),
-            "netlabs_netxms_ops": lambda nodes, encontrados, detalles, api, secrets=None:
-                converge.netxms_ops(nodes, encontrados, detalles, api, secrets),
+            "netlabs_netxms_ops": lambda nodes, encontrados, detalles, api, secrets=None,
+                vivas=None, propias=None: converge.netxms_ops(
+                    nodes, encontrados, detalles, api, secrets, vivas=vivas, propias=propias),
+            "netlabs_netxms_borrar_cmd": lambda api, id_objeto:
+                converge.netxms_borrar_cmd(api, id_objeto),
         }

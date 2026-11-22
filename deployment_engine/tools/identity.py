@@ -1038,7 +1038,8 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         })
         effects.append(
             "registrar en lo que observa el sitio los equipos del laboratorio que falten, "
-            "con su usuario y su clave: "
+            "con su usuario y su clave, y retirar los que apunten a una máquina que ya "
+            "no es la suya: "
             + ", ".join(f"{n['name']} ({n['mgmt_address']})" for n in equipos)
         )
 
