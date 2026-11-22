@@ -21,24 +21,25 @@ TENUE = "#475569"
 LINEA = "#94a3b8"
 RED_TRAZO = "#93b4f5"
 RED_RELLENO = "#3b82f6"
-EQUIPO_TRAZO = "#1d4ed8"
-EQUIPO_RELLENO = "#dbeafe"
-FUEGO_TRAZO = "#c2410c"
-FUEGO_RELLENO = "#fff7ed"
-BORDE_TRAZO = "#64748b"
-BORDE_RELLENO = "#f8fafc"
+EQUIPO_TRAZO = "#1b5fa8"      # el azul de los símbolos de red de Cisco
+EQUIPO_RELLENO = "#dbe9f6"
+EQUIPO_CARA = "#eef5fb"
+FUEGO_TRAZO = "#a33b22"
+FUEGO_RELLENO = "#f7ddd0"
+BORDE_TRAZO = "#5b7793"
+BORDE_RELLENO = "#f1f5f9"
 FUENTE = "'Inter','Segoe UI',Helvetica,Arial,sans-serif"
 
 # Cada símbolo ocupa una caja de este tamaño: sirve para centrar la etiqueta debajo
 # y para saber por dónde sale una arista sin que cruce el dibujo.
 SIMBOLO = {
-    "router": (44, 44),
-    "switch": (58, 26),
-    "firewall": (50, 32),
-    "server": (32, 38),
-    "workstation": (40, 30),
-    "control": (46, 24),
-    "internet": (72, 44),
+    "router": (38, 30),
+    "switch": (52, 22),
+    "firewall": (48, 28),
+    "server": (26, 38),
+    "workstation": (32, 28),
+    "control": (42, 24),
+    "internet": (74, 42),
 }
 CELDA_ANCHO = 130      # hueco de un equipo dentro de su red: símbolo + etiqueta
 CELDA_HUECO = 84       # alto de ese hueco
@@ -56,67 +57,117 @@ def _esc(texto: str) -> str:
 
 
 # ---------------------------------------------------------------- símbolos ----
-# Los símbolos son los de un plano de red, reducidos a vectores: el router es el
-# círculo con cuatro flechas, el switch la caja con flechas cruzadas, el cortafuegos
-# el muro de ladrillos. La forma dice la clase de un vistazo; el texto, el nombre.
+# Los símbolos son los de un plano de red, dibujados aquí a la manera de los de Cisco
+# —el router es un cilindro con cuatro flechas en la cara de arriba, el switch una
+# placa en perspectiva con sus flechas cruzadas, el cortafuegos el muro de ladrillos,
+# el servidor una torre de bahías, el puesto una pantalla con su peana— y en su azul.
+# Se dibujan con vectores y no se copian de su pack de iconos: esos son suyos y su
+# licencia no permite redistribuirlos, y este plano se genera y se versiona entero.
 
 
-def _flecha(x1: int, y1: int, x2: int, y2: int, color: str = EQUIPO_TRAZO) -> str:
+def _flecha(x1: float, y1: float, x2: float, y2: float, color: str = EQUIPO_TRAZO,
+            grosor: float = 1.5, largo: float = 4.0, ancho: float = 2.4) -> str:
     """Una flecha de verdad: línea y punta, para que se lea el sentido."""
     angulo = math.atan2(y2 - y1, x2 - x1)
-    largo, ancho = 4.2, 2.6
     px, py = x2 - largo * math.cos(angulo), y2 - largo * math.sin(angulo)
     izq = (px - ancho * math.sin(angulo), py + ancho * math.cos(angulo))
     der = (px + ancho * math.sin(angulo), py - ancho * math.cos(angulo))
-    return (f'<line x1="{x1}" y1="{y1}" x2="{x2 - 2}" y2="{y2 - 2}" stroke="{color}" '
-            f'stroke-width="1.6" stroke-linecap="round"/>'
-            f'<polygon points="{x2},{y2} {izq[0]:.1f},{izq[1]:.1f} {der[0]:.1f},{der[1]:.1f}" '
-            f'fill="{color}"/>')
+    return (f'<line x1="{x1:g}" y1="{y1:g}" x2="{x2 - 1.2:.1f}" y2="{y2 - 1.2:.1f}" '
+            f'stroke="{color}" stroke-width="{grosor}" stroke-linecap="round"/>'
+            f'<polygon points="{x2:g},{y2:g} {izq[0]:.1f},{izq[1]:.1f} '
+            f'{der[0]:.1f},{der[1]:.1f}" fill="{color}"/>')
+
+
+def _engranaje(cx: float, cy: float, radio: float) -> str:
+    """Una rueda dentada de verdad: disco, dientes y eje. Un asterisco no es un engranaje."""
+    dientes = "".join(
+        f'<rect x="{cx + radio - 0.6:.1f}" y="{cy - 1.5:.1f}" width="{radio * 0.55:.1f}" '
+        f'height="3" rx="0.6" fill="{EQUIPO_TRAZO}" '
+        f'transform="rotate({k * 45:.0f} {cx:.1f} {cy:.1f})"/>'
+        for k in range(8))
+    return "".join([
+        dientes,
+        f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{radio:.1f}" fill="{EQUIPO_CARA}" '
+        f'stroke="{EQUIPO_TRAZO}" stroke-width="1.6"/>',
+        f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="{radio * 0.42:.1f}" fill="#ffffff" '
+        f'stroke="{EQUIPO_TRAZO}" stroke-width="1.3"/>',
+    ])
+
+
+def _simbolo_cisco(tipo: str) -> str:
+    """El dibujo de esa clase, centrado en el origen."""
+    azul, relleno, cara = EQUIPO_TRAZO, EQUIPO_RELLENO, EQUIPO_CARA
+    if tipo == "router":
+        # Cilindro en perspectiva y, sobre su cara de arriba, las cuatro flechas.
+        return "".join([
+            f'<path d="M-17 -8V7a17 6 0 0 0 34 0V-8" fill="{relleno}" stroke="{azul}" '
+            f'stroke-width="1.8"/>',
+            f'<ellipse cx="0" cy="-8" rx="17" ry="6" fill="{cara}" stroke="{azul}" '
+            f'stroke-width="1.8"/>',
+            _flecha(-3, -8.5, -14, -8.5, largo=3.6, ancho=2.2),
+            _flecha(3, -8.5, 14, -8.5, largo=3.6, ancho=2.2),
+            _flecha(-2.5, -10.6, -8, -14, largo=3.4, ancho=2.0),
+            _flecha(2.5, -6.4, 8, -3, largo=3.4, ancho=2.0),
+        ])
+    if tipo == "switch":
+        # Placa en perspectiva: cara de arriba, frente y canto derecho, con las dos
+        # flechas cruzadas que dicen «esto conmuta».
+        return "".join([
+            f'<path d="M-24 0H14l10-12H-14Z" fill="{cara}" stroke="{azul}" stroke-width="1.6"/>',
+            f'<path d="M-24 0v10h38V0Z" fill="{relleno}" stroke="{azul}" stroke-width="1.6"/>',
+            f'<path d="M14 0l10-12v10l-10 12Z" fill="#c7dcef" stroke="{azul}" '
+            f'stroke-width="1.6"/>',
+            _flecha(-15, -8.4, 8, -8.4, largo=3.4, ancho=2.2),
+            _flecha(10, -3.6, -17, -3.6, largo=3.4, ancho=2.2),
+        ])
+    if tipo == "firewall":
+        # El muro de ladrillos, con las hiladas trabadas.
+        return "".join([
+            f'<rect x="-23" y="-13" width="46" height="26" rx="2" fill="{FUEGO_RELLENO}" '
+            f'stroke="{FUEGO_TRAZO}" stroke-width="1.8"/>',
+            f'<path d="M-23 -4.3H23M-23 4.3H23" stroke="{FUEGO_TRAZO}" stroke-width="1.4"/>',
+            f'<path d="M-7.7 -13V-4.3M7.7 -13V-4.3M0 -4.3V4.3M-15.3 4.3V13M15.3 4.3V13" '
+            f'stroke="{FUEGO_TRAZO}" stroke-width="1.4"/>',
+        ])
+    if tipo == "server":
+        # Torre de bahías: tres alturas, cada una con su indicador.
+        return "".join([
+            f'<rect x="-12" y="-18" width="24" height="36" rx="2.5" fill="#ffffff" '
+            f'stroke="{azul}" stroke-width="1.8"/>',
+            f'<path d="M-12 -10H12M-12 -2H12M-12 6H12" stroke="{azul}" stroke-width="1.2"/>',
+            '<circle cx="-7" cy="-14" r="1.7" fill="#16a34a"/>'
+            '<circle cx="-7" cy="-6" r="1.7" fill="#16a34a"/>'
+            f'<circle cx="-7" cy="2" r="1.7" fill="{azul}"/>',
+        ])
+    if tipo == "workstation":
+        # Pantalla con su peana: el puesto de trabajo de siempre.
+        return "".join([
+            f'<rect x="-15" y="-13" width="30" height="21" rx="2" fill="#ffffff" '
+            f'stroke="{azul}" stroke-width="1.8"/>',
+            f'<rect x="-11.5" y="-9.5" width="23" height="14" rx="1" fill="{cara}"/>',
+            f'<path d="M-4 8v5h8V8" fill="none" stroke="{azul}" stroke-width="1.6"/>',
+            f'<rect x="-9" y="13" width="18" height="2.4" rx="1.2" fill="{azul}"/>',
+        ])
+    if tipo == "control":
+        # Puesto de gestión: una pantalla con su traza y, al lado, la rueda dentada.
+        return "".join([
+            f'<rect x="-21" y="-11" width="28" height="22" rx="3" fill="#ffffff" '
+            f'stroke="{azul}" stroke-width="1.8"/>',
+            f'<path d="M-17 5l5-7 4 4 5-8 4 6" fill="none" stroke="{azul}" '
+            f'stroke-width="1.5" stroke-linejoin="round"/>',
+            _engranaje(13, 0, 5.2),
+        ])
+    if tipo == "internet":
+        return (f'<path d="M-30 8c-6 0-11-5-11-11s5-11 11-11c2-8 9-13 17-13 9 0 16 6 18 14 '
+                f'7 0 12 5 12 11s-5 10-12 10z" fill="{BORDE_RELLENO}" '
+                f'stroke="{BORDE_TRAZO}" stroke-width="1.8" transform="translate(3,6)"/>')
+    return f'<circle r="14" fill="{relleno}" stroke="{azul}" stroke-width="1.8"/>'
 
 
 def _simbolo(tipo: str, cx: float, cy: float, escala: float = 1.0) -> str:
     """El símbolo de esa clase, centrado en (cx, cy)."""
-    g = [f'<g transform="translate({cx:.1f},{cy:.1f}) scale({escala})">']
-    if tipo == "router":
-        g.append(f'<circle r="20" fill="{EQUIPO_RELLENO}" stroke="{EQUIPO_TRAZO}" stroke-width="2"/>')
-        g.append(_flecha(-13, -5, 13, -5))
-        g.append(_flecha(13, 5, -13, 5))
-        g.append(_flecha(-5, 13, -5, -13))
-        g.append(_flecha(5, -13, 5, 13))
-    elif tipo == "switch":
-        g.append(f'<rect x="-28" y="-12" width="56" height="24" rx="4" '
-                 f'fill="#ffffff" stroke="{EQUIPO_TRAZO}" stroke-width="2"/>')
-        g.append(_flecha(-16, -4, 16, -4))
-        g.append(_flecha(16, 4, -16, 4))
-        g.append('<polygon points="-20,-9 -20,-1 -16,-1 -16,-9" fill="#bfdbfe"/>')
-    elif tipo == "firewall":
-        g.append(f'<rect x="-24" y="-15" width="48" height="30" rx="3" '
-                 f'fill="{FUEGO_RELLENO}" stroke="{FUEGO_TRAZO}" stroke-width="2"/>')
-        g.append(f'<path d="M-22 0H22M-8 -13V0M10 -13V0M-16 0V13M2 0V13M20 0V13" '
-                 f'stroke="{FUEGO_TRAZO}" stroke-width="1.4" fill="none"/>')
-    elif tipo == "server":
-        g.append(f'<rect x="-15" y="-18" width="30" height="36" rx="3" '
-                 f'fill="#ffffff" stroke="{EQUIPO_TRAZO}" stroke-width="2"/>')
-        g.append(f'<path d="M-15 -6H15M-15 6H15" stroke="{EQUIPO_TRAZO}" stroke-width="1.3"/>')
-        g.append(f'<circle cx="-9" cy="-12" r="1.7" fill="{EQUIPO_TRAZO}"/>'
-                 f'<circle cx="-9" cy="0" r="1.7" fill="{EQUIPO_TRAZO}"/>')
-    elif tipo == "workstation":
-        g.append(f'<rect x="-19" y="-15" width="38" height="24" rx="2.5" '
-                 f'fill="#ffffff" stroke="{EQUIPO_TRAZO}" stroke-width="2"/>')
-        g.append(f'<path d="M-19 -7H19" stroke="{EQUIPO_TRAZO}" stroke-width="1.3"/>'
-                 f'<path d="M0 9V14M-7 14H7" stroke="{EQUIPO_TRAZO}" stroke-width="1.6" '
-                 f'stroke-linecap="round"/>')
-    elif tipo == "control":
-        g.append(f'<rect x="-22" y="-11" width="44" height="22" rx="11" '
-                 f'fill="#ffffff" stroke="{BORDE_TRAZO}" stroke-width="2"/>')
-        g.append(f'<circle cx="-10" cy="0" r="3" fill="{BORDE_TRAZO}"/>'
-                 f'<path d="M-2 0H12" stroke="{BORDE_TRAZO}" stroke-width="1.6"/>')
-    elif tipo == "internet":
-        g.append(f'<path d="M-30 8c-6 0-11-5-11-11s5-11 11-11c2-8 9-13 17-13 9 0 16 6 18 14 '
-                 f'7 0 12 5 12 11s-5 10-12 10z" fill="{BORDE_RELLENO}" '
-                 f'stroke="{BORDE_TRAZO}" stroke-width="2" transform="translate(3,6)"/>')
-    g.append("</g>")
-    return "".join(g)
+    return (f'<g transform="translate({cx:.1f},{cy:.1f}) scale({escala})">'
+            f'{_simbolo_cisco(tipo)}</g>')
 
 
 # ------------------------------------------------------------------ layout ----
@@ -239,6 +290,10 @@ def _direccion_de(nodo: dict, red: str | None = None) -> str:
     for pata in (nodo.get("configure") or {}).get("addresses") or []:
         if red is None or pata.get("network") == red:
             return pata["address"]
+    if red is not None and len(nodo.get("networks") or []) > 1:
+        # Una dirección suelta no dice a cuál de sus redes se asoma: escribirla en la
+        # cabecera de todas sería inventar una puerta donde no la hay.
+        return ""
     if nodo.get("address") and nodo["address"] != "dhcp":
         return nodo["address"]
     return "dhcp" if nodo.get("address") == "dhcp" else ""
