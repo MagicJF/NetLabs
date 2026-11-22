@@ -1226,14 +1226,20 @@ def site(world: dict, env: dict) -> dict:
     used |= _ids_of(world.get("guests") or [])
     vmid = _lowest_free(used, env["vmids"]["min"], env["vmids"]["max"])
     address = derive_management(vmid, management["address_space"])
+    # El invitado de gestión se reconoce por su NOMBRE, no por su pool: es el servicio
+    # que ya existía antes que el motor y su nombre es único en el hipervisor. Cuando el
+    # laboratorio que lo declara cambia de nombre, su pool cambia con él y el invitado
+    # se queda en el viejo: reconocerlo por el pool lo daría por ausente y el motor
+    # crearía un segundo servicio al lado del que ya corre. La diferencia de pool se
+    # arregla moviéndolo (`allow-move`, medido en la API), no creando otro.
     existing = next(
-        (g for g in world.get("guests") or []
-         if g.get("name") == management["guest"] and g.get("pool") == management["pool"]),
+        (g for g in world.get("guests") or [] if g.get("name") == management["guest"]),
         None,
     )
     if existing:
         vmid = int(existing["vmid"])
         address = derive_management(vmid, management["address_space"])
+    pool_actual = (existing or {}).get("pool") or None
     return {
         # El rol y el nombre salen de netlabs.yml: el motor no sabe qué servicio
         # corre dentro, sólo que hay un invitado de gestión que abre el camino.
@@ -1264,6 +1270,9 @@ def site(world: dict, env: dict) -> dict:
         "networks": [],
         "configure": {},
         "exists": existing is not None,
+        "pool": management["pool"],
+        "pool_actual": pool_actual,
+        "mover": existing is not None and pool_actual != management["pool"],
     }
 
 

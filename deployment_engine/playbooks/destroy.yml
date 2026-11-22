@@ -23,10 +23,10 @@
 
     - name: destroy · calcular qué es de este laboratorio
       ansible.builtin.set_fact:
-        pool: "netlabs-lab-{{ lab.lab }}"
+        pool: "{{ lab.lab }}"
         marca: "netlabs lab={{ lab.lab }}"
         puentes: "{{ world.bridges | selectattr('comments', 'search', 'netlabs lab=' ~ lab.lab) | list }}"
-        suyos: "{{ world.guests | selectattr('pool', 'equalto', 'netlabs-lab-' ~ lab.lab) | list }}"
+        suyos: "{{ world.guests | selectattr('pool', 'equalto', lab.lab) | list }}"
 
     - name: "destroy · {{ lab.lab }}"
       ansible.builtin.debug:

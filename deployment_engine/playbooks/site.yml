@@ -71,6 +71,19 @@
         pve_do: "crear el pool del sitio"
       when: env.management.pool not in (world.pools | default([]))
 
+    # El invitado de gestión se reconoce por su NOMBRE: si el laboratorio que lo declara
+    # cambia de nombre, su pool cambia con él y el invitado se queda en el viejo. Se mueve
+    # —`allow-move` es obligatorio: sin él la API contesta que ya pertenece a otro pool
+    # (medido)— en vez de crear un segundo servicio al lado del que ya corre.
+    - include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: PUT
+        pve_path: "/pools/{{ env.management.pool }}"
+        pve_body: {vms: "{{ sitio.vmid }}", allow-move: 1}
+        pve_do: "mover el invitado de gestión de {{ sitio.pool_actual }} a {{ env.management.pool }}"
+        pve_status: [200]
+      when: sitio.mover | default(false)
+
     - include_tasks: ../tasks/create_guest.yml
       vars:
         guest: "{{ sitio }}"

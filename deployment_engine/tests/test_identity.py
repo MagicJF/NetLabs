@@ -403,6 +403,29 @@ class LasRutas(unittest.TestCase):
         self.assertEqual(plan["rutas"], [])
 
 
+class ElSitio(unittest.TestCase):
+    """El invitado de gestión: se adopta el que ya corre, no se crea otro al lado."""
+
+    def test_reconoce_al_invitado_por_su_nombre_aunque_cambie_el_pool(self):
+        # Renombrar el laboratorio de control cambia el nombre de su pool: si el motor
+        # reconociera su invitado por el pool, lo daría por ausente y crearía un segundo
+        # servicio de observación junto al que ya está en pie.
+        viejos = [{"vmid": 102, "name": "netxms", "type": "lxc", "pool": "lab-00_bootstrap",
+                   "description": "", "tags": "netlabs;role-netxms", "status": "running"}]
+        sitio = identity.site(mundo(guests=viejos), entorno())
+        self.assertEqual(sitio["vmid"], 102)
+        self.assertTrue(sitio["exists"])
+        self.assertEqual(sitio["pool"], "a_bootstrap")
+        self.assertEqual(sitio["pool_actual"], "lab-00_bootstrap")
+        self.assertTrue(sitio["mover"])
+
+    def test_sin_invitado_de_gestion_no_lo_da_por_existente(self):
+        sitio = identity.site(mundo(), entorno())
+        self.assertFalse(sitio["exists"])
+        self.assertFalse(sitio["mover"])
+        self.assertIsNone(sitio["pool_actual"])
+
+
 class Documentacion(unittest.TestCase):
     def test_la_documentacion_generada_no_lleva_nada_derivado(self):
         texto = identity.render_docs(laboratorio(), entorno())
