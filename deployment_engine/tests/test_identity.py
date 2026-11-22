@@ -332,6 +332,18 @@ class Rechazos(unittest.TestCase):
         with self.assertRaisesRegex(identity.LabError, "misma red"):
             identity.plan(mundo(), lab, entorno())
 
+    def test_manda_lo_escrito_en_el_config_no_lo_que_esta_en_marcha(self):
+        # `/cluster/resources` da la memoria viva: una máquina encendida a la que se le
+        # cambia la memoria en el config sigue con la vieja hasta reiniciar. Si el plan
+        # comparase contra la viva, no vería esa diferencia justo cuando existe.
+        vivos = [{"vmid": 210, "name": "rte1", "type": "qemu", "pool": "b_router_dos_puestos",
+                  "status": "running", "cores": 1, "memory_bytes": 256 * 1024 * 1024,
+                  "config_cores": 1, "config_memory": 200}]
+        plan = identity.plan(mundo(guests=vivos), laboratorio(), entorno())
+        paso = next(s for s in plan["steps"] if s["op"] == "guest_set")
+        self.assertEqual(paso["tenia"]["memory"], 200)
+        self.assertTrue(any("memoria 200 ->" in e for e in plan["effects"]), plan["effects"])
+
     def test_cambiar_de_contenedor_a_maquina_rehace_solo_ese_invitado(self):
         # Lo que no se cambia en caliente se rehace, pero rehacer no es destruir el
         # laboratorio: el paso lleva el vmid exacto y no arrastra a ningún otro.
