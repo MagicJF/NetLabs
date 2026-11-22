@@ -414,19 +414,12 @@ def plano(lab: dict, modo: str = "topologia") -> str:
     else:
         if cadena:
             aristas.append(("internet", cadena[0]["role"]))
-        for nodo in cadena[1:]:
-            padres = [p for p in (nodo.get("after") or []) if p in posiciones]
-            if padres:
-                aristas.append((padres[0], nodo["role"]))
-            else:
-                anterior = cadena[cadena.index(nodo) - 1]["role"]
-                aristas.append((anterior, nodo["role"]))
-        for nodo in sorted(dentro, key=lambda n: (profundidad[n["role"]], n["role"])):
-            for padre in nodo.get("after") or []:
-                if padre in por_rol and profundidad.get(padre, 0) > 0:
-                    aristas.append((padre, nodo["role"]))
-                elif padre in posiciones:
-                    aristas.append((padre, nodo["role"]))
+        # Las conexiones son los cables DECLARADOS (`links`). `after` dice el orden de
+        # arranque, no quién está cableado con quién: dibujar por `after` inventaba
+        # líneas entre equipos que no comparten ningún cable. `after` se sigue usando
+        # para colocar —la cadena de salidas y las áreas—, pero no para conectar.
+        for link in lab.get("links") or []:
+            aristas.append((link["a"]["node"], link["z"]["node"]))
         # Una red cuyos equipos no cuelgan de la puerta declarada sigue tocando el
         # router: la pata se dibuja hasta el borde del área, que es lo que hay.
         for red in lab["networks"]:

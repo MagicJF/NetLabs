@@ -727,6 +727,24 @@ def _dentro(address, red: ipaddress.IPv4Network | ipaddress.IPv6Network) -> bool
     return ipaddress.ip_interface(address).ip in red
 
 
+def _patas(node: dict) -> list:
+    """Todas las direcciones declaradas de un equipo: la suelta y las de cada pata.
+
+    Un router con una sola interfaz declara `address`; uno con varias patas —el que
+    enruta entre dos o más redes— las declara dentro de `configure.addresses`. Para
+    saber si el equipo está dentro de un espacio hay que mirar todas, no sólo la
+    primera: si no, un router con una pata en la red del laboratorio y otra fuera
+    pasa por no estar dentro y su espacio se queda sin ruta.
+    """
+    direcciones = []
+    if node.get("address"):
+        direcciones.append(node["address"])
+    for pata in (node.get("configure") or {}).get("addresses") or []:
+        if pata.get("address"):
+            direcciones.append(pata["address"])
+    return direcciones
+
+
 def _rutas(lab: dict, nodes: list[dict]) -> list[dict]:
     """Una ruta por espacio declarado, con el router del laboratorio como salto.
 
@@ -734,25 +752,35 @@ def _rutas(lab: dict, nodes: list[dict]) -> list[dict]:
     router declarado que lleva una pata dentro de él (el orden de la declaración
     decide cuando hay más de uno). Nadie teclea una ruta.
 
+    Un router se cuenta como dentro del espacio si **cualquiera** de sus patas
+    declaradas cae dentro, no sólo su `address`: un router de varias patas puede
+    tener su primera dirección en otro sitio y seguir siendo el salto.
+
     Un espacio sin ningún router dentro no se puede alcanzar desde la gestión: no
     se inventa un salto ni se calla — el plan lo dice. Y el salto de prueba es la
-    dirección que ese router tiene dentro del espacio: si no responde desde la
+    primera pata del router que cae dentro del espacio: si no responde desde la
     gestión, o falta la ruta o el router no deja pasar.
     """
     routers = [n for n in nodes if n["type"] == "router" and n.get("management")]
     rutas = []
     for espacio in lab.get("address_spaces") or []:
         red = ipaddress.ip_network(espacio, strict=False)
-        salto = next((r for r in routers if _dentro(r.get("address"), red)), None)
+        salto = None
+        for router in routers:
+            dentro = next((d for d in _patas(router) if _dentro(d, red)), None)
+            if dentro is not None:
+                salto = (router, dentro)
+                break
         if salto is None:
             continue
+        router, prueba = salto
         rutas.append({
             "space": str(red),
-            "via": salto["mgmt_address"],
-            "role": salto["role"],
+            "via": router["mgmt_address"],
+            "role": router["role"],
             # La dirección que se sondea para saber que el cruce está abierto: la
             # primera pata del router dentro del espacio.
-            "prueba": str(ipaddress.ip_interface(salto["address"]).ip),
+            "prueba": str(ipaddress.ip_interface(prueba).ip),
         })
     return rutas
 

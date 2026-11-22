@@ -414,6 +414,21 @@ class LasRutas(unittest.TestCase):
         nodes = [self.nodo("rte1", "router", "10.44.1.1/24", None, management=False)]
         self.assertEqual(identity._rutas(lab, nodes), [])
 
+    def test_un_router_de_varias_patas_cuenta_por_cualquiera_de_ellas(self):
+        # Un router que enruta entre varias redes declara sus direcciones en
+        # `configure.addresses`. Mirando sólo `address` quedaría fuera de su propio
+        # espacio —su primera pata está en otra red— y ese espacio se quedaría sin
+        # ruta. El salto de prueba es la primera pata que cae dentro.
+        lab = {"address_spaces": ["10.44.0.0/16"]}
+        router = self.nodo("rte1", "router", "10.55.0.1/24", "10.30.0.104")
+        router["configure"] = {"addresses": [
+            {"address": "10.55.0.1/24"},
+            {"address": "10.44.1.1/24"},
+        ]}
+        self.assertEqual(identity._rutas(lab, [router]),
+                         [{"space": "10.44.0.0/16", "via": "10.30.0.104",
+                           "role": "rte1", "prueba": "10.44.1.1"}])
+
     def test_un_espacio_sin_router_no_inventa_salto(self):
         lab = {"address_spaces": ["10.44.0.0/16", "10.99.0.0/16"]}
         nodes = [self.nodo("rte1", "router", "10.44.1.1/24", "10.30.0.104")]
@@ -509,19 +524,14 @@ class Documentacion(unittest.TestCase):
             self.assertIn(identity._subred(net["address"]), topologia)
             self.assertIn(f">{net["name"]}<", topologia)
 
-        # Las conexiones son las declaradas: en la topología, una por jerarquía (`after`
-        # de dentro más la salida a Internet); en el cableado, una por cable.
+        # Las conexiones son las declaradas por cables (`links`), no por `after`: la
+        # topología dibuja una por cable más la salida a Internet; el cableado, una
+        # por cable. `after` sólo ordena el arranque y la colocación, no dibuja líneas.
         def conexiones(svg):
             # El gris de línea es el de una conexión: los símbolos no lo usan.
             return svg.count('stroke="#94a3b8"')
 
-        profundidad = identity._profundidad(lab)
-        puertas = {n["role"] for n in lab["nodes"] if profundidad[n["role"]] == 0}
-        internas = sum(1 for n in lab["nodes"] for p in (n.get("after") or [])
-                       if profundidad[n["role"]] > 0 and p not in puertas)
-        patas = sum(1 for n in lab["nodes"]
-                    if profundidad[n["role"]] > 0 and puertas & set(n.get("after") or []))
-        self.assertEqual(conexiones(topologia), internas + patas + 1)  # +1: Internet
+        self.assertEqual(conexiones(topologia), len(lab["links"]) + 1)  # +1: Internet
         self.assertEqual(conexiones(cableado), len(lab["links"]))
 
         # La clase la dice el símbolo, plano y de línea: el router es el círculo con las
