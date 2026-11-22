@@ -186,8 +186,13 @@ no pueden tocarse, así que un router con pata en dos redes no se puede poner en
 El plano se dibuja como un plano de red, no como un organigrama. **El eje lo marca el router**:
 un equipo con pata en varias redes se sienta donde se tocan, **encima del cruce** —el borde de
 cada área pasa por debajo de su símbolo, no a un lado—, con una red a cada lado y la salida a
-Internet arriba; con una sola red, el router se sienta sobre el techo del área. Cada área lleva
-su nombre, su subred y la dirección con la que el router se asoma a ella. Un equipo de una sola red vive
+Internet arriba; con una sola red, el router se sienta sobre el techo del área.
+
+**Lo que no cambia se escribe**: cada equipo lleva su dirección estática bajo el nombre —una por
+pata si tiene varias, como un router con un pie en cada red— y el que sale por DHCP lo dice con
+esa palabra. Cada área, en su cabecera, lleva su nombre, su subred y **el rango que sirve su
+DHCP**. La puerta no se repite en la cabecera: es la dirección del equipo que toca la red y va
+escrita en él, que es su dueño. Un equipo de una sola red vive
 dentro de la suya, y dentro de cada red la profundidad baja: lo que cuelga de la puerta queda
 pegado a ella. **La clase la dice el símbolo**, plano y de línea, sin volumen ni perspectiva: el router
 es el círculo con las cuatro flechas, el switch la caja con las flechas cruzadas y sus puertos, el

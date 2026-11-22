@@ -321,10 +321,19 @@ def plano(lab: dict, modo: str = "topologia") -> str:
         """
         if modo == "cableado":
             return [nodo["role"]]
-        if profundidad[nodo["role"]] == 0 or len(nodo.get("networks") or []) > 1:
-            return [nodo["role"]]
-        direccion = _direccion_de(nodo)
-        return [nodo["role"]] + ([direccion] if direccion else [])
+        # Lo que no cambia se escribe: una línea por pata con dirección. Un equipo con
+        # varias redes lleva una por red, en el orden en que las declara; el que sale
+        # por DHCP lo dice con esa palabra, que también es información.
+        direcciones: list[str] = []
+        for red in nodo.get("networks") or []:
+            direccion = _direccion_de(nodo, red if len(nodo.get("networks") or []) > 1 else None)
+            if direccion and direccion not in direcciones:
+                direcciones.append(direccion)
+        if not direcciones:
+            direccion = _direccion_de(nodo)
+            if direccion:
+                direcciones.append(direccion)
+        return [nodo["role"], *direcciones]
 
     # --- las redes, como áreas -------------------------------------------------
     cajas: dict[str, Caja] = {}
@@ -441,6 +450,18 @@ def plano(lab: dict, modo: str = "topologia") -> str:
                 if direccion not in pasarelas.setdefault(red, []):
                     pasarelas[red].append(direccion)
 
+    # Servicios fijos que cada red tiene declarados: el rango que sirve su DHCP.
+    servicios: dict[str, list[str]] = {}
+    for nodo in nodos:
+        for srv in (nodo.get("configure") or {}).get("dhcp_server") or []:
+            red = srv.get("network")
+            if not red or red not in cajas:
+                continue
+            subred = cajas[red].subred
+            rango = _rango_corto(srv.get("pool") or "", subred.replace(".x/", ".0/"))
+            if rango:
+                servicios.setdefault(red, []).append(f"dhcp {rango}")
+
     def lado(rol: str) -> str:
         """De qué lado cabe el nombre: el que más lejos queda de sus conexiones.
 
@@ -481,7 +502,7 @@ def plano(lab: dict, modo: str = "topologia") -> str:
     textos: list[str] = []
     puntos: list[tuple[float, float]] = [internet_xy]
     for caja in cajas.values():
-        piezas.append(_area(caja, pasarelas.get(caja.nombre, [])))
+        piezas.append(_area(caja, servicios.get(caja.nombre, [])))
         puntos += [(caja.x, caja.y), (caja.x + caja.ancho, caja.y + caja.alto)]
 
     for caja in cajas.values():
@@ -602,7 +623,16 @@ def _etiqueta(cx: float, cy: float, lineas: list[str], clase: str = "equipo",
     return "".join(partes)
 
 
-def _area(caja: Caja, pasarelas: list[str]) -> str:
+def _rango_corto(rango: str, subred: str) -> str:
+    """El rango DHCP sin repetir lo que ya dice la subred: `10.44.1.100-199`."""
+    desde, _, hasta = str(rango).partition("-")
+    prefijo = subred.rsplit(".", 1)[0] + "."
+    if hasta.startswith(prefijo) and desde.startswith(prefijo):
+        return f"{desde}-{hasta[len(prefijo):]}"
+    return str(rango)
+
+
+def _area(caja: Caja, servicios: list[str] | None = None) -> str:
     """Una red: área translúcida con su nombre, su subred y quién le da puerta.
 
     La dirección con la que el router se asoma a la red se escribe aquí, en la
@@ -615,10 +645,14 @@ def _area(caja: Caja, pasarelas: list[str]) -> str:
         f'<text x="{caja.x + 16:.1f}" y="{caja.y + 36:.1f}" font-family="{FUENTE}" '
         f'font-size="10.5" fill="{TENUE}">{_esc(caja.subred)}</text>',
     ]
-    if pasarelas:
-        textos.append(f'<text x="{caja.x + 16:.1f}" y="{caja.y + 51:.1f}" '
+    # Lo que la red tiene montado de forma permanente —el rango que reparte— se escribe
+    # en su cabecera. La puerta no: esa es la dirección del equipo que la toca, y va
+    # escrita en el equipo, que es su dueño; repetirla aquí sólo añadiría ruido.
+    fijos = list(servicios or [])
+    for i, linea in enumerate(fijos):
+        textos.append(f'<text x="{caja.x + 16:.1f}" y="{caja.y + 51 + i * 14:.1f}" '
                       f'font-family="{FUENTE}" font-size="10.5" fill="{EQUIPO_TRAZO}">'
-                      f'puerta {_esc(", ".join(pasarelas))}</text>')
+                      f'{_esc(linea)}</text>')
     return "".join([
         f'<rect x="{caja.x:.1f}" y="{caja.y:.1f}" width="{caja.ancho:.1f}" '
         f'height="{caja.alto:.1f}" rx="14" fill="{RED_RELLENO}" fill-opacity="0.06" '

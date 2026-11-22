@@ -538,6 +538,23 @@ class Documentacion(unittest.TestCase):
         self.assertIn('<rect x="-24" y="-10" width="48" height="20"', svg_c)
         self.assertIn("switch", svg_c)
 
+    def test_el_plano_escribe_lo_que_no_cambia(self):
+        """La dirección estática va en su equipo y el rango servido, en su red.
+
+        Un plano que sólo dice «dhcp» esconde justo lo que hay que apuntar en un papel:
+        qué dirección tiene cada equipo y qué rango reparte la red.
+        """
+        svg = plano.plano(laboratorio(), "topologia")
+
+        # El router enseña una dirección por pata, no una sola ni ninguna.
+        self.assertIn(">10.44.1.1/24<", svg)
+        self.assertIn(">10.44.2.1/24<", svg)
+        # El rango que sirve cada red, en la cabecera de su área y sin repetir la subred.
+        self.assertIn(">dhcp 10.44.1.100-199<", svg)
+        self.assertIn(">dhcp 10.44.2.100-199<", svg)
+        # Un puesto que sale por DHCP lo dice, que también es un dato fijo del plano.
+        self.assertIn(">dhcp<", svg)
+
     def test_un_equipo_en_tres_redes_se_rodea_de_ellas(self):
         """Con tres redes el equipo de varias patas va al cruce, y las áreas no se pisan.
 
