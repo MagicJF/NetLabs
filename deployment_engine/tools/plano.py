@@ -562,14 +562,17 @@ def plano(lab: dict, modo: str = "topologia") -> str:
     espacios = ", ".join(identity._subred(s) for s in lab["address_spaces"])
     # El pie de figura dice lo que un plano no debe dejar adivinar: qué es cada área.
     return "\n".join([
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{ancho:.0f}" height="{alto:.0f}" '
-        f'viewBox="0 0 {ancho:.0f} {alto:.0f}" role="img" '
-        f'aria-label="Plano de {_esc(lab["lab"])}">',
+        # Cada cadena va entre paréntesis: dentro de una lista, dos literales pegados
+        # en líneas distintas se leen como una coma que falta, no como una frase
+        # partida (ISC004 en ruff). El SVG del plano no cambia.
+        (f'<svg xmlns="http://www.w3.org/2000/svg" width="{ancho:.0f}" height="{alto:.0f}" '
+         f'viewBox="0 0 {ancho:.0f} {alto:.0f}" role="img" '
+         f'aria-label="Plano de {_esc(lab["lab"])}">'),
         f'<rect width="{ancho:.0f}" height="{alto:.0f}" fill="#ffffff"/>',
-        f'<text x="{ancho / 2:.1f}" y="28" text-anchor="middle" font-family="{FUENTE}" '
-        f'font-size="15" font-weight="650" fill="{TINTA}">{_esc(lab["lab"])}</text>',
-        f'<text x="{ancho / 2:.1f}" y="45" text-anchor="middle" font-family="{FUENTE}" '
-        f'font-size="11.5" fill="{TENUE}">{_esc(espacios)}</text>',
+        (f'<text x="{ancho / 2:.1f}" y="28" text-anchor="middle" font-family="{FUENTE}" '
+         f'font-size="15" font-weight="650" fill="{TINTA}">{_esc(lab["lab"])}</text>'),
+        (f'<text x="{ancho / 2:.1f}" y="45" text-anchor="middle" font-family="{FUENTE}" '
+         f'font-size="11.5" fill="{TENUE}">{_esc(espacios)}</text>'),
         f'<g transform="translate({dx:.1f},{dy:.1f})">',
         *piezas,
         *textos,
@@ -643,9 +646,9 @@ def _area(caja: Caja, servicios: list[str] | None = None) -> str:
                       f'font-family="{FUENTE}" font-size="10.5" fill="{EQUIPO_TRAZO}">'
                       f'{_esc(linea)}</text>')
     return "".join([
-        f'<rect x="{caja.x:.1f}" y="{caja.y:.1f}" width="{caja.ancho:.1f}" '
-        f'height="{caja.alto:.1f}" rx="14" fill="{RED_RELLENO}" fill-opacity="0.06" '
-        f'stroke="{RED_TRAZO}" stroke-width="1.4"/>',
+        (f'<rect x="{caja.x:.1f}" y="{caja.y:.1f}" width="{caja.ancho:.1f}" '
+         f'height="{caja.alto:.1f}" rx="14" fill="{RED_RELLENO}" fill-opacity="0.06" '
+         f'stroke="{RED_TRAZO}" stroke-width="1.4"/>'),
         *textos,
     ])
 
@@ -663,21 +666,27 @@ def _cable(a: tuple[float, float], z: tuple[float, float],
     fin = _borde(z, a, tam_z)
     largo = math.hypot(fin[0] - inicio[0], fin[1] - inicio[1]) or 1
     ux, uy = (fin[0] - inicio[0]) / largo, (fin[1] - inicio[1]) / largo
-    piezas = [f'<line x1="{inicio[0]:.1f}" y1="{inicio[1]:.1f}" x2="{fin[0]:.1f}" '
-              f'y2="{fin[1]:.1f}" stroke="{LINEA}" stroke-width="1.6" '
-              f'stroke-linecap="round"/>']
+    piezas = [(f'<line x1="{inicio[0]:.1f}" y1="{inicio[1]:.1f}" x2="{fin[0]:.1f}" '
+               f'y2="{fin[1]:.1f}" stroke="{LINEA}" stroke-width="1.6" '
+               f'stroke-linecap="round"/>')]
+    # El paso con el que la etiqueta se separa del símbolo se acorta en cables cortos:
+    # con 18 fijos, un cable de 46 px dejaba las dos etiquetas a 10 px del centro cada
+    # una —20 de ancho— y se solapaban justo donde hay que leerlas. Se pide que los dos
+    # centros queden a más de lo que mide una etiqueta (22 px, con holgura), y un mínimo
+    # para que no se metan dentro del símbolo.
+    paso = min(18.0, max(6.0, (largo - 22) / 2))
     for (px, py), (dx, dy), puerto in ((inicio, (ux, uy), puerto_a),
                                        (fin, (-ux, -uy), puerto_z)):
         # El puerto va SOBRE el cable, a un paso del símbolo: ahí no lo tapa el nombre
         # del equipo (que el plano aparta del rumbo de sus cables) ni la cabecera del
         # área, y se ve de qué punta del cable es sin leer nada más.
-        tx, ty = px + dx * 18, py + dy * 18
+        tx, ty = px + dx * paso, py + dy * paso
         piezas += [
-            f'<rect x="{tx - 10:.1f}" y="{ty - 8:.1f}" width="20" height="16" rx="5" '
-            f'fill="#ffffff" stroke="{EQUIPO_TRAZO}" stroke-width="1.1"/>',
-            f'<text x="{tx:.1f}" y="{ty + 3.5:.1f}" text-anchor="middle" '
-            f'font-family="{FUENTE}" font-size="10" font-weight="600" '
-            f'fill="{EQUIPO_TRAZO}">p{puerto}</text>',
+            (f'<rect x="{tx - 10:.1f}" y="{ty - 8:.1f}" width="20" height="16" rx="5" '
+             f'fill="#ffffff" stroke="{EQUIPO_TRAZO}" stroke-width="1.1"/>'),
+            (f'<text x="{tx:.1f}" y="{ty + 3.5:.1f}" text-anchor="middle" '
+             f'font-family="{FUENTE}" font-size="10" font-weight="600" '
+             f'fill="{EQUIPO_TRAZO}">p{puerto}</text>'),
         ]
     return "".join(piezas)
 
