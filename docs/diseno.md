@@ -452,18 +452,15 @@ b_rte1p2_wsp2p1     laboratorio `b`: el router de borde 1 -> el segundo puesto
 que dos laboratorios con la misma topología en el mismo hipervisor no compartan un solo
 nombre de puente. Cada punta mide seis caracteres (dos de tipo, una de función, el
 ordinal, `p` y el puerto), así que el nombre mide 15 y **cabe en el tope de 15
-caracteres de un nombre de interfaz en Linux**: `IFNAMSIZ` es 16, con el nulo final.
-Medido en el nodo: 15 entra, 16 no. El nombre del cable dice qué une sin consultar la
-declaración: es la mitad de la documentación.
+caracteres de un nombre de interfaz en Linux** (`IFNAMSIZ` es 16, con el nulo final). El
+nombre del cable dice qué une sin consultar la declaración: es la mitad de la
+documentación.
 
 **Por qué el puerto es de una cifra.** El tope de 15 no es una convención: es del
 kernel. Con la letra del laboratorio y las dos puntas dentro, el puerto cabe en una
 cifra, y de ahí que **un equipo no pueda tener más de nueve puertos cableados**. El
-precio se dice: al pedir el puerto 10 el motor se para con un mensaje, en vez de dejar
-que la API de Proxmox acepte el nombre —su validador admite hasta 21 caracteres— y el
-puente falle después, al levantarlo, que es la peor clase de fallo. Si un laboratorio
-necesitara más puertos, el puerto pasaría a un carácter en base 36 (`a` = 10) y cabrían
-35, a costa de que el nombre deje de leerse de un vistazo.
+límite se dice: al pedir el puerto 10 el motor se para con un mensaje, en vez de dejar
+que la API de Proxmox acepte el nombre y el puente falle después, al levantarlo.
 
 **El comentario del puente dice de quién es.** Como el cable no puede llevar CIDR, su marca vive
 en el comentario: `netlabs lab=<lab> space=<cidr> cable=<nombre>`. Es lo que permite a `destroy`
