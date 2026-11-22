@@ -130,14 +130,14 @@ Address spaces: `10.20.0.0/16`, `10.40.0.0/16`, `203.0.113.0/30`
 | `rta4` | router | 2 | `tk`, `tk_ventas` | management (derived) | cores=1, disk=1, memory=256 |
 | `rta5` | router | 2 | `tk`, `tk_ingenieria` | management (derived) | cores=1, disk=1, memory=256 |
 | `rta6` | router | 2 | `tk`, `tk_marketing` | management (derived) | cores=1, disk=1, memory=256 |
-| `swc1` | switch | 2 | `ny`, `ny`, `ny`, `ny` | management (derived) | cores=1, disk=1, memory=128 |
-| `swc2` | switch | 2 | `tk`, `tk`, `tk`, `tk` | management (derived) | cores=1, disk=1, memory=128 |
-| `swa1` | switch | 3 | `ny_ventas`, `ny_ventas`, `ny_ventas` | management (derived) | cores=1, disk=1, memory=128 |
-| `swa2` | switch | 3 | `ny_ingenieria`, `ny_ingenieria`, `ny_ingenieria` | management (derived) | cores=1, disk=1, memory=128 |
-| `swa3` | switch | 3 | `ny_marketing`, `ny_marketing` | management (derived) | cores=1, disk=1, memory=128 |
-| `swa4` | switch | 3 | `tk_ventas`, `tk_ventas` | management (derived) | cores=1, disk=1, memory=128 |
-| `swa5` | switch | 3 | `tk_ingenieria`, `tk_ingenieria` | management (derived) | cores=1, disk=1, memory=128 |
-| `swa6` | switch | 3 | `tk_marketing`, `tk_marketing` | management (derived) | cores=1, disk=1, memory=128 |
+| `swc1` | switch | 2 | `ny`, `ny`, `ny`, `ny` | management (derived) | cores=1, disk=1, memory=256 |
+| `swc2` | switch | 2 | `tk`, `tk`, `tk`, `tk` | management (derived) | cores=1, disk=1, memory=256 |
+| `swa1` | switch | 3 | `ny_ventas`, `ny_ventas`, `ny_ventas` | management (derived) | cores=1, disk=1, memory=256 |
+| `swa2` | switch | 3 | `ny_ingenieria`, `ny_ingenieria`, `ny_ingenieria` | management (derived) | cores=1, disk=1, memory=256 |
+| `swa3` | switch | 3 | `ny_marketing`, `ny_marketing` | management (derived) | cores=1, disk=1, memory=256 |
+| `swa4` | switch | 3 | `tk_ventas`, `tk_ventas` | management (derived) | cores=1, disk=1, memory=256 |
+| `swa5` | switch | 3 | `tk_ingenieria`, `tk_ingenieria` | management (derived) | cores=1, disk=1, memory=256 |
+| `swa6` | switch | 3 | `tk_marketing`, `tk_marketing` | management (derived) | cores=1, disk=1, memory=256 |
 | `svs1` | server | 4 | `ny_ingenieria` | `10.20.66.10/24` | cores=1, disk=4, memory=256 |
 | `wsp1` | workstation | 4 | `ny_ventas` | from router (DHCP) | cores=1, disk=2, memory=128 |
 | `wsp2` | workstation | 4 | `ny_ventas` | from router (DHCP) | cores=1, disk=2, memory=128 |

@@ -111,7 +111,7 @@ nodes:
     type: switch
     stage: 2
     after: [rte1]
-    resources: {cores: 1, memory: 128, disk: 1}
+    resources: {cores: 1, memory: 256, disk: 1}
     networks: [ny, ny, ny, ny]    # rte1, rta1, rta2, rta3
     configure:
       users:
@@ -122,7 +122,7 @@ nodes:
     type: switch
     stage: 2
     after: [rte2]
-    resources: {cores: 1, memory: 128, disk: 1}
+    resources: {cores: 1, memory: 256, disk: 1}
     networks: [tk, tk, tk, tk]
     configure:
       users:
@@ -256,7 +256,7 @@ nodes:
     type: switch
     stage: 3
     after: [rta1]
-    resources: {cores: 1, memory: 128, disk: 1}
+    resources: {cores: 1, memory: 256, disk: 1}
     networks: [ny_ventas, ny_ventas, ny_ventas]      # router, wsp1, wsp2
     configure:
       users:
@@ -267,7 +267,7 @@ nodes:
     type: switch
     stage: 3
     after: [rta2]
-    resources: {cores: 1, memory: 128, disk: 1}
+    resources: {cores: 1, memory: 256, disk: 1}
     networks: [ny_ingenieria, ny_ingenieria, ny_ingenieria]   # router, wsp3, svs1
     configure:
       users:
@@ -278,7 +278,7 @@ nodes:
     type: switch
     stage: 3
     after: [rta3]
-    resources: {cores: 1, memory: 128, disk: 1}
+    resources: {cores: 1, memory: 256, disk: 1}
     networks: [ny_marketing, ny_marketing]
     configure:
       users:
@@ -289,7 +289,7 @@ nodes:
     type: switch
     stage: 3
     after: [rta4]
-    resources: {cores: 1, memory: 128, disk: 1}
+    resources: {cores: 1, memory: 256, disk: 1}
     networks: [tk_ventas, tk_ventas]
     configure:
       users:
@@ -300,7 +300,7 @@ nodes:
     type: switch
     stage: 3
     after: [rta5]
-    resources: {cores: 1, memory: 128, disk: 1}
+    resources: {cores: 1, memory: 256, disk: 1}
     networks: [tk_ingenieria, tk_ingenieria]
     configure:
       users:
@@ -311,7 +311,7 @@ nodes:
     type: switch
     stage: 3
     after: [rta6]
-    resources: {cores: 1, memory: 128, disk: 1}
+    resources: {cores: 1, memory: 256, disk: 1}
     networks: [tk_marketing, tk_marketing]
     configure:
       users:
