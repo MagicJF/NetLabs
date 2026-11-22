@@ -346,6 +346,13 @@ class Region(Caja):
         self.espina = False
         self.cabecera = 40.0
         self.servicios: list[str] = []
+        # Una nube no es un área del cliente: es la red del proveedor y se dibuja como
+        # tal. Y `enchufe` es el equipo que reparte dentro del área —el switch de
+        # acceso—, que va en su propia fila arriba para que los cables entren por él.
+        self.nube = False
+        self.enchufe: str | None = None
+        # Una raíz sintética es el lienzo, no un área: si no comparten caja, no se pinta.
+        self.sintetica = False
 
     @property
     def prefijo(self) -> int:
@@ -380,6 +387,9 @@ def _arbol(lab: dict) -> Region:
         region = Region(net["name"], net.get("title") or net["name"],
                         identity._subred(net["address"]),
                         ipaddress.ip_network(net["address"], strict=False))
+        # `shape: cloud` es una decisión de dibujo: la red se pinta como nube porque no
+        # es un segmento del cliente, no porque el despliegue sea distinto.
+        region.nube = net.get("shape") == "cloud"
         regiones.append(region)
         por_red[net["name"]] = region
     for espacio in lab.get("address_spaces") or []:
@@ -399,42 +409,108 @@ def _arbol(lab: dict) -> Region:
 
     raices = [r for r in regiones if r.padre is None]
     if len(raices) > 1:
-        # Lo que comparten las raíces es la caja que las envuelve: 10.x.x.x cuando
-        # conviven dos sedes bajo el mismo /8. Si no comparten nada (`/0`), no hay caja.
-        for prefijo in range(min(r.prefijo for r in raices) - 1, 7, -1):
-            prueba = ipaddress.ip_network(f"{raices[0].cidr.network_address}/{prefijo}",
-                                          strict=False)
-            if all(r.cidr.subnet_of(prueba) for r in raices):
-                raiz = Region("espacio:" + str(prueba), _mascara(str(prueba)), "", prueba)
-                raiz.hijas = sorted(raices, key=lambda r: (int(r.cidr.network_address),
-                                                           r.prefijo))
-                for hija in raiz.hijas:
-                    hija.padre = raiz
-                return raiz
+        # Las raíces que comparten caja se agrupan: dos sedes bajo el mismo /8 son una
+        # empresa, y la caja que las envuelve es ACME. La nube no entra nunca en esa
+        # caja: representa el exterior, así que se queda fuera, al lado.
+        tierra = [r for r in raices if not r.nube]
+        nubes = [r for r in raices if r.nube]
+        caja = None
+        if len(tierra) > 1:
+            for prefijo in range(min(r.prefijo for r in tierra) - 1, 7, -1):
+                prueba = ipaddress.ip_network(
+                    f"{tierra[0].cidr.network_address}/{prefijo}", strict=False)
+                if all(r.cidr.subnet_of(prueba) for r in tierra):
+                    caja = Region("espacio:" + str(prueba), _mascara(str(prueba)), "", prueba)
+                    caja.hijas = sorted(tierra, key=lambda r: (int(r.cidr.network_address),
+                                                              r.prefijo))
+                    for hija in caja.hijas:
+                        hija.padre = caja
+                    break
+        nuevas = ([caja] if caja else tierra) + nubes
+        if len(nuevas) == 1:
+            nuevas[0].hijas.sort(key=lambda r: (int(r.cidr.network_address), r.prefijo))
+            return nuevas[0]
+        # Todavía quedan raíces que no comparten caja: la raíz es el mundo, y el mundo
+        # no se dibuja —el exterior no está dentro de ninguna de sus áreas.
+        raiz = Region("espacio:0.0.0.0/0", "", "", ipaddress.ip_network("0.0.0.0/0"))
+        raiz.sintetica = True
+        raiz.hijas = sorted(nuevas, key=lambda r: (int(r.cidr.network_address), r.prefijo))
+        for hija in raiz.hijas:
+            hija.padre = raiz
+        return raiz
     raiz = raices[0]
     raiz.hijas.sort(key=lambda r: (int(r.cidr.network_address), r.prefijo))
     return raiz
 
 
 def _casa(node: dict, por_red: dict[str, Region]) -> tuple[Region | None, list[Region]]:
-    """Dónde se dibuja un equipo: en el área más estrecha donde tiene pata.
+    """Dónde vive un equipo y por dónde se asoma.
 
-    Un equipo con patas en varias redes hermanas —el router entre dos LAN— no vive
-    en ninguna de ellas: vive en el pasillo que las une, y por eso se devuelve el
-    padre y las hermanas que toca, para colocarlo entre las dos.
+    Vive en el área más estrecha que contiene TODAS sus patas; y devuelve, por cada
+    pata, la hija de esa área por la que entra. Un router de borde tiene dos —la nube
+    y la sede— y por eso no se dibuja dentro de ninguna de las dos: se dibuja a
+    caballo de las dos, que es lo que hace un router.
     """
     patas = [por_red[n] for n in node.get("networks") or [] if n in por_red]
-    if not patas:
+    unicas = list(dict.fromkeys(patas))
+    if not unicas:
         return None, []
-    estrecho = max(p.prefijo for p in patas)
-    candidatas = [p for p in patas if p.prefijo == estrecho]
-    unicas = list(dict.fromkeys(candidatas))
-    if len(unicas) == 1:
-        return unicas[0], []
     casa = unicas[0]
     while casa.padre and not all(_contiene(casa, otra) for otra in unicas):
         casa = casa.padre
-    return casa, unicas
+    grupos: list[Region] = []
+    for pata in unicas:
+        if pata is casa:
+            hija = casa
+        else:
+            hija = pata
+            while hija.padre is not None and hija.padre is not casa:
+                hija = hija.padre
+        if hija not in grupos:
+            grupos.append(hija)
+    return casa, grupos
+
+
+def _entre(una: Region, otra: Region) -> tuple[float, float]:
+    """El punto donde dos áreas se tocan: ahí se dibuja el equipo que las une.
+
+    Un router no está dentro de la red que conecta, está en el borde: media caja en
+    cada lado. Se busca el tramo en el que las dos áreas se miran —el solape de sus
+    rectángulos— y se pone en su mitad.
+    """
+    if _contiene(una, otra) or _contiene(otra, una):
+        # Una dentro de otra: no hay «aire entre medias» donde ponerlo. Se pone en el
+        # borde de la de dentro que mira al exterior —arriba, que es donde el área
+        # grande tiene su cabecera—, así que el router se apoya en la frontera de las
+        # dos y no en mitad de ninguna.
+        dentro = otra if _contiene(una, otra) else una
+        return dentro.x + dentro.ancho / 2, dentro.y
+    x0, x1 = max(una.x, otra.x), min(una.x + una.ancho, otra.x + otra.ancho)
+    y0, y1 = max(una.y, otra.y), min(una.y + una.alto, otra.y + otra.alto)
+    if una.y + una.alto <= otra.y or otra.y + otra.alto <= una.y:
+        # Una encima de otra: el corte es horizontal, en el aire que las separa.
+        arriba, abajo = sorted((una, otra), key=lambda r: r.y)
+        corte = (arriba.y + arriba.alto + abajo.y) / 2
+        if x1 > x0:
+            return (x0 + x1) / 2, corte
+        return (arriba.x + arriba.ancho + abajo.x) / 2, corte
+    # Una al lado de otra: el corte es vertical.
+    izquierda, derecha = sorted((una, otra), key=lambda r: r.x)
+    corte = (izquierda.x + izquierda.ancho + derecha.x) / 2
+    if y1 > y0:
+        return corte, (y0 + y1) / 2
+    return corte, (izquierda.y + izquierda.alto + derecha.y) / 2
+
+
+def _centro_de_lo_suyo(rol: str, patas: dict[str, list[Region]],
+                       por_red: dict[str, Region]) -> float:
+    """Por dónde cae un equipo: el centro de sus áreas, sin contar la nube.
+
+    Sirve para ordenar dos equipos que comparten frontera: el que mira a la izquierda
+    se dibuja a la izquierda, aunque la frontera sea la misma.
+    """
+    centros = [p.x + p.ancho / 2 for p in patas.get(rol) or [] if not p.nube]
+    return sum(centros) / len(centros) if centros else 0.0
 
 
 def _equipos_de(region: Region) -> list[str]:
@@ -445,53 +521,34 @@ def _equipos_de(region: Region) -> list[str]:
     return dentro
 
 
-def _marcar_pasillos(raiz: Region, patas: dict[str, list[Region]]) -> None:
-    """Marca el área que sirve de pasillo entre hermanas.
+def _marcar_pasillos(raiz: Region, cruces: dict[str, list[Region]]) -> None:
+    """Marca las áreas que se dibujan como banda arriba, con lo demás debajo.
 
-    Un área es pasillo si sus equipos vuelven a asomarse a dos o más hermanas: el
-    tránsito entre dos sedes lo es, porque cada router de borde tiene una pata ahí y
-    otra en su sede. Se dibuja encima y de lado a lado, y las patas bajan rectas.
+    Dos casos. La nube del proveedor, siempre: no cuelga de las sedes, las sedes
+    cuelgan de ella. Y el área que varios equipos cruzan hacia hermanas distintas —el
+    core de una sede, al que se asoman los tres routers de departamento—, porque si se
+    dibujara al lado de los departamentos sólo uno de los tres routers quedaría en su
+    frontera y los otros dos tendrían que cruzar el área del vecino.
     """
     for region in _todas(raiz):
         for hija in region.hijas:
-            vecinas = set()
-            for rol in _equipos_de(hija):
-                for pata in patas.get(rol, []):
-                    for hermana in region.hijas:
-                        if hermana is not hija and _contiene(hermana, pata):
-                            vecinas.add(id(hermana))
-            if len(vecinas) >= 2:
+            if hija.nube:
                 hija.espina = True
-
-
-def _centrar_enchufes(regiones: list[Region], casa_de: dict[str, Region],
-                      lab: dict) -> None:
-    """El equipo que reparte —el switch, el router— al medio de su fila.
-
-    Con el enchufe en un extremo, el cable al último equipo de la fila pasa por
-    encima de los que hay en medio y el plano parece una cadena. En el centro, cada
-    cable sale hacia su lado y no cruza a nadie.
-    """
-    grado: dict[str, int] = {}
-    for link in lab.get("links") or []:
-        a, z = link["a"]["node"], link["z"]["node"]
-        if casa_de.get(a) is None or casa_de.get(a) is not casa_de.get(z):
-            continue
-        grado[a] = grado.get(a, 0) + 1
-        grado[z] = grado.get(z, 0) + 1
-    for region in regiones:
-        if len(region.nodos) < 3:
-            continue
-        orden = sorted(region.nodos, key=lambda rol: -grado.get(rol, 0))
-        if not grado:
-            continue
-        mitad = len(orden) // 2
-        fila: list[str | None] = [None] * len(orden)
-        fila[mitad] = orden[0]
-        huecos = [i for i in range(len(orden)) if i != mitad]
-        for rol, hueco in zip(orden[1:], huecos):
-            fila[hueco] = rol
-        region.nodos = [rol for rol in fila if rol is not None]
+                continue
+            # Dos equipos distintos, cada uno asomándose a otra hermana: es un reparto
+            # —el core de una sede—. Un solo equipo que toca tres áreas a la vez es un
+            # firewall, y ese se dibuja en medio de las tres, no como banda.
+            quienes: set[str] = set()
+            hermanas: set[int] = set()
+            for rol, grupos in cruces.items():
+                if hija not in grupos:
+                    continue
+                for otro in grupos:
+                    if otro is not hija and otro in region.hijas:
+                        quienes.add(rol)
+                        hermanas.add(id(otro))
+            if len(quienes) >= 2 and len(hermanas) >= 2:
+                hija.espina = True
 
 
 def _servicios(lab: dict, por_red: dict[str, Region]) -> None:
@@ -511,24 +568,36 @@ def _servicios(lab: dict, por_red: dict[str, Region]) -> None:
 
 def _medir(region: Region) -> None:
     """Mide el área desde dentro hacia fuera: primero lo que contiene, luego ella."""
-    region.cabecera = _mide_cabecera(region)
+    region.cabecera = 0.0 if region.sintetica else _mide_cabecera(region)
     for hija in region.hijas:
         _medir(hija)
     if not region.hijas:
-        cuantas = max(len(region.nodos), 1)
+        # El equipo que reparte va en su propia fila: los cables del exterior entran
+        # por él y no por debajo de los demás equipos del área.
+        fila = [r for r in region.nodos if r != region.enchufe]
         ancho_celda = CELDA_ANCHO
-        if region.nodos:
+        if fila:
             ancho_celda = max(ancho_celda, max(
-                len(r) * 12.5 * 0.58 + 24 for r in region.nodos))
-        region.ancho = 2 * M_REG + ancho_celda * cuantas
+                len(r) * 12.5 * 0.58 + 24 for r in fila))
+        region.ancho = 2 * M_REG + ancho_celda * max(len(fila), 1)
         region.alto = region.cabecera + MARGEN_ARRIBA + ALTO_EQUIPO + 30
+        if region.enchufe:
+            region.alto += ALTO_EQUIPO
+        if region.nube:
+            # Una nube con el alto de una fila de equipos es una caja estrecha. Y sus
+            # equipos se dibujan a caballo del borde, así que necesitan aire dentro.
+            region.alto = max(region.alto, 170.0)
+            region.ancho = max(region.ancho, 420.0)
         return
     fila, espina = _fila(region)
     ancho = max([sum(h.ancho for h in fila) + _huecos(region, fila)] +
                 [h.ancho for h in espina] + [0])
     alto = region.cabecera + MARGEN_ARRIBA
     if espina:
-        alto += max(h.alto for h in espina) + HUECO_REG
+        for caja in espina:
+            # Con la nube arriba no hay aire entre banda y fila: el router de borde se
+            # dibuja justo en la línea que comparten, media caja a cada lado.
+            alto += caja.alto + (0 if caja.nube else HUECO_REG)
     alto += max([h.alto for h in fila] + [0])
     region.ancho = 2 * M_REG + ancho
     region.alto = alto + M_REG
@@ -558,11 +627,23 @@ def _repartir(region: Region, x: float, y: float) -> None:
         return
     fila, espina = _fila(region)
     alto = y + region.cabecera + MARGEN_ARRIBA
+    if region.nodos:
+        hueco = region.ancho / (len(region.nodos) + 1)
+        for i, rol in enumerate(region.nodos):
+            region.dentro[rol] = (x + hueco * (i + 1), alto + ALTO_EQUIPO / 2)
+        alto += ALTO_EQUIPO + 12
     if espina:
+        # Las bandas se apilan de arriba abajo; si hubiera más de una, comparten el
+        # ancho del área y ninguna tapa a la de al lado.
         for caja in espina:
-            # El pasillo ocupa todo el ancho: es el eje del dibujo, no una caja más.
-            _estirar(caja, x + M_REG, alto, region.ancho - 2 * M_REG)
-        alto += max(c.alto for c in espina) + HUECO_REG
+            if caja.nube:
+                # La nube es el exterior, no una banda del dibujo: se queda pequeña y
+                # centrada. Estirada de lado a lado dejaría de parecer una nube.
+                _repartir(caja, x + (region.ancho - caja.ancho) / 2, alto)
+            else:
+                # El pasillo ocupa todo el ancho: es el eje del dibujo, no una caja más.
+                _estirar(caja, x + M_REG, alto, region.ancho - 2 * M_REG)
+            alto += caja.alto + (0 if caja.nube else HUECO_REG)
     # La fila se centra en el área: un área más ancha que sus hijas no las deja
     # arrimadas a la izquierda, que se leería como si faltara algo a la derecha.
     ancho_fila = sum(h.ancho for h in fila) + _huecos(region, fila)
@@ -574,7 +655,6 @@ def _repartir(region: Region, x: float, y: float) -> None:
             cursor += HUECO_PASILLO if any(
                 {una, otra} == {hija, fila[i + 1]} for una, otra, _ in region.pasillos
             ) else HUECO_REG
-    _pasillos(region, fila)
 
 
 def _estirar(region: Region, x: float, y: float, ancho: float) -> None:
@@ -588,27 +668,27 @@ def _estirar(region: Region, x: float, y: float, ancho: float) -> None:
 
 
 def _repartir_equipos(region: Region) -> None:
-    """Los equipos, en fila bajo la cabecera, con el mismo aire entre ellos."""
+    """Los equipos del área: el que reparte arriba, centrado, y el resto en su fila."""
     if not region.nodos:
         return
-    ancho, alto = region.ancho, region.alto
-    hueco = (ancho - 2 * M_REG) / len(region.nodos)
-    for i, rol in enumerate(region.nodos):
-        region.dentro[rol] = (region.x + M_REG + hueco * (i + 0.5),
-                              region.y + alto - 30 - ALTO_EQUIPO / 2 + 18)
-
-
-def _pasillos(region: Region, fila: list[Region]) -> None:
-    """El equipo que une dos áreas hermanas, en el pasillo entre las dos."""
-    for una, otra, rol in region.pasillos:
-        if una in fila and otra in fila:
-            izquierda, derecha = sorted((una, otra), key=lambda c: c.x)
-            region.dentro[rol] = ((izquierda.x + izquierda.ancho + derecha.x) / 2,
-                                  (izquierda.y + derecha.y) / 2 + izquierda.alto / 2)
+    centro = region.x + region.ancho / 2
+    if region.enchufe:
+        region.dentro[region.enchufe] = (
+            centro, region.y + region.cabecera + MARGEN_ARRIBA + ALTO_EQUIPO / 2)
+    fila = [rol for rol in region.nodos if rol != region.enchufe]
+    if not fila:
+        return
+    if region.enchufe:
+        y = region.y + region.cabecera + MARGEN_ARRIBA + ALTO_EQUIPO * 1.5
+    else:
+        y = region.y + region.alto - 30 - ALTO_EQUIPO / 2 + 18
+    hueco = (region.ancho - 2 * M_REG) / len(fila)
+    for i, rol in enumerate(fila):
+        region.dentro[rol] = (region.x + M_REG + hueco * (i + 0.5), y)
 
 
 def _plano_anidado(lab: dict) -> str:
-    """El plano de topología: áreas dentro de áreas, hasta la red de cada equipo."""
+    """El plano de topología: áreas dentro de áreas, y cada equipo a caballo de las suyas."""
     raiz = _arbol(lab)
     por_red = {r.nombre: r for r in _todas(raiz) if not r.nombre.startswith("espacio:")}
     por_nodo = {n["role"]: n for n in lab["nodes"]}
@@ -617,19 +697,53 @@ def _plano_anidado(lab: dict) -> str:
 
     patas: dict[str, list[Region]] = {}
     casa_de: dict[str, Region] = {}
+    cruces: dict[str, list[Region]] = {}
     for nodo in lab["nodes"]:
         patas[nodo["role"]] = [por_red[n] for n in nodo.get("networks") or [] if n in por_red]
-        casa, hermanas = _casa(nodo, por_red)
+        casa, grupos = _casa(nodo, por_red)
         if casa is None:
             continue
-        casa.nodos.append(nodo["role"])
         casa_de[nodo["role"]] = casa
-        if hermanas:
-            casa.pasillos.append((hermanas[0], hermanas[1], nodo["role"]))
-    _marcar_pasillos(raiz, patas)
-    _centrar_enchufes(regiones, casa_de, lab)
+        if len(grupos) == 1:
+            casa.nodos.append(nodo["role"])
+            if nodo["type"] == "switch" and casa.enchufe is None:
+                # El switch de acceso es la puerta del área: los cables entran por él.
+                casa.enchufe = nodo["role"]
+            continue
+        # A caballo: el router no vive en ninguna de las dos áreas, vive en su borde.
+        cruces[nodo["role"]] = grupos
+        if all(g in casa.hijas for g in grupos[:2]):
+            # Dos hermanas en la misma fila: se separan para que quepa el símbolo.
+            casa.pasillos.append((grupos[0], grupos[1], nodo["role"]))
+    _marcar_pasillos(raiz, cruces)
     _medir(raiz)
     _repartir(raiz, 0.0, 0.0)
+    # Dos equipos pueden compartir frontera —los dos routers de borde, sin ir más
+    # lejos—: se reparten a lo largo de ella en vez de dibujarse uno encima del otro.
+    por_frontera: dict[tuple[int, int], list[str]] = {}
+    for rol, grupos in cruces.items():
+        clave = tuple(sorted((id(grupos[0]), id(grupos[1]))))
+        por_frontera.setdefault(clave, []).append(rol)
+    for rol, grupos in cruces.items():
+        # Un equipo se dibuja a caballo de dos áreas; con tres o más patas se elige la
+        # primera pareja —el símbolo no puede estar en tres bordes a la vez— y las
+        # demás se alcanzan por su cable, que es lo que de verdad las une.
+        una, otra = grupos[0], grupos[1]
+        x, y = _entre(una, otra)
+        hermanos = por_frontera[tuple(sorted((id(una), id(otra))))]
+        if len(hermanos) > 1:
+            # El orden es el de la red que hay debajo de cada uno: izquierda y derecha
+            # salen donde uno espera encontrarlas.
+            hermanos = sorted(hermanos, key=lambda r: _centro_de_lo_suyo(r, patas, por_red))
+            comun = (max(una.x, otra.x), min(una.x + una.ancho, otra.x + otra.ancho))
+            if comun[1] > comun[0]:
+                paso = (comun[1] - comun[0]) / (len(hermanos) + 1)
+                x = comun[0] + paso * (hermanos.index(rol) + 1)
+            else:
+                comun = (max(una.y, otra.y), min(una.y + una.alto, otra.y + otra.alto))
+                paso = (comun[1] - comun[0]) / (len(hermanos) + 1)
+                y = comun[0] + paso * (hermanos.index(rol) + 1)
+        casa_de[rol].dentro[rol] = (x, y)
 
     def punto_de(rol: str) -> tuple[float, float]:
         for region in regiones:
@@ -637,43 +751,98 @@ def _plano_anidado(lab: dict) -> str:
                 return region.dentro[rol]
         raise KeyError(rol)
 
-    # --- las líneas -----------------------------------------------------------
+    # --- los cables -----------------------------------------------------------
+    # Cada cable es un cable: une dos puertos y dice cuáles. Lo único que no se dibuja
+    # así es la nube, que no es un equipo: cada router se asoma a ella por su cuenta,
+    # y por eso entre las dos sedes no hay una línea, hay dos patas a Internet.
+    tipos = {n["role"]: n["type"] for n in lab["nodes"]}
+    cables: list[tuple[str, int, str, int]] = []
+    nubes: dict[str, list[tuple[str, int]]] = {}
+    for link in lab.get("links") or []:
+        a, z = link["a"], link["z"]
+        redes = por_nodo[a["node"]].get("networks") or []
+        red = por_red.get(redes[a["port"] - 1]) if a["port"] <= len(redes) else None
+        if red is not None and red.nube:
+            nubes.setdefault(red.nombre, []).extend([(a["node"], a["port"]),
+                                                     (z["node"], z["port"])])
+            continue
+        cables.append((a["node"], a["port"], z["node"], z["port"]))
+
     piezas: list[str] = []
     for region in regiones:
         piezas.append(_area(region, region.servicios, suave=bool(region.hijas)))
-    cables: list[tuple[str, str]] = [
-        (link["a"]["node"], link["z"]["node"]) for link in lab.get("links") or []
-        # Un cable entre dos áreas ya lo dice la pata del área: dibujarlo además como
-        # una diagonal de router a puesto cruza medio plano y no añade nada.
-        if casa_de.get(link["a"]["node"]) is casa_de.get(link["z"]["node"])]
-    patas_fuera: list[tuple[str, Region | None, Region]] = []
+
+    # El cable que baja de un área a otra corre por el pasillo que queda sobre las
+    # áreas de destino, no en diagonal: una diagonal cruza las áreas que haya en medio
+    # y el plano acabaría diciendo que ese cable pasa por dentro de otro departamento.
+    corredores: dict[int, int] = {}
+    salidas: dict[str, list[int]] = {}
+    for rol_a, puerto_a, _z, _pz in cables:
+        salidas.setdefault(rol_a, []).append(puerto_a)
+
+    def cable_entre(rol_a, puerto_a, rol_z, puerto_z) -> str:
+        pa, pz = punto_de(rol_a), punto_de(rol_z)
+        ta, tz = SIMBOLO[tipos[rol_a]], SIMBOLO[tipos[rol_z]]
+        casa_a, casa_z = casa_de[rol_a], casa_de[rol_z]
+        if casa_a is casa_z:
+            return _linea(pa, pz, ta, tz, puerto_a, puerto_z)
+        if abs(pz[1] - pa[1]) < 40:
+            return _linea(pa, pz, ta, tz, puerto_a, puerto_z)
+        abajo = pz[1] > pa[1]
+        caja = casa_z if abajo else casa_a
+        corredor = corredores.get(id(caja), 0)
+        corredores[id(caja)] = corredor + 1
+        y = (caja.y - 10 - 7 * corredor) if abajo else (caja.y + caja.alto + 10 + 7 * corredor)
+        salida = pa[1] + (ta[1] / 2 + 2) * (1 if abajo else -1)
+        entrada = pz[1] - (tz[1] / 2 + 2) * (1 if abajo else -1)
+        # Las bajadas de un mismo equipo salen por puntos distintos: si salieran todas
+        # del mismo, el plano dibujaría un solo cable donde hay tres.
+        # Cada bajada sale por su punto: la primera por la izquierda, la última por la
+        # derecha. Si salieran todas del centro, el plano dibujaría un cable donde hay
+        # tres y no se sabría qué puerto va a qué departamento.
+        suyos = sorted(salidas.get(rol_a) or [puerto_a])
+        centro = (len(suyos) - 1) / 2
+        desvio = (suyos.index(puerto_a) - centro) * 26
+        return "".join([
+            _codo([(pa[0] + desvio, salida), (pa[0] + desvio, y),
+                   (pz[0], y), (pz[0], entrada)]),
+            _puerto(pa[0] + desvio, salida, puerto_a, arriba=not abajo),
+            _puerto(pz[0], entrada, puerto_z, arriba=abajo),
+        ])
+
+    for rol_a, puerto_a, rol_z, puerto_z in cables:
+        piezas.append(cable_entre(rol_a, puerto_a, rol_z, puerto_z))
+
+    # La nube no tiene equipos: cada router se asoma a ella con su pata y su puerto.
+    for nombre, asomos in nubes.items():
+        nube = por_red[nombre]
+        for rol, puerto in asomos:
+            piezas.append(_pata_a_nube(punto_de(rol), nube, SIMBOLO[tipos[rol]], puerto))
+
+    # Una red sin equipos nuestros se alcanza con una pata hasta su borde: dentro no
+    # hay a qué atar la línea.
     for rol, suyas in patas.items():
-        casa = next((r for r in regiones if rol in r.nodos), None)
         for pata in suyas:
-            if rol in pata.dentro:
-                # Ya está dentro: la pata la dibuja el borde del área, no una línea.
+            if rol in pata.dentro or pata.nube:
                 continue
-            patas_fuera.append((rol, casa, pata))
+            px, py = punto_de(rol)
+            if pata.x <= px <= pata.x + pata.ancho and pata.y <= py <= pata.y + pata.alto:
+                # El equipo ya está dentro del área: la pata no hay que dibujarla.
+                continue
+            if not _equipos_de(pata):
+                piezas.append(_pata_de_area((px, py), pata, SIMBOLO[tipos[rol]]))
 
     textos: list[str] = []
-    tipos = {n["role"]: n["type"] for n in lab["nodes"]}
+    cables_planos = [(a, z) for a, _, z, _ in cables]
     puntos: list[tuple[float, float]] = [(0.0, 0.0), (raiz.ancho, raiz.alto)]
     for region in regiones:
         for rol, (cx, cy) in region.dentro.items():
             piezas.append(_simbolo(tipos[rol], cx, cy))
             textos.append(_etiqueta(cx, cy, _que_dice(por_nodo[rol]), clase=tipos[rol],
-                                    lado=_lado(rol, punto_de, cables)))
+                                    lado=_lado(rol, punto_de, cables_planos)))
             # El nombre va al costado del símbolo y puede salirse del área: el lienzo
             # tiene que contarlo, o la última letra se corta en el borde del dibujo.
             puntos += [(cx - 96, cy - 34), (cx + 96, cy + 66)]
-
-    for a, z in cables:
-        piezas.append(_linea(punto_de(a), punto_de(z), SIMBOLO[tipos[a]],
-                             SIMBOLO[tipos[z]]))
-    # Las patas que salen del área donde vive el equipo van hasta el borde del área
-    # que tocan: dentro no hay ningún equipo al que atar la línea.
-    for rol, casa, pata in patas_fuera:
-        piezas.append(_pata_de_area(punto_de(rol), pata, SIMBOLO[tipos[rol]]))
 
     xs = [p[0] for p in puntos]
     ys = [p[1] for p in puntos]
@@ -774,6 +943,31 @@ def _pata_de_area(inicio: tuple[float, float], region: Region,
     x = x0 if cx < x0 else x1
     y = min(max(cy, y0 + 26), y1 - 26)
     return _linea(inicio, (x, y), tam, (1.0, 1.0))
+
+
+def _puerto(x: float, y: float, numero: int, arriba: bool = True) -> str:
+    """El número del puerto, junto al cable y pegado a su equipo.
+
+    Sin esto un switch es una caja con líneas: no se sabe por dónde entra cada cable,
+    y el plano deja de servir para cablear.
+    """
+    dy = -6 if arriba else 12
+    return (f'<text x="{x + 6:.1f}" y="{y + dy:.1f}" font-family="{FUENTE}" '
+            f'font-size="9" fill="{TENUE}">p{numero}</text>')
+
+
+def _pata_a_nube(inicio: tuple[float, float], region: Region,
+                 tam: tuple[float, float], puerto: int) -> str:
+    """La pata del router a la nube: corta, hacia dentro de la nube, con su puerto."""
+    cx, cy = inicio
+    arranque = cy - tam[1] / 2 - 2
+    fin = max(region.y + 26, arranque - 36)
+    return "".join([
+        (f'<line x1="{cx:.1f}" y1="{arranque:.1f}" x2="{cx:.1f}" y2="{fin:.1f}" '
+         f'stroke="{LINEA}" stroke-width="1.6" stroke-linecap="round"/>'),
+        (f'<text x="{cx + 7:.1f}" y="{arranque - 6:.1f}" font-family="{FUENTE}" '
+         f'font-size="9" fill="{TENUE}">p{puerto}</text>'),
+    ])
 
 
 def _codo(puntos: list[tuple[float, float]]) -> str:
@@ -1124,20 +1318,27 @@ def _area(caja: Caja, servicios: list[str] | None = None, suave: bool = False) -
     """
     textos = [
         f'<text x="{caja.x + 16:.1f}" y="{caja.y + 21:.1f}" font-family="{FUENTE}" '
-        f'font-size="12.5" font-weight="650" fill="{EQUIPO_TRAZO}">{_esc(caja.titulo)}</text>',
+        f'font-size="12.5" font-weight="650" fill="{EQUIPO_TRAZO}" '
+        f'paint-order="stroke" stroke="#ffffff" stroke-width="3.2">{_esc(caja.titulo)}</text>',
     ]
     if caja.subred:
         textos.append(
             f'<text x="{caja.x + 16:.1f}" y="{caja.y + 36:.1f}" font-family="{FUENTE}" '
-            f'font-size="10.5" fill="{TENUE}">{_esc(caja.subred)}</text>')
+            f'font-size="10.5" fill="{TENUE}" paint-order="stroke" stroke="#ffffff" '
+            f'stroke-width="3">{_esc(caja.subred)}</text>')
     # Lo que la red tiene montado de forma permanente —el rango que reparte— se escribe
     # en su cabecera. La puerta no: esa es la dirección del equipo que la toca, y va
     # escrita en el equipo, que es su dueño; repetirla aquí sólo añadiría ruido.
     fijos = list(servicios or [])
     for i, linea in enumerate(fijos):
         textos.append(f'<text x="{caja.x + 16:.1f}" y="{caja.y + 51 + i * 14:.1f}" '
-                      f'font-family="{FUENTE}" font-size="10.5" fill="{EQUIPO_TRAZO}">'
+                      f'font-family="{FUENTE}" font-size="10.5" fill="{EQUIPO_TRAZO}" '
+                      f'paint-order="stroke" stroke="#ffffff" stroke-width="3">'
                       f'{_esc(linea)}</text>')
+    if getattr(caja, "sintetica", False):
+        return ""
+    if getattr(caja, "nube", False):
+        return _silueta_nube(caja) + "".join(textos)
     trazo = ' stroke-dasharray="7 5"' if suave else ''
     return "".join([
         (f'<rect x="{caja.x:.1f}" y="{caja.y:.1f}" width="{caja.ancho:.1f}" '
@@ -1146,6 +1347,28 @@ def _area(caja: Caja, servicios: list[str] | None = None, suave: bool = False) -
          f'stroke="{RED_TRAZO}" stroke-width="1.4"{trazo}/>'),
         *textos,
     ])
+
+
+# La nube se dibuja con la silueta de siempre —bultos redondos—, escalada al área que
+# le toca: una caja redondeada diría «segmento del cliente», y la red del proveedor no
+# lo es. El camino está normalizado a 100x60 y se estira con una transformación.
+_NUBE = ("M24,58 C10,58 2,50 2,41 C2,33 9,26 17,26 C16,13 26,5 38,6 "
+         "C47,6 54,11 57,18 C61,10 70,7 77,10 C86,13 90,21 88,27 "
+         "C96,28 100,34 100,40 C100,50 92,58 80,58 Z")
+
+
+def _silueta_nube(caja: Caja) -> str:
+    """La caja del área, dibujada como una nube.
+
+    Se escala lo mismo en los dos ejes y se centra: estirar sólo un eje convierte la
+    nube en una mancha alargada, y el dibujo deja de decir «esto es Internet».
+    """
+    factor = min(caja.ancho / 100, caja.alto / 60)
+    dx = caja.x + (caja.ancho - 100 * factor) / 2
+    dy = caja.y + (caja.alto - 60 * factor) / 2
+    escala = f"translate({dx:.1f},{dy:.1f}) scale({factor:.4f})"
+    return (f'<path d="{_NUBE}" transform="{escala}" fill="{RED_RELLENO}" '
+            f'fill-opacity="0.07" stroke="{RED_TRAZO}" stroke-width="{1.2 / factor:.2f}"/>')
 
 
 def _cable(a: tuple[float, float], z: tuple[float, float],
@@ -1189,6 +1412,7 @@ def _cable(a: tuple[float, float], z: tuple[float, float],
 def _linea(a: tuple[float, float], z: tuple[float, float],
            tam_a: tuple[float, float] = (20, 20),
            tam_z: tuple[float, float] = (20, 20),
+           puerto_a: int | None = None, puerto_z: int | None = None,
            discontinua: bool = False) -> str:
     """Una conexión entre dos símbolos, sin flecha y sin etiqueta en el cable.
 
@@ -1198,6 +1422,20 @@ def _linea(a: tuple[float, float], z: tuple[float, float],
     inicio = _borde(a, z, tam_a)
     fin = _borde(z, a, tam_z)
     guion = ' stroke-dasharray="5 4"' if discontinua else ''
-    return (f'<line x1="{inicio[0]:.1f}" y1="{inicio[1]:.1f}" x2="{fin[0]:.1f}" '
-            f'y2="{fin[1]:.1f}" stroke="{LINEA}" stroke-width="1.6" '
-            f'stroke-linecap="round"{guion}/>')
+    linea = (f'<line x1="{inicio[0]:.1f}" y1="{inicio[1]:.1f}" x2="{fin[0]:.1f}" '
+             f'y2="{fin[1]:.1f}" stroke="{LINEA}" stroke-width="1.6" '
+             f'stroke-linecap="round"{guion}/>')
+    etiquetas = ""
+    for punto, numero, hacia in ((inicio, puerto_a, fin), (fin, puerto_z, inicio)):
+        if numero is None:
+            continue
+        dx, dy = hacia[0] - punto[0], hacia[1] - punto[1]
+        largo = math.hypot(dx, dy) or 1
+        # El puerto va pegado a su equipo, sobre el cable: es de quien lo nombra. El
+        # desplazamiento es corto en el eje del cable y lateral al otro, para que los
+        # tres cables de un switch no amontonen sus rótulos en el mismo punto.
+        x = punto[0] + dx / largo * 16 + (-8 if abs(dy) > abs(dx) else 0)
+        y = punto[1] + dy / largo * 16 - (8 if abs(dx) >= abs(dy) else 4)
+        etiquetas += (f'<text x="{x:.1f}" y="{y:.1f}" font-family="{FUENTE}" '
+                      f'font-size="9" fill="{TENUE}">p{numero}</text>')
+    return linea + etiquetas

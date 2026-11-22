@@ -67,7 +67,11 @@ LAB_KEYS = {"lab", "kind", "address_spaces", "networks", "nodes", "links"}
 # observa el resto. Su único nodo vive en la red de gestión y no tiene cables.
 KINDS = {"topology", "control"}
 NODE_KEYS = {"role", "type", "stage", "after", "resources", "image", "networks", "address", "configure"}
-NETWORK_KEYS = {"name", "address", "title"}
+# `shape` sólo dice cómo se dibuja la red, nunca cómo se despliega: un puente es un
+# puente. Hoy hay una forma con nombre —`cloud`—, la del proveedor al que cada sede se
+# asoma por su cuenta; el resto de las redes son áreas del plano.
+NETWORK_KEYS = {"name", "address", "title", "shape"}
+NETWORK_SHAPES = {"cloud"}
 LINK_KEYS = {"a", "z"}
 END_KEYS = {"node", "port"}
 
@@ -222,6 +226,11 @@ def validate(lab: dict, env: dict) -> None:
             raise LabError(f"la red {net!r} necesita 'name' y 'address'")
         if net["name"] in seen:
             raise LabError(f"la red {net['name']!r} está declarada dos veces")
+        forma = net.get("shape")
+        if forma is not None and forma not in NETWORK_SHAPES:
+            raise LabError(
+                f"la red {net['name']!r} declara shape {forma!r}: las formas son "
+                f"{', '.join(sorted(NETWORK_SHAPES))}")
         seen.add(net["name"])
         try:
             cidr = ipaddress.ip_network(net["address"], strict=False)
