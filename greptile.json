@@ -1,0 +1,27 @@
+{
+  "strictness": 3,
+  "commentTypes": ["logic", "syntax", "style"],
+  "autoReview": ["open", "push", "rebase"],
+  "triggerOnDrafts": false,
+  "statusCheck": true,
+  "statusCommentsEnabled": true,
+  "shouldUpdateDescription": false,
+  "updateSummaryOnly": false,
+  "includeIssuesTable": true,
+  "includeConfidenceScore": true,
+  "fixWithAI": true,
+  "ignorePatterns": "logs/**\n**/__pycache__/**\n*.pyc\n.venv/**",
+  "instructions": "Este repositorio se escribe en español: identificadores, comentarios y documentos. Los comentarios del código explican POR QUÉ, no QUÉ hace la línea; un comentario que repite el código es un hallazgo. Cada herramienta del motor declara en su cabecera PROPÓSITO, INVARIANTES, LÍMITES y VER. Los planos de red son SVG generados por deployment_engine/tools/plano.py: si un SVG cambia sin que cambie su declaración YAML, eso es un hallazgo. No propongas dependencias nuevas sin necesidad: el motor sólo usa la biblioteca estándar, PyYAML y Ansible.",
+  "customContext": {
+    "files": [
+      {
+        "path": "AGENTS.md",
+        "description": "Reglas del repositorio: cómo se nombra, cómo se comprueba y qué se commitea."
+      },
+      {
+        "path": "docs/diseno.md",
+        "description": "El diseño del motor y sus invariantes."
+      }
+    ]
+  }
+}

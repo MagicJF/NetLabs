@@ -1,0 +1,35 @@
+# CodeRabbit: qué revisa en este repositorio y qué no deja pasar.
+# El check se llama `CodeRabbit` y va sobre el último commit del PR; para que bloquee
+# el merge hay que exigirlo en la protección de `main` (ver AGENTS.md §9).
+language: es
+tone_instructions: >-
+  Corrige en español. Cuando señales algo, cita la regla del repositorio que se
+  incumple (AGENTS.md o docs/diseno.md) en vez de dar una opinión de estilo.
+
+reviews:
+  # `assertive` porque aquí el objetivo es que no quede nada por decir, no que el
+  # comentario sea corto.
+  profile: assertive
+  review_progress: true      # check run `CodeRabbit` en el último commit
+  fail_commit_status: true   # una revisión que revienta no pasa por buena
+  poem: false
+  in_progress_fortune: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+
+  path_filters:
+    # Los informes de ejecución no se versionan; el resto del repositorio sí.
+    - "!logs/**"
+    - "!**/__pycache__/**"
+
+  pre_merge_checks:
+    title:
+      mode: error
+      requirements: >-
+        El título dice qué cambia y por qué, en tercera persona del singular y en
+        español, como el resto de la historia del repositorio.
+    description:
+      mode: error
