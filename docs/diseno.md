@@ -201,9 +201,9 @@ y el nodo de gestión la pantalla con la rueda dentada. El color de acento dice 
 los juegos de iconos de AWS: morado para lo que conmuta y enruta, rojo para lo que filtra, gris para
 lo que atiende al usuario. Se dibujan aquí con vectores, hijo a hijo del mismo generador, y no se
 copian de ningún pack de iconos: los de Cisco y los de AWS son suyos, sus licencias no permiten
-redistribuirlos y este plano se versiona entero junto al laboratorio. Dentro del propio dibujo va la
-clave de símbolos, con **sólo las clases que el laboratorio tiene**. Un solo color para todas las
-redes —el color dice «esto es una red», no «esta red es distinta»—. Las líneas van **sin
+redistribuirlos y este plano se versiona entero junto al laboratorio. No lleva clave de símbolos:
+la forma y el nombre de cada equipo ya dicen lo que es, y una clave que repite lo que el dibujo
+enseña sólo ocupa sitio. Un solo color para todas las redes —el color dice «esto es una red», no «esta red es distinta»—. Las líneas van **sin
 flecha**: el plano dice quién toca a quién, y una punta sugeriría un tráfico que nadie declaró;
 la salida a Internet se distingue por el trazo discontinuo, que no es un cable del laboratorio.
 Un plano que no sale de la declaración no se dibuja: se pudre el primero que alguien cambie algo

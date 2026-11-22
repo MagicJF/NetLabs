@@ -53,7 +53,6 @@ CABECERA_AREA = 54     # nombre y subred de la red, dentro de su área
 HUECO_PATAS = 6        # el borde del área pasa POR DEBAJO del símbolo del equipo
 MARGEN = 24
 CABECERA = 52          # título del plano
-PIE = 54               # leyenda de símbolos
 
 
 def _esc(texto: str) -> str:
@@ -309,7 +308,6 @@ def plano(lab: dict, modo: str = "topologia") -> str:
     principal = identity._principal(lab)
     nodos = lab["nodes"]
     por_rol = {n["role"]: n for n in nodos}
-    tipos_presentes = sorted({n["type"] for n in nodos})
     salidas = [n for n in nodos if profundidad[n["role"]] == 0]
 
     def etiqueta(nodo: dict) -> list[str]:
@@ -564,11 +562,10 @@ def plano(lab: dict, modo: str = "topologia") -> str:
     xs = [p[0] for p in puntos]
     ys = [p[1] for p in puntos]
     minx, miny = min(xs), min(ys)
-    ancho = max(max(xs) - minx + 2 * MARGEN, _ancho_leyenda(tipos_presentes) + 2 * MARGEN)
-    alto = max(ys) - miny + 2 * MARGEN + CABECERA + PIE
+    ancho = max(xs) - minx + 2 * MARGEN
+    alto = max(ys) - miny + 2 * MARGEN + CABECERA
     dx, dy = MARGEN - minx, MARGEN + CABECERA - miny
 
-    leyenda = _leyenda(tipos_presentes, ancho / 2, alto - PIE / 2 - 2)
     espacios = ", ".join(identity._subred(s) for s in lab["address_spaces"])
     # El pie de figura dice lo que un plano no debe dejar adivinar: qué es cada área.
     return "\n".join([
@@ -584,7 +581,6 @@ def plano(lab: dict, modo: str = "topologia") -> str:
         *piezas,
         *textos,
         "</g>",
-        leyenda,
         "</svg>",
         "",
     ])
@@ -708,44 +704,3 @@ def _linea(a: tuple[float, float], z: tuple[float, float],
     return (f'<line x1="{inicio[0]:.1f}" y1="{inicio[1]:.1f}" x2="{fin[0]:.1f}" '
             f'y2="{fin[1]:.1f}" stroke="{LINEA}" stroke-width="1.6" '
             f'stroke-linecap="round"{guion}/>')
-
-
-_ORDEN_CLASE = ("router", "switch", "firewall", "server", "workstation", "control")
-_NOMBRES_CLASE = {"router": "router", "switch": "switch", "firewall": "cortafuegos",
-                  "server": "servidor", "workstation": "puesto", "control": "control"}
-
-
-def _ancho_leyenda(tipos: list[str]) -> float:
-    """Lo que ocupa la clave de símbolos, para que el lienzo la contenga."""
-    nombres = _NOMBRES_CLASE
-    items = [t for t in _ORDEN_CLASE if t in tipos]
-    return 26 + sum(SIMBOLO[t][0] * 0.72 + 8 + len(nombres[t]) * 6.4 for t in items) \
-        + 22 * len(items)
-
-
-def _leyenda(tipos: list[str], cx: float, cy: float) -> str:
-    """La clave de símbolos: sólo las clases que el laboratorio tiene de verdad.
-
-    Un plano que dibuja un símbolo y no dice qué clase es obliga a adivinar; uno que
-    lista clases que no están es ruido. Van las que hay, con la forma de verdad.
-    """
-    nombres = _NOMBRES_CLASE
-    items = [t for t in _ORDEN_CLASE if t in tipos]
-    # Ancho de cada celda: el símbolo (ya escalado) y su nombre.
-    anchos = [(SIMBOLO[t][0] * 0.72 + 8 + len(nombres[t]) * 6.4) for t in items]
-    total = 26 + sum(anchos) + 22 * len(items)
-    x = cx - total / 2
-    piezas = [f'<rect x="{x:.1f}" y="{cy - 19:.1f}" width="{total:.1f}" height="38" '
-              f'rx="10" fill="#ffffff" stroke="#e2e8f0"/>',
-              f'<rect x="{x + 12:.1f}" y="{cy - 7:.1f}" width="18" height="14" rx="4" '
-              f'fill="{RED_RELLENO}" fill-opacity="0.08" stroke="{RED_TRAZO}"/>',
-              f'<text x="{x + 35:.1f}" y="{cy + 4:.1f}" font-family="{FUENTE}" '
-              f'font-size="11" fill="{TENUE}">red</text>']
-    x += 22 + 35
-    for tipo, ancho in zip(items, anchos):
-        piezas.append(_simbolo(tipo, x + SIMBOLO[tipo][0] * 0.36, cy, 0.72))
-        piezas.append(f'<text x="{x + SIMBOLO[tipo][0] * 0.72 + 7:.1f}" y="{cy + 4:.1f}" '
-                      f'font-family="{FUENTE}" font-size="11" fill="{TENUE}">'
-                      f'{_esc(nombres[tipo])}</text>')
-        x += ancho + 22
-    return "".join(piezas)

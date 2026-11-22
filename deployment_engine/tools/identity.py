@@ -1388,14 +1388,15 @@ def _principal(lab: dict) -> dict[str, str]:
 def _pie_plano(topologia: bool) -> str:
     """El pie de figura: qué hay que saber para leer el plano sin adivinar.
 
-    La clave de símbolos vive dentro del propio dibujo (es parte de la figura), así
-    que aquí sólo queda lo que un plano de red no debe dejar implícito.
+    Sin clave de símbolos: lo que hay que saber para leerlo es qué es un área y qué
+    dice cada línea, y eso va aquí, no en una leyenda que repita el dibujo.
     """
     if topologia:
-        return ("*cada área es una red; su cabecera dice la subred y la dirección de su "
-                "puerta. La forma del símbolo dice la clase de equipo y la línea dice que "
-                "están conectados: sin flechas, que el plano no inventa un sentido de "
-                "tráfico.*")
+        return ("*cada área es una red; su cabecera dice la subred y el rango que "
+                "reparte. Cada equipo lleva escrito lo que no cambia —su dirección "
+                "estática, o `dhcp`— y la forma de su símbolo dice su clase. La línea "
+                "dice que están conectados y va sin flechas: el plano no inventa un "
+                "sentido de tráfico.*")
     return ("*cada punta de cada cable dice el puerto que ocupa; la línea, el cable que "
             "los une tal y como se declara.*")
 

@@ -529,14 +529,11 @@ class Documentacion(unittest.TestCase):
         # switches no puede acabar con un símbolo de switch.
         self.assertIn('<circle r="15.5"', topologia)
         self.assertNotIn('<rect x="-24" y="-10" width="48" height="20"', topologia)
-        self.assertNotIn("switch", topologia)
-        self.assertNotIn("cortafuegos", topologia)
 
         # Y un laboratorio con switches los dibuja, con su clase en la clave.
         lab_c = laboratorio("c_enrutar_y_conmutar")
         svg_c = plano.plano(lab_c, "topologia")
         self.assertIn('<rect x="-24" y="-10" width="48" height="20"', svg_c)
-        self.assertIn("switch", svg_c)
 
     def test_el_plano_escribe_lo_que_no_cambia(self):
         """La dirección estática va en su equipo y el rango servido, en su red.
@@ -589,8 +586,9 @@ class Documentacion(unittest.TestCase):
                                  "dos áreas de red se solapan")
         for net in lab["networks"]:
             self.assertIn(f'>{net["name"]}<', svg)
-        self.assertIn(">cortafuegos<", svg)  # la clase va en la clave
-        self.assertIn(">servidor<", svg)
+        # Cada clase deja su forma: el muro del cortafuegos y la torre del servidor.
+        self.assertIn('<rect x="-23" y="-13" width="46" height="26"', svg)
+        self.assertIn('<rect x="-12" y="-18" width="24" height="36"', svg)
 
     def test_el_cableado_dice_los_puertos_de_cada_cable(self):
         lab = {"lab": "x", "address_spaces": ["10.9.0.0/16"],
