@@ -1414,16 +1414,16 @@ def render_docs(lab: dict, env: dict) -> str:
     if lab.get("networks"):
         # El dibujo es código, no una imagen: se ve en el visor de Markdown y se puede
         # leer y comparar como cualquier otra línea del documento.
-        # El dibujo es un SVG generado al lado de la página: `./netlabs docs` lo
-        # reescribe y `./netlabs check` falla si no coincide con la declaración, así
-        # que no puede quedarse viejo sin que nadie lo note.
+        # El plano va escrito aquí dentro, como SVG en texto: no hay fichero que se
+        # pueda quedar viejo ni que haya que regenerar aparte, y el diff del commit
+        # enseña exactamente qué cambió en el dibujo cuando cambia la declaración.
         nombre = lab["lab"]
-        lines += ["", "### Topología", "",
-                  f"![Topología de `{nombre}`]({nombre}-topologia.svg)", "",
-                  _pie_plano(True)]
-        lines += ["", "### Cableado (L2)", "",
-                  f"![Cableado de `{nombre}`]({nombre}-cableado.svg)", "",
-                  _pie_plano(False)]
+        if lab.get("networks"):
+            import plano  # noqa: PLC0415  (los módulos viven en tools/)
+            lines += ["", "### Topología", "", plano.plano(lab, "topologia"), "",
+                      _pie_plano(True)]
+            lines += ["", "### Cableado (L2)", "", plano.plano(lab, "cableado"), "",
+                      _pie_plano(False)]
     lines += ["", "### Networks", "", "| network | address |", "| --- | --- |"]
     for net in lab["networks"]:
         lines.append(f"| `{net['name']}` | `{net['address']}` |")

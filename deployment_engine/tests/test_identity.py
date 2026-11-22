@@ -480,21 +480,21 @@ class Documentacion(unittest.TestCase):
         self.assertEqual(identity.render_docs(laboratorio(), entorno()),
                          identity.render_docs(laboratorio(), entorno()))
 
-    def test_la_pagina_enlaza_los_dos_planos(self):
-        """Los dibujos son dos SVG generados al lado de la página, no bloques de texto.
+    def test_la_pagina_lleva_dentro_los_dos_planos(self):
+        """Los dibujos son SVG en texto dentro de la página, no imágenes ni ficheros.
 
-        Se enlazan desde la región generada, así que la página se lee en cualquier visor
-        de Markdown y el plano sigue saliendo de la declaración: lo escribe `docs` y lo
-        vigila `check`.
+        Al ser texto, el plano no se puede quedar viejo por separado: entra en el mismo
+        diff que la declaración que lo produce y no hay que regenerar nada aparte.
         """
         texto = identity.render_docs(laboratorio(), entorno())
-        self.assertIn("![Topología de `b_router_dos_puestos`]"
-                      "(b_router_dos_puestos-topologia.svg)", texto)
-        self.assertIn("![Cableado de `b_router_dos_puestos`]"
-                      "(b_router_dos_puestos-cableado.svg)", texto)
-        # Ni un bloque de dibujo dentro de la página: habría dos verdades que se separan.
-        self.assertNotIn("```mermaid", texto)
-        self.assertNotIn("flowchart", texto)
+        self.assertEqual(texto.count("<svg"), 2)
+        self.assertEqual(texto.count("</svg>"), 2)
+        self.assertIn(">Topología<", texto.replace("### Topología", ">Topología<"))
+        self.assertIn("### Cableado (L2)", texto)
+        # Ni enlaces a una imagen ni bloques de otro lenguaje de dibujo: una sola verdad.
+        self.assertNotIn(".svg)", texto)
+        self.assertNotIn("```", texto)
+        self.assertNotIn("mermaid", texto)
 
     def test_los_planos_salen_enteros_de_la_declaracion(self):
         """Ni un equipo inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""

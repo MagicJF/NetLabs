@@ -3,8 +3,8 @@
 #              (router, switch, cortafuegos, servidor, puesto) y el router se sienta en
 #              el cruce de las redes que une, no colgando de ellas.
 # INVARIANTES: sale entero de la declaración (redes, nodos, cables) y no se pinta a
-#              mano; `./netlabs docs --check` falla si el SVG guardado no coincide con
-#              lo que la declaración produce hoy, así que no puede quedarse viejo.
+#              mano; el SVG se escribe dentro de la página y `./netlabs docs --check`
+#              lo compara con lo que la declaración produce hoy, así que no se queda viejo.
 #              Nada de números derivados: ni vmid, ni MAC, ni dirección de gestión.
 # LÍMITES:     es puro texto: no enlaza imágenes, no pide fuentes, no ejecuta nada.
 # VER:         deployment_engine/tools/docs.py; docs/diseno.md §4
@@ -44,7 +44,7 @@ CELDA_ANCHO = 130      # hueco de un equipo dentro de su red: símbolo + etiquet
 CELDA_HUECO = 84       # alto de ese hueco
 CELDA_MARGEN = 16      # aire entre el borde del área y sus equipos
 CABECERA_AREA = 54     # nombre y subred de la red, dentro de su área
-HUECO_PATAS = 56       # aire entre el router y las áreas que toca
+HUECO_PATAS = 6        # el borde del área pasa POR DEBAJO del símbolo del equipo
 MARGEN = 24
 CABECERA = 52          # título del plano
 PIE = 54               # leyenda de símbolos
@@ -470,7 +470,11 @@ def plano(lab: dict, modo: str = "topologia") -> str:
             else:
                 y = caja.y if caja.centro[1] > inicio[1] else caja.y + caja.alto
                 fin = (min(max(inicio[0], caja.x + 24), caja.x + caja.ancho - 24), y)
-            piezas.append(_linea(inicio, fin, SIMBOLO[por_rol[router]["type"]]))
+            if math.hypot(fin[0] - inicio[0], fin[1] - inicio[1]) > \
+                    max(SIMBOLO[por_rol[router]["type"]]) / 2 + 2:
+                # Si el borde del área ya pasa por debajo del símbolo, el equipo está
+                # tocándola: una pata de dos píxeles sólo añadiría tinta.
+                piezas.append(_linea(inicio, fin, SIMBOLO[por_rol[router]["type"]]))
             continue
         pa, pz = punto_de(a), punto_de(z)
         tipo_a = "internet" if a == "internet" else por_rol[a]["type"]
@@ -582,16 +586,12 @@ def _cable(a: tuple[float, float], z: tuple[float, float],
     piezas = [f'<line x1="{inicio[0]:.1f}" y1="{inicio[1]:.1f}" x2="{fin[0]:.1f}" '
               f'y2="{fin[1]:.1f}" stroke="{LINEA}" stroke-width="1.6" '
               f'stroke-linecap="round"/>']
-    for (px, py), (dx, dy), puerto, (ancho, alto) in (
-            (inicio, (ux, uy), puerto_a, tam_a), (fin, (-ux, -uy), puerto_z, tam_z)):
-        # El puerto va al costado del cable, no encima: debajo del símbolo vive el
-        # nombre del equipo y un distintivo centrado lo taparía. Se aparta lo justo
-        # para librar el símbolo de esa punta —horizonte arriba, vertical a la
-        # derecha—, así las dos puntas del mismo cable se leen igual.
-        if abs(dx) >= abs(dy):
-            tx, ty = px + dx * 16, py + dy * 16 - (alto / 2 + 14)
-        else:
-            tx, ty = px + dx * 16 + (ancho / 2 + 14), py + dy * 16
+    for (px, py), (dx, dy), puerto in ((inicio, (ux, uy), puerto_a),
+                                       (fin, (-ux, -uy), puerto_z)):
+        # El puerto va SOBRE el cable, a un paso del símbolo: ahí no lo tapa el nombre
+        # del equipo (que el plano aparta del rumbo de sus cables) ni la cabecera del
+        # área, y se ve de qué punta del cable es sin leer nada más.
+        tx, ty = px + dx * 18, py + dy * 18
         piezas += [
             f'<rect x="{tx - 10:.1f}" y="{ty - 8:.1f}" width="20" height="16" rx="5" '
             f'fill="#ffffff" stroke="{EQUIPO_TRAZO}" stroke-width="1.1"/>',

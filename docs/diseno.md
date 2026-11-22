@@ -176,18 +176,18 @@ de lo que hay en el fichero.
 La región generada lleva además dos **planos**, también sacados de la declaración: la
 **topología** (cada red como área translúcida con su nombre, su subred y la dirección de su
 puerta, y dentro quién cuelga de ella) y el **cableado** (un equipo por nodo y una línea por
-cable, con el puerto que ocupa cada punta). Los dibuja `tools/plano.py` como SVG al lado de la
-página, y la página los enlaza. Son ficheros, no bloques de texto, y eso se acepta porque el SVG
-es texto —se lee y se revisa en el diff— y porque no pueden quedarse viejos: `./netlabs docs` los
-reescribe y `./netlabs check` falla si el guardado no coincide con lo que la declaración produce
-hoy. Mermaid no sirve para esto: no sabe dibujar los símbolos de una red (router, switch,
-cortafuegos, servidor) y sus áreas no pueden tocarse, así que un router con pata en dos redes no
-se puede poner entre ellas.
+cable, con el puerto que ocupa cada punta). Los dibuja `tools/plano.py` y los escribe **dentro
+de la propia página**, como SVG en texto. No hay fichero de imagen: el plano es código generado
+que se revisa en el diff como cualquier otra línea, no se puede quedar viejo por separado y
+`./netlabs docs --check` lo compara con lo que la declaración produce hoy. Mermaid no sirve para
+esto: no sabe dibujar los símbolos de una red (router, switch, cortafuegos, servidor) y sus áreas
+no pueden tocarse, así que un router con pata en dos redes no se puede poner entre ellas.
 
 El plano se dibuja como un plano de red, no como un organigrama. **El eje lo marca el router**:
-un equipo con pata en varias redes se sienta donde se tocan —con una red a cada lado, la salida a
-Internet arriba—, y las redes quedan alrededor como áreas translúcidas con su nombre, su subred
-en `x` y la dirección con la que el router se asoma a ellas. Un equipo de una sola red vive
+un equipo con pata en varias redes se sienta donde se tocan, **encima del cruce** —el borde de
+cada área pasa por debajo de su símbolo, no a un lado—, con una red a cada lado y la salida a
+Internet arriba; con una sola red, el router se sienta sobre el techo del área. Cada área lleva
+su nombre, su subred y la dirección con la que el router se asoma a ella. Un equipo de una sola red vive
 dentro de la suya, y dentro de cada red la profundidad baja: lo que cuelga de la puerta queda
 pegado a ella. **La clase la dice el símbolo**, como en cualquier plano técnico: el router es el
 círculo con cuatro flechas, el switch la caja con las flechas cruzadas, el cortafuegos el muro de

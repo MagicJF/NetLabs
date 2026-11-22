@@ -21,7 +21,6 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import identity  # noqa: E402
-import plano  # noqa: E402
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 MOTOR = RAIZ / "deployment_engine"
@@ -105,14 +104,12 @@ def comprobar_estructura() -> list[str]:
         if not carpeta.is_dir():
             errores.append(f"labs/{carpeta.name}: no es una carpeta de laboratorio")
             continue
-        # La declaración, su página y los dos planos que la página enlaza: nada más.
-        permitidos = {f"{carpeta.name}.yml", f"{carpeta.name}.md",
-                      f"{carpeta.name}-topologia.svg", f"{carpeta.name}-cableado.svg"}
+        # La declaración y su página, que ya lleva dentro los planos: nada más.
+        permitidos = {f"{carpeta.name}.yml", f"{carpeta.name}.md"}
         for dentro in sorted(carpeta.iterdir()):
             if dentro.name not in permitidos:
                 errores.append(f"labs/{carpeta.name}/{dentro.name}: un laboratorio sólo "
-                               f"declara {carpeta.name}.yml, su {carpeta.name}.md y los dos "
-                               "planos que la página enlaza")
+                               f"declara {carpeta.name}.yml y su {carpeta.name}.md")
         if not (carpeta / f"{carpeta.name}.yml").exists():
             errores.append(f"labs/{carpeta.name}: falta {carpeta.name}.yml")
 
@@ -214,15 +211,6 @@ def comprobar_documentacion(env) -> list[str]:
         if dentro.strip() != esperado.strip():
             errores.append(f"{pagina.relative_to(RAIZ)}: la tabla generada no coincide con la "
                            "declaración (ejecuta `./netlabs docs`)")
-        # Los planos son ficheros al lado de la página, así que hay que comprobar que
-        # existen y que dicen lo que la declaración dice hoy: si no, se quedan viejos.
-        for modo in (("topologia", "cableado") if lab.get("networks") else ()):
-            dibujo = ruta.parent / f"{nombre}-{modo}.svg"
-            if not dibujo.exists():
-                errores.append(f"labs/{nombre}/: falta {dibujo.name} (ejecuta `./netlabs docs`)")
-            elif dibujo.read_text() != plano.plano(lab, modo):
-                errores.append(f"labs/{nombre}/{dibujo.name}: el plano no coincide con la "
-                               "declaración (ejecuta `./netlabs docs`)")
     return errores
 
 
