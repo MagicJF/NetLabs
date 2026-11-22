@@ -176,5 +176,95 @@ class TestPlanoAnidado(unittest.TestCase):
                                    f"{rol} y {otro} se dibujan uno encima del otro")
 
 
+def cajas_y_equipos(svg):
+    """Lo que el SVG declara de sí mismo: cada área y cada equipo con su centro.
+
+    El plano lleva estos datos para poder comprobarlo por programa: la alternativa era
+    mirar el dibujo a ojo, que es como se colaron las cajas desbordadas.
+    """
+    areas = [
+        {"titulo": m.group(1), "x": float(m.group(2)), "y": float(m.group(3)),
+         "ancho": float(m.group(4)), "alto": float(m.group(5)), "subred": m.group(6),
+         "nube": m.group(7) == "1", "hijas": int(m.group(8))}
+        for m in re.finditer(
+            r'<g data-area="([^"]*)" data-x="([\d.-]+)" data-y="([\d.-]+)" '
+            r'data-ancho="([\d.-]+)" data-alto="([\d.-]+)" data-subred="([^"]*)" '
+            r'data-nube="(\d)" data-hijas="(\d)"/>', svg)
+    ]
+    equipos = [
+        {"rol": m.group(1), "x": float(m.group(2)), "y": float(m.group(3))}
+        for m in re.finditer(r'<g data-rol="([^"]*)" data-x="([\d.-]+)" data-y="([\d.-]+)"', svg)
+    ]
+    return areas, equipos
+
+
+def routers_de_borde(lab):
+    """Los equipos con una pata en la nube: son los que van a caballo de su sede."""
+    _, _, cruces, _, _ = montar(laboratorio(lab))
+    salida = []
+    for rol, grupos in cruces.items():
+        if any(g.nube for g in grupos):
+            salida.append((rol, [g for g in grupos if not g.nube][0].nombre))
+    return salida
+
+
+class TestConvenciones(unittest.TestCase):
+    def test_toda_area_escribe_su_red_igual(self):
+        """Misma notación en todas: `10.20.55.x/24`. Sin prefijo, dos cajas no se comparan."""
+        for lab in todos_los_laboratorios():
+            areas, _ = cajas_y_equipos(plano.plano(laboratorio(lab), "topologia"))
+            for area in areas:
+                if not area["subred"]:
+                    continue
+                with self.subTest(laboratorio=lab, area=area["titulo"]):
+                    self.assertRegex(area["subred"], r"^[\dx.]+/\d+$")
+                    red, prefijo = area["subred"].split("/")
+                    octetos = red.split(".")
+                    for i in range(int(prefijo) // 8, 4):
+                        self.assertEqual(
+                            octetos[i], "x",
+                            f"{area['subred']} escribe el octeto de host como dirección")
+
+    def test_el_router_de_borde_cabalga_el_borde_de_su_sede(self):
+        """Una pata en la sede y otra en Internet: tiene que intersecar la sede."""
+        for lab in todos_los_laboratorios():
+            areas, equipos = cajas_y_equipos(plano.plano(laboratorio(lab), "topologia"))
+            por_rol = {e["rol"]: e for e in equipos}
+            for rol, sede in routers_de_borde(lab):
+                if rol not in por_rol:
+                    continue
+                e = por_rol[rol]
+                with self.subTest(laboratorio=lab, equipo=rol):
+                    abajo = [a for a in areas
+                             if a["x"] - 0.5 <= e["x"] <= a["x"] + a["ancho"] + 0.5
+                             and a["y"] - 0.5 <= e["y"] <= a["y"] + a["alto"] + 0.5]
+                    self.assertTrue(abajo, f"{rol} no cae dentro de su caja")
+                    # El borde de su sede pasa por el centro del símbolo: media pata
+                    # dentro de la red y media fuera. Y no el de la caja que la envuelve.
+                    cabalga = [a for a in abajo if abs(a["y"] - e["y"]) <= 1.0]
+                    self.assertTrue(cabalga, f"{rol} no está a caballo del techo de su sede")
+                    # Y la caja que cabalga es su sede, no la caja que envuelve la
+                    # empresa: la sede tiene que estar dentro de otra caja.
+                    sede_caja = cabalga[0]
+                    madres = [a for a in areas if a is not sede_caja
+                              and a["x"] < sede_caja["x"] + 1 and a["y"] < sede_caja["y"] - 1
+                              and a["x"] + a["ancho"] > sede_caja["x"] + sede_caja["ancho"] - 1
+                              and a["y"] + a["alto"] > sede_caja["y"] + sede_caja["alto"] - 1]
+                    self.assertTrue(madres, f"{rol} cabalga la caja exterior, no {sede}")
+
+    def test_el_pie_del_plano_queda_a_plomo(self):
+        """Las redes de un mismo plano miden lo mismo: con altos distintos, el pie se descose."""
+        for lab in todos_los_laboratorios():
+            areas, _ = cajas_y_equipos(plano.plano(laboratorio(lab), "topologia"))
+            hojas = [a for a in areas if not a["hijas"] and not a["nube"]]
+            if len(hojas) < 2:
+                continue
+            altos = {round(a["alto"], 1) for a in hojas}
+            anchos = {round(a["ancho"], 1) for a in hojas}
+            with self.subTest(laboratorio=lab):
+                self.assertEqual(len(altos), 1, f"redes de altos distintos: {sorted(altos)}")
+                self.assertEqual(len(anchos), 1, f"redes de anchos distintos: {sorted(anchos)}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -166,9 +166,17 @@ def _simbolo_cisco(tipo: str) -> str:
     return f'<circle r="14" fill="{relleno}" stroke="{azul}" stroke-width="1.8"/>'
 
 
-def _simbolo(tipo: str, cx: float, cy: float, escala: float = 1.0) -> str:
-    """El símbolo de esa clase, centrado en (cx, cy)."""
-    return (f'<g transform="translate({cx:.1f},{cy:.1f}) scale({escala})">'
+def _simbolo(tipo: str, cx: float, cy: float, escala: float = 1.0,
+             rol: str = "") -> str:
+    """El símbolo de esa clase, centrado en (cx, cy).
+
+    Lleva su papel y su centro en atributos `data-*`: son la única forma de
+    comprobar por programa que un router quedó a caballo de la red que le toca, sin
+    leer el plano a ojo.
+    """
+    quien = f' data-rol="{_esc(rol)}"' if rol else ""
+    return (f'<g{quien} data-x="{cx:.1f}" data-y="{cy:.1f}" '
+            f'transform="translate({cx:.1f},{cy:.1f}) scale({escala})">'
             f'{_simbolo_cisco(tipo)}</g>')
 
 
@@ -323,12 +331,17 @@ MARGEN_ARRIBA = 16
 
 
 def _mascara(texto: str) -> str:
-    """Cómo se lee una red en un plano: con los octetos de host en `x`."""
+    """Cómo se lee una red en un plano: octetos de host en `x` y su prefijo.
+
+    Una sola convención para todas las áreas —`10.20.55.x/24`, `10.x.x.x/10`,
+    `203.0.113.x/30`—: con la máscara escrita unas veces y otras no, el que lee el
+    plano no sabe si dos cajas hablan de la misma red o de un prefijo distinto.
+    """
     red = ipaddress.ip_network(texto, strict=False)
     octetos = str(red.network_address).split(".")
     for i in range(red.prefixlen // 8, 4):
         octetos[i] = "x"
-    return ".".join(octetos)
+    return ".".join(octetos) + f"/{red.prefixlen}"
 
 
 class Region(Caja):
@@ -343,6 +356,8 @@ class Region(Caja):
         super().__init__(nombre, titulo, subred)
         self.cidr = cidr
         self.hijas: list[Region] = []
+        self.alto_min = 0.0     # suelo que le pone la medida común de todas las redes
+        self.ancho_min = 0.0
         self.padre: Region | None = None
         self.nodos: list[str] = []
         self.pasillos: list[tuple[Region, Region, str]] = []
@@ -405,7 +420,10 @@ def _arbol(lab: dict) -> Region:
             # Un espacio que ya es una red declarada se dibuja una vez: la red manda,
             # que es la que tiene equipos y puerta.
             continue
-        regiones.append(Region("espacio:" + str(red), _mascara(str(red)), str(red), red))
+        # La caja del espacio se rotula como cualquier otra red: `10.46.x.x/16`, no
+        # `10.46.0.0/16`, que parece la dirección de un equipo.
+        regiones.append(Region("espacio:" + str(red), _mascara(str(red)),
+                               _mascara(str(red)), red))
 
     for region in regiones:
         candidatos = [p for p in regiones
@@ -574,6 +592,27 @@ def _servicios(lab: dict, por_red: dict[str, Region]) -> None:
 
 
 def _medir(region: Region) -> None:
+    """Mide el árbol y deja todas las redes del mismo tamaño.
+
+    Dos redes con el mismo contenido pero de sitios distintos deben salir iguales: si
+    una sede apila tres departamentos altos y la otra tres bajos, las dos cajas de sede
+    acaban a la misma altura pero la última red de una queda muy por encima de la de al
+    lado —el pie del plano, descosido—. Con un suelo común, todas las redes miden lo
+    mismo y el pie queda a plomo.
+    """
+    _medir_region(region)
+    hojas = [r for r in _todas(region) if not r.hijas and not r.nube]
+    if not hojas:
+        return
+    alto = max(r.alto for r in hojas)
+    ancho = max(r.ancho for r in hojas)
+    if any(abs(r.alto - alto) > 0.5 or abs(r.ancho - ancho) > 0.5 for r in hojas):
+        for hoja in hojas:
+            hoja.alto_min, hoja.ancho_min = alto, ancho
+        _medir_region(region)
+
+
+def _medir_region(region: Region) -> None:
     """Mide el área desde dentro hacia fuera: primero lo que contiene, luego ella."""
     region.cabecera = 0.0 if region.sintetica else _mide_cabecera(region)
     en_fila = [h for h in region.hijas if not h.espina]
@@ -583,7 +622,7 @@ def _medir(region: Region) -> None:
         # donde va el router que las une.
         hija.corredor = "derecha" if i < len(en_fila) / 2 else "izquierda"
     for hija in region.hijas:
-        _medir(hija)
+        _medir_region(hija)
     if not region.hijas:
         # El equipo que reparte va en su propia fila: los cables del exterior entran
         # por él y no por debajo de los demás equipos del área.
@@ -609,6 +648,8 @@ def _medir(region: Region) -> None:
             # equipos se dibujan a caballo del borde, así que necesitan aire dentro.
             region.alto = max(region.alto, 170.0)
             region.ancho = max(region.ancho, 300.0)
+        region.alto = max(region.alto, region.alto_min)
+        region.ancho = max(region.ancho, region.ancho_min)
         return
     fila, espina = _fila(region)
     if len(fila) >= 3:
@@ -618,6 +659,9 @@ def _medir(region: Region) -> None:
         # se lee de arriba abajo, que es como se lee una sede.
         for hija in fila:
             hija.ancho = max(h.ancho for h in fila)
+            # Y del mismo alto: apiladas con altos distintos, la última de una sede
+            # acaba más abajo que la de al lado y el pie del plano queda descosido.
+            hija.alto = max(h.alto for h in fila)
         ancho = max([h.ancho for h in fila] + [h.ancho for h in espina] + [0])
         if region.corredor:
             ancho += BANDA_PASILLO
@@ -814,10 +858,13 @@ def _plano_anidado(lab: dict) -> str:
             suya = [q for q in patas.get(rol) or [] if not q.nube]
             x = (suya[0].x + suya[0].ancho / 2) if suya else dentro.x + dentro.ancho / 2
             repartible = False
-            caja = dentro
+            # El router de borde tiene una pata en su sede y otra en Internet: va a
+            # caballo del techo de SU SEDE, no del techo de la empresa. Puesto en el
+            # borde de la caja grande, no interseca ninguna de las dos redes que une.
+            caja = suya[0] if suya else dentro
             while caja.padre is not None and not caja.padre.sintetica:
                 caja = caja.padre
-            y = caja.y
+            y = (suya[0].y if suya else caja.y)
         elif _contiene(una, otra) or _contiene(otra, una):
             # Una dentro de otra: el router se apoya en el costado de la de dentro que
             # mira al pasillo de la casa. En el techo chocaría con su cabecera, y ahí
@@ -1003,9 +1050,12 @@ def _plano_anidado(lab: dict) -> str:
     puntos: list[tuple[float, float]] = [(0.0, 0.0), (raiz.ancho, raiz.alto)]
     for region in regiones:
         for rol, (cx, cy) in region.dentro.items():
-            piezas.append(_simbolo(tipos[rol], cx, cy))
-            textos.append(_etiqueta(cx, cy, _que_dice(por_nodo[rol]), clase=tipos[rol],
-                                    lado=_lado(rol, punto_de, cables_planos)))
+            piezas.append(_simbolo(tipos[rol], cx, cy, rol=rol))
+            lineas = _que_dice(por_nodo[rol])
+            textos.append(_etiqueta(cx, cy, lineas, clase=tipos[rol],
+                                    lado=_lado(rol, punto_de, cables_planos,
+                                               caja=region if not region.sintetica else None,
+                                               ancho_etiqueta=_ancho_etiqueta(lineas))))
             # El nombre va al costado del símbolo y puede salirse del área: el lienzo
             # tiene que contarlo, o la última letra se corta en el borde del dibujo.
             puntos += [(cx - 96, cy - 34), (cx + 96, cy + 66)]
@@ -1057,9 +1107,27 @@ def _que_dice(nodo: dict) -> list[str]:
     return [nodo["role"], *direcciones]
 
 
-def _lado(rol: str, punto_de, cables: list[tuple[str, str]]) -> str:
-    """De qué lado cabe el nombre: el que más lejos queda de sus conexiones."""
+def _lado(rol: str, punto_de, cables: list[tuple[str, str]],
+          caja: Region | None = None, ancho_etiqueta: float = 96.0) -> str:
+    """De qué lado cabe el nombre: el que más lejos queda de sus conexiones.
+
+    `caja` es el área donde vive el equipo: un lado que deja el nombre fuera de su
+    caja no vale, por mucho aire que tenga. Era lo que pasaba con la dirección de un
+    servidor en la columna de la derecha, escrita cruzando el borde del departamento.
+    """
     cx, cy = punto_de(rol)
+
+    def dentro_del_lado(lado: str) -> bool:
+        if caja is None:
+            return True
+        if lado == "derecha":
+            return cx + 33 + ancho_etiqueta <= caja.x + caja.ancho
+        if lado == "izquierda":
+            return cx - 33 - ancho_etiqueta >= caja.x
+        if lado == "abajo":
+            return cy + 37 + 12 <= caja.y + caja.alto
+        return cy - 37 - 12 >= caja.y
+
     rumbos = []
     for a, z in cables:
         if a != rol and z != rol:
@@ -1077,10 +1145,12 @@ def _lado(rol: str, punto_de, cables: list[tuple[str, str]]) -> str:
             rumbos.append((dx / largo, dy / largo))
     if not rumbos:
         return "abajo"
-    mejor, aire = "abajo", -1.0
+    mejor, aire = "abajo", -10.0
     for candidato, (ux, uy) in (("abajo", (0, 1)), ("derecha", (1, 0)),
                                 ("izquierda", (-1, 0)), ("arriba", (0, -1))):
         hueco = min(1 - (ux * ex + uy * ey) for ex, ey in rumbos)
+        if not dentro_del_lado(candidato):
+            hueco -= 10.0   # sacar el nombre de su caja es peor que pisar un cable
         if hueco > aire + 1e-9:
             mejor, aire = candidato, hueco
     return mejor
@@ -1357,13 +1427,13 @@ def plano(lab: dict, modo: str = "topologia") -> str:
     for caja in cajas.values():
         for rol, (cx, cy) in caja.dentro.items():
             nodo = por_rol[rol]
-            piezas.append(_simbolo(nodo["type"], cx, cy))
+            piezas.append(_simbolo(nodo["type"], cx, cy, rol=nodo["role"]))
             textos.append(_etiqueta(cx, cy, etiqueta(nodo), clase=nodo["type"],
                                     lado=lado(rol)))
             puntos += [(cx - 70, cy - 30), (cx + 70, cy + 56)]
 
     for rol, (cx, cy) in posiciones.items():
-        piezas.append(_simbolo(por_rol[rol]["type"], cx, cy))
+        piezas.append(_simbolo(por_rol[rol]["type"], cx, cy, rol=rol))
         textos.append(_etiqueta(cx, cy, etiqueta(por_rol[rol]),
                                 clase=por_rol[rol]["type"], lado=lado(rol)))
         puntos += [(cx - 70, cy - 30), (cx + 70, cy + 56)]
@@ -1496,6 +1566,10 @@ def _area(caja: Caja, servicios: list[str] | None = None, suave: bool = False) -
     de un vistazo qué es un sitio y qué es una red.
     """
     textos = [
+        f'<g data-area="{_esc(caja.titulo)}" data-x="{caja.x:.1f}" data-y="{caja.y:.1f}" '
+        f'data-ancho="{caja.ancho:.1f}" data-alto="{caja.alto:.1f}" data-subred="{_esc(caja.subred)}" '
+        f'data-nube="{int(getattr(caja, "nube", False))}" '
+        f'data-hijas="{len(getattr(caja, "hijas", []))}"/>',
         f'<text x="{caja.x + 16:.1f}" y="{caja.y + 21:.1f}" font-family="{FUENTE}" '
         f'font-size="12.5" font-weight="650" fill="{EQUIPO_TRAZO}" '
         f'paint-order="stroke" stroke="#ffffff" stroke-width="3.2">{_esc(caja.titulo)}</text>',
