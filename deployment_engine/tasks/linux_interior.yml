@@ -18,6 +18,10 @@
     # no hay salto que hacer (ver interior_ssh.yml).
     interior_salto: "{{ linux_nodo.name != env.management.guest }}"
     comando: "{{ linux_nodo | netlabs_linux_probe_cmd }}"
+    # El sondeo no se imprime: entre sus líneas van las huellas de las claves que las
+    # marcas guardan, y una huella no tiene por qué acabar en un informe. Quien quiera
+    # ver qué se va a escribir lo tiene en la lista de cambios de más abajo.
+    interior_imprime: false
   when: linux_nodo.configure is defined
 
 - name: "interior · la diferencia entre lo declarado y lo que hay"

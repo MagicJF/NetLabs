@@ -124,13 +124,44 @@
     body: "{{ ros_op.body | default(omit) }}"
     status_code: [200, 201, 204]
     timeout: 30
-  loop: "{{ ros_ops }}"
+  # Las que esperan a que las demás hayan terminado no van aquí: van en el paso de
+  # abajo. Ver el porqué en el comentario de ese paso.
+  loop: "{{ ros_ops | rejectattr('tras_restricciones', 'defined') | list }}"
   loop_control:
     loop_var: ros_op
     label: "{{ ros_op.effect }}"
+  # El cuerpo de una escritura lleva la clave del router (alta de usuario), y el
+  # informe del apply acaba en logs/: sin `no_log` esa clave queda escrita en disco.
+  # El diagnóstico no se pierde —qué recurso y qué operación—: lo imprime la tarea de
+  # arriba, que enseña la diferencia; lo único que se calla es el cuerpo.
+  no_log: true
   # Sólo se emite una llamada cuando hay diferencia, así que cada una es un cambio
   # de verdad. El módulo `uri` no lo marca por su cuenta y el `changed` del apply
   # tiene que decir la verdad: si escribió, cambió.
+  changed_when: ros_op.method != 'GET'
+
+# El encendido de SNMP, en su propio paso y sólo después de que el anterior haya
+# terminado entero. No basta con ponerlo el último de la lista: una llamada que falla
+# NO detiene el bucle —Ansible recorre todos los elementos y falla al final (medido)—,
+# así que el encendido llegaría igual con una comunidad abierta a `::/0`. Aquí, si una
+# restricción falla, el play se para antes de encender y el servicio queda apagado,
+# que es el fallo inocuo; encendido y abierto es el que no se admite.
+- name: "RouterOS · encender SNMP en {{ router.name }} con la comunidad ya acotada"
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_op.path }}"
+    method: "{{ ros_op.method }}"
+    url_username: "{{ ros_user }}"
+    url_password: "{{ ros_clave }}"
+    force_basic_auth: true
+    body_format: json
+    body: "{{ ros_op.body | default(omit) }}"
+    status_code: [200, 201, 204]
+    timeout: 30
+  loop: "{{ ros_ops | selectattr('tras_restricciones', 'defined') | list }}"
+  loop_control:
+    loop_var: ros_op
+    label: "{{ ros_op.effect }}"
+  no_log: true
   changed_when: ros_op.method != 'GET'
 
 - name: "RouterOS · comprobar que lo declarado está de verdad en {{ router.name }}"

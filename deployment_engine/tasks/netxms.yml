@@ -151,6 +151,12 @@
     comando: "{{ netxms_op.cmd }}"
   loop: "{{ netxms_plan.ops }}"
   loop_control: {loop_var: netxms_op, label: "{{ netxms_op.effect }}"}
+  # El cuerpo del alta lleva la clave del equipo y el testigo de la sesión: con el
+  # informe detallado, ambos acabarían en logs/. La tarea incluida ya calla su salida
+  # —lleva `interior_secreto`—, pero el valor pasa por esta tarea de bucle, y por eso
+  # la tarea entera se calla también. El diagnóstico queda en «lo que hay que dar de
+  # alta», que imprime el efecto de cada alta y no su cuerpo.
+  no_log: true
   when: netxms_plan.ops | length > 0
 
 # Un equipo que ya está con otras credenciales no se puede corregir por el API: se

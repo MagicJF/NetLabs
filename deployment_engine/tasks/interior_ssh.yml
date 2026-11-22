@@ -14,13 +14,20 @@
 - name: "SSH · {{ interior_descripcion | default(objetivo) }}"
   vars:
     interior_destino: "{{ 'root@' ~ objetivo if interior_salto | default(true) | bool else 'root@127.0.0.1' }}"
+    # El SSH exterior va al invitado (`objetivo`), no al túnel: con salto, ese invitado
+    # es el destino y su sshd escucha en 22 —`puerto` es sólo por donde el
+    # `ProxyCommand` habla con 127.0.0.1, y `-W %h:%p` reenvía al puerto exterior—.
+    # Sin salto, el túnel aterriza *dentro* del invitado y el puerto exterior sí es el
+    # del túnel. Usar `puerto` en los dos casos apuntaba el SSH al puerto del túnel
+    # cuando el destino era el invitado, y no era el suyo.
+    interior_puerto_exterior: "{{ 22 if interior_salto | default(true) | bool else puerto }}"
     interior_proxy: >-
       {{ [] if not interior_salto | default(true) | bool else
          ['-o', 'ProxyCommand=ssh -i ' ~ clave ~ ' -p ' ~ puerto | string ~
                ' -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -W %h:%p root@127.0.0.1'] }}
   ansible.builtin.command:
     argv: >-
-      {{ ['ssh', '-i', clave, '-p', puerto | string,
+      {{ ['ssh', '-i', clave, '-p', interior_puerto_exterior | string,
           '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no',
           '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR']
          + interior_proxy + [interior_destino] + comando }}
@@ -49,5 +56,10 @@
     var: interior.stdout_lines
   # Una respuesta que trae una credencial no se imprime: quien la pide lo dice
   # (`interior_imprime: false`). Una lectura no lleva clave; una respuesta de un API
-  # que devuelve la ficha de un equipo, sí.
-  when: interior_imprime | default(true) | bool
+  # que devuelve la ficha de un equipo, sí. Y la tarea que recibió la clave por su
+  # entrada estándar tampoco: `no_log` cala la salida de la tarea, pero este `debug`
+  # es otra tarea y leería el mismo `stdout` —una credencial aplicada se ve en `ps`
+  # si este aviso no calla—.
+  when: >-
+    (interior_imprime | default(true) | bool)
+    and (interior_secreto | default('')) | length == 0

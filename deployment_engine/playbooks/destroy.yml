@@ -16,7 +16,7 @@
     env: "{{ lookup('file', raiz ~ '/netlabs.yml') | from_yaml }}"
     secrets: "{{ lookup('file', raiz ~ '/secrets.yml') | from_yaml }}"
     lab: "{{ lookup('file', raiz ~ '/labs/' ~ netlabs_lab ~ '/' ~ netlabs_lab ~ '.yml') | from_yaml }}"
-    clave: "{{ lookup('env', 'HOME') }}/.ssh/netlabs_tunnel"
+    clave: "{{ env.management.tunnel.key | expanduser }}"
     puerto: "{{ env.management.tunnel.local_ssh_port }}"
   tasks:
     - include_tasks: ../tasks/world.yml
