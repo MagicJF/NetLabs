@@ -145,9 +145,29 @@ nodes:
       # (`creates`) es lo que hace que el segundo apply no lo repita. El WAR se
       # descarga igual: una vez, y la marca es el propio fichero.
       commands:
-        - run: "systemctl stop netxms-server || true; /usr/bin/nxdbmgr init && touch /var/lib/netxms/netlabs-schema"
+        # La base se inicializa con el servidor parado y se vuelve a arrancar pase lo
+        # que pase: si `nxdbmgr init` falla, dejar el servidor apagado convierte un
+        # fallo con nombre —«no se pudo inicializar la base»— en un servicio que ya no
+        # está y no dice por qué. La marca sólo se escribe si la inicialización salió
+        # bien, así que el intento fallido se repite en la pasada siguiente.
+        - run: >-
+            systemctl stop netxms-server || true;
+            /usr/bin/nxdbmgr init;
+            rc=$?;
+            systemctl start netxms-server || true;
+            [ $rc -eq 0 ] && touch /var/lib/netxms/netlabs-schema
           creates: /var/lib/netxms/netlabs-schema
-        - run: "curl -fsSL -o /var/lib/tomcat11/webapps/nxmc.war https://netxms.com/download/releases/7.0/nxmc-7.0.4.war"
+        # El WAR se descarga a un temporal, se comprueba su huella y sólo entonces se
+        # mueve a su sitio. La marca es el propio fichero: si el `curl` se cortara a
+        # medias, escribir directamente dejaría un WAR truncado en su destino y el
+        # motor lo daría por desplegado para siempre, sin reintentar nunca. La huella
+        # es la del `nxmc-7.0.4.war` publicado (53 745 387 bytes).
+        - run: >-
+            curl -fsSL -o /tmp/nxmc.war.parte
+            https://netxms.com/download/releases/7.0/nxmc-7.0.4.war &&
+            echo "5f0641d40746dc383328ce015d1d0ec74de06495d358a37599a296ed97f8b4e5  /tmp/nxmc.war.parte" |
+            sha256sum -c - &&
+            mv /tmp/nxmc.war.parte /var/lib/tomcat11/webapps/nxmc.war
           creates: /var/lib/tomcat11/webapps/nxmc.war
         # La clave del administrador no se escribe aquí: se declara por su
         # nombre (`netxms`) y el motor la lee de secrets.yml. La marca guarda su
