@@ -524,18 +524,18 @@ class Documentacion(unittest.TestCase):
         self.assertEqual(conexiones(topologia), internas + patas + 1)  # +1: Internet
         self.assertEqual(conexiones(cableado), len(lab["links"]))
 
-        # La clase la dice el símbolo: el router es el cilindro con las cuatro flechas en
-        # su cara de arriba y el switch la placa en perspectiva con las flechas cruzadas.
-        # Un laboratorio sin switches no puede acabar con un símbolo de switch.
-        self.assertIn('<path d="M-17 -8V7a17 6 0 0 0 34 0V-8"', topologia)
-        self.assertNotIn('<path d="M-24 0H14l10-12H-14Z"', topologia)
+        # La clase la dice el símbolo, plano y de línea: el router es el círculo con las
+        # cuatro flechas y el switch la caja con las flechas cruzadas. Un laboratorio sin
+        # switches no puede acabar con un símbolo de switch.
+        self.assertIn('<circle r="15.5"', topologia)
+        self.assertNotIn('<rect x="-24" y="-10" width="48" height="20"', topologia)
         self.assertNotIn("switch", topologia)
         self.assertNotIn("cortafuegos", topologia)
 
         # Y un laboratorio con switches los dibuja, con su clase en la clave.
         lab_c = laboratorio("c_enrutar_y_conmutar")
         svg_c = plano.plano(lab_c, "topologia")
-        self.assertIn('<path d="M-24 0H14l10-12H-14Z"', svg_c)
+        self.assertIn('<rect x="-24" y="-10" width="48" height="20"', svg_c)
         self.assertIn("switch", svg_c)
 
     def test_un_equipo_en_tres_redes_se_rodea_de_ellas(self):

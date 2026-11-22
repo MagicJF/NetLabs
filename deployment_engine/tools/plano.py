@@ -21,20 +21,25 @@ TENUE = "#475569"
 LINEA = "#94a3b8"
 RED_TRAZO = "#93b4f5"
 RED_RELLENO = "#3b82f6"
-EQUIPO_TRAZO = "#1b5fa8"      # el azul de los símbolos de red de Cisco
-EQUIPO_RELLENO = "#dbe9f6"
+EQUIPO_TRAZO = "#1b5fa8"      # el trazo de los equipos, un solo azul de plano
+EQUIPO_RELLENO = "#ffffff"
 EQUIPO_CARA = "#eef5fb"
-FUEGO_TRAZO = "#a33b22"
-FUEGO_RELLENO = "#f7ddd0"
+# El color de acento dice la familia, como en los juegos de iconos de AWS: la red en
+# morado, la seguridad en rojo, lo que atiende el usuario en gris.
+RED_TRAZO_EQ = "#7c4dff"      # router, switch
+SEG_TRAZO_EQ = "#d93f4c"      # cortafuegos
+FIN_TRAZO_EQ = "#5b7793"      # servidor, puesto, gestión
+FUEGO_TRAZO = SEG_TRAZO_EQ
+FUEGO_RELLENO = "#fdf0f1"
 BORDE_TRAZO = "#5b7793"
-BORDE_RELLENO = "#f1f5f9"
+BORDE_RELLENO = "#f4f7fa"
 FUENTE = "'Inter','Segoe UI',Helvetica,Arial,sans-serif"
 
 # Cada símbolo ocupa una caja de este tamaño: sirve para centrar la etiqueta debajo
 # y para saber por dónde sale una arista sin que cruce el dibujo.
 SIMBOLO = {
-    "router": (38, 30),
-    "switch": (52, 22),
+    "router": (38, 38),
+    "switch": (52, 24),
     "firewall": (48, 28),
     "server": (26, 38),
     "workstation": (32, 28),
@@ -96,29 +101,26 @@ def _engranaje(cx: float, cy: float, radio: float) -> str:
 
 def _simbolo_cisco(tipo: str) -> str:
     """El dibujo de esa clase, centrado en el origen."""
-    azul, relleno, cara = EQUIPO_TRAZO, EQUIPO_RELLENO, EQUIPO_CARA
+    azul, relleno, cara = FIN_TRAZO_EQ, EQUIPO_RELLENO, EQUIPO_CARA
     if tipo == "router":
-        # Cilindro en perspectiva y, sobre su cara de arriba, las cuatro flechas.
+        # Plano, sin volumen: el círculo y las cuatro direcciones que encamina.
         return "".join([
-            f'<path d="M-17 -8V7a17 6 0 0 0 34 0V-8" fill="{relleno}" stroke="{azul}" '
-            f'stroke-width="1.8"/>',
-            f'<ellipse cx="0" cy="-8" rx="17" ry="6" fill="{cara}" stroke="{azul}" '
-            f'stroke-width="1.8"/>',
-            _flecha(-3, -8.5, -14, -8.5, largo=3.6, ancho=2.2),
-            _flecha(3, -8.5, 14, -8.5, largo=3.6, ancho=2.2),
-            _flecha(-2.5, -10.6, -8, -14, largo=3.4, ancho=2.0),
-            _flecha(2.5, -6.4, 8, -3, largo=3.4, ancho=2.0),
+            f'<circle r="15.5" fill="{relleno}" stroke="{RED_TRAZO_EQ}" stroke-width="2"/>',
+            _flecha(-3, 0, -11.5, 0, color=RED_TRAZO_EQ, largo=3.4, ancho=2.2),
+            _flecha(3, 0, 11.5, 0, color=RED_TRAZO_EQ, largo=3.4, ancho=2.2),
+            _flecha(0, -3, 0, -11.5, color=RED_TRAZO_EQ, largo=3.4, ancho=2.2),
+            _flecha(0, 3, 0, 11.5, color=RED_TRAZO_EQ, largo=3.4, ancho=2.2),
         ])
     if tipo == "switch":
-        # Placa en perspectiva: cara de arriba, frente y canto derecho, con las dos
-        # flechas cruzadas que dicen «esto conmuta».
+        # Plano también: la caja de frente y, dentro, las dos flechas cruzadas que
+        # dicen «esto conmuta», con la fila de puertos marcada abajo.
         return "".join([
-            f'<path d="M-24 0H14l10-12H-14Z" fill="{cara}" stroke="{azul}" stroke-width="1.6"/>',
-            f'<path d="M-24 0v10h38V0Z" fill="{relleno}" stroke="{azul}" stroke-width="1.6"/>',
-            f'<path d="M14 0l10-12v10l-10 12Z" fill="#c7dcef" stroke="{azul}" '
-            f'stroke-width="1.6"/>',
-            _flecha(-15, -8.4, 8, -8.4, largo=3.4, ancho=2.2),
-            _flecha(10, -3.6, -17, -3.6, largo=3.4, ancho=2.2),
+            f'<rect x="-24" y="-10" width="48" height="20" rx="3" fill="{relleno}" '
+            f'stroke="{RED_TRAZO_EQ}" stroke-width="2"/>',
+            _flecha(-14, -3, 10, -3, color=RED_TRAZO_EQ, largo=3.2, ancho=2.0),
+            _flecha(14, 3, -10, 3, color=RED_TRAZO_EQ, largo=3.2, ancho=2.0),
+            f'<path d="M-16 10v3M-8 10v3M0 10v3M8 10v3M16 10v3" stroke="{RED_TRAZO_EQ}" '
+            f'stroke-width="1.4"/>',
         ])
     if tipo == "firewall":
         # El muro de ladrillos, con las hiladas trabadas.

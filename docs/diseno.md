@@ -189,13 +189,14 @@ cada área pasa por debajo de su símbolo, no a un lado—, con una red a cada l
 Internet arriba; con una sola red, el router se sienta sobre el techo del área. Cada área lleva
 su nombre, su subred y la dirección con la que el router se asoma a ella. Un equipo de una sola red vive
 dentro de la suya, y dentro de cada red la profundidad baja: lo que cuelga de la puerta queda
-pegado a ella. **La clase la dice el símbolo**, con las formas y el azul de los símbolos de red de
-Cisco: el router es el cilindro con las cuatro flechas en su cara de arriba, el switch la placa en
-perspectiva con las flechas cruzadas, el cortafuegos el muro de ladrillos, el servidor la torre de
-bahías, el puesto la pantalla con su peana y el nodo de gestión la pantalla con la rueda dentada.
-Están dibujados aquí con vectores, hijo a hijo del mismo generador, y no copiados de su pack de
-iconos: esos son de Cisco, su licencia no permite redistribuirlos y este plano se versiona entero
-junto al laboratorio. Dentro del propio dibujo va la
+pegado a ella. **La clase la dice el símbolo**, plano y de línea, sin volumen ni perspectiva: el router
+es el círculo con las cuatro flechas, el switch la caja con las flechas cruzadas y sus puertos, el
+cortafuegos el muro de ladrillos, el servidor la torre de bahías, el puesto la pantalla con su peana
+y el nodo de gestión la pantalla con la rueda dentada. El color de acento dice la familia, como en
+los juegos de iconos de AWS: morado para lo que conmuta y enruta, rojo para lo que filtra, gris para
+lo que atiende al usuario. Se dibujan aquí con vectores, hijo a hijo del mismo generador, y no se
+copian de ningún pack de iconos: los de Cisco y los de AWS son suyos, sus licencias no permiten
+redistribuirlos y este plano se versiona entero junto al laboratorio. Dentro del propio dibujo va la
 clave de símbolos, con **sólo las clases que el laboratorio tiene**. Un solo color para todas las
 redes —el color dice «esto es una red», no «esta red es distinta»—. Las líneas van **sin
 flecha**: el plano dice quién toca a quién, y una punta sugeriría un tráfico que nadie declaró;
