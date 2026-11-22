@@ -51,6 +51,7 @@ deployment_engine/         # el motor: no conoce ningún laboratorio concreto
   tests/                   #   pruebas de la capa pura, sin hipervisor
 labs/<lab>/<lab>.yml       # el estado deseado de ESE laboratorio
 labs/<lab>/<lab>.md        # su tabla generada + la prosa de lo aprendido
+labs/<lab>/<lab>-*.svg     # sus dos planos, generados por `./netlabs docs`
 logs/<lab>/                # informes de ejecución; gitignored
 logs/site/                 # informes del plano de gestión; gitignored
 docs/                      # diseño y decisiones (ADR)
@@ -62,8 +63,9 @@ Reglas de la estructura:
   documentación. Un fichero nuevo en la raíz se justifica o se va a `docs/`.
 - **`deployment_engine/` no conoce ningún laboratorio.** No lee `labs/`: el laboratorio es un
   parámetro. Un valor concreto de un lab aquí es un bug.
-- **`labs/<lab>/` sólo declara `<lab>.yml` y `<lab>.md`.** Nada de configuración global ni de
-  ficheros de estado. Lo que se ejecuta no vive aquí.
+- **`labs/<lab>/` sólo declara `<lab>.yml`, `<lab>.md` y los dos planos que la página enlaza**
+  (`<lab>-topologia.svg`, `<lab>-cableado.svg`, que escribe `./netlabs docs`). Nada de
+  configuración global ni de ficheros de estado. Lo que se ejecuta no vive aquí.
 - **El nombre de un laboratorio es una letra y un título** (`c_enrutar_y_conmutar`). La letra es la
   cabeza del nombre de cada cable y la que hace que el pool de Proxmox empiece por letra; ese nombre
   es también el de la carpeta, el del fichero y el del pool. Dos laboratorios no comparten letra, y

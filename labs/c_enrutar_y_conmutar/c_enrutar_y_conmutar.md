@@ -10,63 +10,15 @@ Address spaces: `10.46.0.0/16`
 
 ### Topología
 
-```mermaid
----
-title: c_enrutar_y_conmutar · 10.46.x.x/16
----
-flowchart LR
-    classDef red fill:#3b82f6,fill-opacity:0.12,stroke:#3b82f6,stroke-width:1px,color:#0f172a
-    classDef equipo fill:#ffffff,stroke:#3b82f6,stroke-width:1px,color:#0f172a
-    classDef puerta fill:#ffffff,stroke:#3b82f6,stroke-width:2px,color:#0f172a
-    classDef internet fill:#f8fafc,stroke:#64748b,stroke-width:1px,color:#0f172a
-    internet(["Internet"])
-    class internet internet
-    n_rte1(("rte1<br/>10.46.1.1/24"))
-    class n_rte1 puerta
-    subgraph red0["lan · 10.46.1.x/24"]
-        direction TB
-        n_swc1{{"swc1"}}
-        class n_swc1 equipo
-        n_swa1{{"swa1"}}
-        class n_swa1 equipo
-        n_wsp1["wsp1<br/>dhcp"]
-        class n_wsp1 equipo
-        n_wsp2["wsp2<br/>dhcp"]
-        class n_wsp2 equipo
-    end
-    class red0 red
-    internet --- n_rte1
-    n_rte1 --- red0
-    n_swc1 --- n_swa1
-    n_swa1 --- n_wsp1
-    n_swa1 --- n_wsp2
-```
+![Topología de `c_enrutar_y_conmutar`](c_enrutar_y_conmutar-topologia.svg)
 
-*clase por forma — círculo: router; hexágono: switch; rectángulo: workstation. Las áreas son las redes y un equipo con pata en varias va en su frontera; aristas sin flecha: sólo la jerarquía declarada.*
+*cada área es una red; su cabecera dice la subred y la dirección de su puerta. La forma del símbolo dice la clase de equipo y la línea dice que están conectados: sin flechas, que el plano no inventa un sentido de tráfico.*
 
 ### Cableado (L2)
 
-```mermaid
-flowchart TB
-    classDef equipo fill:#ffffff,stroke:#1d4ed8,stroke-width:1px,color:#0f172a
-    classDef puerta fill:#ffffff,stroke:#1d4ed8,stroke-width:2px,color:#0f172a
-    n_rte1(("rte1<br/>p1"))
-    class n_rte1 puerta
-    n_swc1{{"swc1<br/>p1, p2"}}
-    class n_swc1 equipo
-    n_swa1{{"swa1<br/>p1, p2, p3"}}
-    class n_swa1 equipo
-    n_wsp1["wsp1<br/>p1"]
-    class n_wsp1 equipo
-    n_wsp2["wsp2<br/>p1"]
-    class n_wsp2 equipo
-    n_rte1 ---|rte1p1 ↔ swc1p1| n_swc1
-    n_swc1 ---|swc1p2 ↔ swa1p1| n_swa1
-    n_swa1 ---|swa1p2 ↔ wsp1p1| n_wsp1
-    n_swa1 ---|swa1p3 ↔ wsp2p1| n_wsp2
-```
+![Cableado de `c_enrutar_y_conmutar`](c_enrutar_y_conmutar-cableado.svg)
 
-*cada arista dice las dos puntas que une.*
+*cada punta de cada cable dice el puerto que ocupa; la línea, el cable que los une tal y como se declara.*
 
 ### Networks
 

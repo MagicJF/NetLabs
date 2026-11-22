@@ -173,27 +173,31 @@ La página de cada laboratorio tiene dos regiones: una **generada** desde la dec
 así, qué se aprendió). La comprobación re-renderiza la región generada y **falla si difiere**
 de lo que hay en el fichero.
 
-La región generada lleva además dos diagramas, también sacados de la declaración: la
-**topología** (cada red como área translúcida con su nombre y su subred en `x`, y dentro quién
-cuelga de ella) y el **cableado** (un equipo por nodo con sus puertos y una arista por cable que
-dice las dos puntas que une). Los dos son **código**: bloques `` ```mermaid `` dentro del propio
-`.md`, sin PNG ni SVG generados ni guardados. Un diagrama es una línea más del documento: se lee,
-se compara y se revisa en el diff como cualquier otra. La topología va en `flowchart LR` y el
-cableado en `flowchart TB` —ninguno en `architecture-beta`—, porque allí las áreas no admiten
-color ni transparencia, ni texto en la arista, y aquí hacen falta las tres cosas.
+La región generada lleva además dos **planos**, también sacados de la declaración: la
+**topología** (cada red como área translúcida con su nombre, su subred y la dirección de su
+puerta, y dentro quién cuelga de ella) y el **cableado** (un equipo por nodo y una línea por
+cable, con el puerto que ocupa cada punta). Los dibuja `tools/plano.py` como SVG al lado de la
+página, y la página los enlaza. Son ficheros, no bloques de texto, y eso se acepta porque el SVG
+es texto —se lee y se revisa en el diff— y porque no pueden quedarse viejos: `./netlabs docs` los
+reescribe y `./netlabs check` falla si el guardado no coincide con lo que la declaración produce
+hoy. Mermaid no sirve para esto: no sabe dibujar los símbolos de una red (router, switch,
+cortafuegos, servidor) y sus áreas no pueden tocarse, así que un router con pata en dos redes no
+se puede poner entre ellas.
 
-El plano se dibuja como un plano de red, no como un organigrama: el nombre del laboratorio va en
-el título del bloque, dentro las redes como áreas translúcidas, y **fuera de toda área** el borde
-por el que se sale a Internet. Un solo color para todas las redes —el color dice «esto es una
-red», no «esta red es distinta»; separarlas es trabajo del nombre y del sitio en el plano—. La
-clase de equipo la dice la forma, no un emoji: círculo el router, hexágono el switch, cilindro el
-servidor, paralelogramo el cortafuegos, rectángulo el puesto. Las aristas van **sin flecha**: la
-jerarquía se lee del eje y una punta sugeriría un tráfico que nadie declaró. **El eje lo marca el
-router**: un equipo con pata en varias redes se dibuja en la frontera de esas redes —con sus
-áreas a los lados, la primera a su izquierda y el resto a su derecha—, y dentro de cada red la
-profundidad baja; un equipo de una sola red vive dentro de la suya. Debajo de cada bloque va el
-pie de figura: la clave de clases, con **sólo las que el laboratorio tiene**. Un diagrama que no
-sale de la declaración no se dibuja: se pudre el primero que alguien cambie algo a mano.
+El plano se dibuja como un plano de red, no como un organigrama. **El eje lo marca el router**:
+un equipo con pata en varias redes se sienta donde se tocan —con una red a cada lado, la salida a
+Internet arriba—, y las redes quedan alrededor como áreas translúcidas con su nombre, su subred
+en `x` y la dirección con la que el router se asoma a ellas. Un equipo de una sola red vive
+dentro de la suya, y dentro de cada red la profundidad baja: lo que cuelga de la puerta queda
+pegado a ella. **La clase la dice el símbolo**, como en cualquier plano técnico: el router es el
+círculo con cuatro flechas, el switch la caja con las flechas cruzadas, el cortafuegos el muro de
+ladrillos, el servidor la caja de bahías y el puesto la pantalla. Dentro del propio dibujo va la
+clave de símbolos, con **sólo las clases que el laboratorio tiene**. Un solo color para todas las
+redes —el color dice «esto es una red», no «esta red es distinta»—. Las líneas van **sin
+flecha**: el plano dice quién toca a quién, y una punta sugeriría un tráfico que nadie declaró;
+la salida a Internet se distingue por el trazo discontinuo, que no es un cable del laboratorio.
+Un plano que no sale de la declaración no se dibuja: se pudre el primero que alguien cambie algo
+a mano.
 
 *Evita:* el documento que describe un sistema que ya no existe.
 

@@ -18,6 +18,7 @@ RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ / "deployment_engine" / "tools"))
 
 import identity  # noqa: E402
+import plano  # noqa: E402
 
 
 def entorno():
@@ -479,86 +480,120 @@ class Documentacion(unittest.TestCase):
         self.assertEqual(identity.render_docs(laboratorio(), entorno()),
                          identity.render_docs(laboratorio(), entorno()))
 
-    def test_la_documentacion_dibuja_la_topologia_y_el_cableado(self):
+    def test_la_pagina_enlaza_los_dos_planos(self):
+        """Los dibujos son dos SVG generados al lado de la página, no bloques de texto.
+
+        Se enlazan desde la región generada, así que la página se lee en cualquier visor
+        de Markdown y el plano sigue saliendo de la declaración: lo escribe `docs` y lo
+        vigila `check`.
+        """
         texto = identity.render_docs(laboratorio(), entorno())
-        # Dos dibujos sacados de la declaración: quién está en qué red (topología, con
-        # las redes como áreas translúcidas) y qué puerto va con qué puerto (cableado,
-        # con texto en la arista). La topología va en `flowchart LR` —el eje E-O son las
-        # patas del router, para que quede entre las redes que une— y el cableado en
-        # `flowchart TB` (de lo que da salida a lo más cerrado).
-        self.assertEqual(texto.count("```mermaid\n"), 2)
-        self.assertEqual(texto.count("flowchart LR"), 1)
-        self.assertEqual(texto.count("flowchart TB"), 1)
-        # El router es un círculo, sin emoji: la forma dice la clase.
-        self.assertIn('n_rte1(("rte1<br/>p1, p2"))', texto)
-        # El cable dice sus dos puntas sin haber que mirar la tabla.
-        self.assertIn("rte1p1 ↔ wsp1p1", texto)
-        # El diagrama es código dentro de la página: ni imagen enlazada ni fichero aparte.
-        self.assertNotIn("![", texto)
-        self.assertNotIn(".svg", texto)
-        self.assertNotIn(".png", texto)
+        self.assertIn("![Topología de `b_router_dos_puestos`]"
+                      "(b_router_dos_puestos-topologia.svg)", texto)
+        self.assertIn("![Cableado de `b_router_dos_puestos`]"
+                      "(b_router_dos_puestos-cableado.svg)", texto)
+        # Ni un bloque de dibujo dentro de la página: habría dos verdades que se separan.
+        self.assertNotIn("```mermaid", texto)
+        self.assertNotIn("flowchart", texto)
 
-    def test_los_dibujos_salen_enteros_de_la_declaracion(self):
-        """Ni un servicio inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""
+    def test_los_planos_salen_enteros_de_la_declaracion(self):
+        """Ni un equipo inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""
         lab = laboratorio()
-        texto = identity.render_docs(lab, entorno())
-        bloques = re.findall(r"```mermaid\n.*?flowchart (?:TB|LR)\n(.*?)```", texto, re.S)
-        self.assertEqual(len(bloques), 2)
-        topologia, cableado = bloques
+        topologia = plano.plano(lab, "topologia")
+        cableado = plano.plano(lab, "cableado")
 
-        nodos = {identity._id(n["role"]) for n in lab["nodes"]}
-        # Cada red es un área: subgraph con su nombre y su subred en `x`.
-        self.assertEqual(len(re.findall(r"subgraph red\d+\[", topologia)), len(lab["networks"]))
+        # Cada equipo aparece con su nombre, y cada red con el suyo y su subred.
+        for nodo in lab["nodes"]:
+            self.assertIn(f">{nodo["role"]}<", topologia + cableado)
         for net in lab["networks"]:
             self.assertIn(identity._subred(net["address"]), topologia)
-        # Todos los equipos aparecen en el plano; ninguno inventado. `internet` no es
-        # un equipo del laboratorio: es el borde por el que se sale, y va aparte.
-        dibujados = set(re.findall(r"(?m)^\s+(\w+)[\[(]", topologia)) - {"internet"}
-        self.assertEqual(dibujados, nodos)
-        self.assertEqual(set(re.findall(r"(?m)^\s+(\w+)[\[(]", cableado)), nodos)
+            self.assertIn(f">{net["name"]}<", topologia)
 
-        # Topología: una arista por cada puerta de salida hacia Internet, una por cada red
-        # que toca esa puerta (el equipo va en su frontera) y una por cada `after` entre
-        # equipos de dentro. Cableado: una por cable. Ninguna con flecha: el plano no
-        # inventa un sentido de tráfico.
+        # Las conexiones son las declaradas: en la topología, una por jerarquía (`after`
+        # de dentro más la salida a Internet); en el cableado, una por cable.
+        def conexiones(svg):
+            # El gris de línea es el de una conexión: los símbolos no lo usan.
+            return svg.count('stroke="#94a3b8"')
+
         profundidad = identity._profundidad(lab)
-        por_rol = {n["role"]: n for n in lab["nodes"]}
-        salidas = [n["role"] for n in lab["nodes"] if profundidad[n["role"]] == 0]
-        uniones = sum(1 for rol in salidas for net in lab["networks"]
-                      if net["name"] in (por_rol[rol].get("networks") or []))
+        puertas = {n["role"] for n in lab["nodes"] if profundidad[n["role"]] == 0}
         internas = sum(1 for n in lab["nodes"] for p in (n.get("after") or [])
-                       if profundidad[n["role"]] > 0 and profundidad.get(p, 0) > 0)
-        self.assertEqual(len(re.findall(r" --- ", topologia)),
-                         len(salidas) + uniones + internas)
-        self.assertNotIn("-->", topologia)
-        self.assertNotIn("-->", cableado)
-        aristas = re.findall(r"(\w+) ---\|([^|]+)\| (\w+)", cableado)
-        self.assertEqual(len(aristas), len(lab["links"]))
-        # El cableado baja: la punta de arriba es la menos profunda.
-        prof = {identity._id(rol): d for rol, d in profundidad.items()}
-        for (a, _, z), cable in zip(aristas, lab["links"]):
-            self.assertLessEqual(prof[a], prof[z])
-            self.assertEqual({a, z},
-                             {identity._id(cable["a"]["node"]), identity._id(cable["z"]["node"])})
-        # Y cada arista dice las dos puntas que une, que es lo que la hace útil.
-        for (_, etiqueta, _), cable in zip(aristas, lab["links"]):
-            self.assertEqual(etiqueta.split(" ↔ "),
-                             [identity._endpoint(cable["a"]["node"], cable["a"]["port"]),
-                              identity._endpoint(cable["z"]["node"], cable["z"]["port"])])
+                       if profundidad[n["role"]] > 0 and p not in puertas)
+        patas = sum(1 for n in lab["nodes"]
+                    if profundidad[n["role"]] > 0 and puertas & set(n.get("after") or []))
+        self.assertEqual(conexiones(topologia), internas + patas + 1)  # +1: Internet
+        self.assertEqual(conexiones(cableado), len(lab["links"]))
 
-    def test_el_dibujo_del_cableado_no_inventa_ni_omite(self):
-        lab = {"networks": [{"name": "lan", "address": "10.9.0.0/24"}],
-               "nodes": [{"role": "r", "type": "router", "networks": ["lan"],
+        # La clase la dice el símbolo: el router es el círculo con cuatro flechas y el
+        # switch la caja con las flechas cruzadas. Un laboratorio sin switches no puede
+        # acabar con un símbolo de switch ni con su nombre en la clave.
+        self.assertIn('<circle r="20"', topologia)
+        self.assertNotIn('<rect x="-28" y="-12"', topologia)
+        self.assertNotIn("switch", topologia)
+        self.assertNotIn("cortafuegos", topologia)
+
+        # Y un laboratorio con switches los dibuja, con su clase en la clave.
+        lab_c = laboratorio("c_enrutar_y_conmutar")
+        svg_c = plano.plano(lab_c, "topologia")
+        self.assertIn('<rect x="-28" y="-12"', svg_c)
+        self.assertIn("switch", svg_c)
+
+    def test_un_equipo_en_tres_redes_se_rodea_de_ellas(self):
+        """Con tres redes el equipo de varias patas va al cruce, y las áreas no se pisan.
+
+        Una red sin equipos sigue tocando al equipo que la declara: su pata se dibuja
+        hasta el borde del área, que es lo único que hay dentro.
+        """
+        lab = {"lab": "tres_redes", "address_spaces": ["10.70.0.0/16"],
+               "networks": [{"name": "lan", "address": "10.70.1.0/24"},
+                            {"name": "dmz", "address": "10.70.2.0/24"},
+                            {"name": "wan", "address": "10.70.3.0/24"}],
+               "nodes": [
+                   {"role": "fwl1", "type": "firewall", "stage": 1,
+                    "networks": ["wan", "dmz", "lan"], "address": "dhcp"},
+                   {"role": "srv1", "type": "server", "stage": 2, "after": ["fwl1"],
+                    "networks": ["dmz"], "address": "10.70.2.10/24"},
+                   {"role": "swa1", "type": "switch", "stage": 2, "after": ["fwl1"],
+                    "networks": ["lan"]},
+                   {"role": "wsp1", "type": "workstation", "stage": 3, "after": ["swa1"],
+                    "networks": ["lan"], "address": "dhcp"}],
+               "links": []}
+        svg = plano.plano(lab, "topologia")
+
+        cajas = [tuple(float(v) for v in c) for c in re.findall(
+            r'<rect x="(-?[\d.]+)" y="(-?[\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="14"',
+            svg)]
+        self.assertEqual(len(cajas), 3)
+        for i, (x1, y1, w1, h1) in enumerate(cajas):
+            for x2, y2, w2, h2 in cajas[i + 1:]:
+                # Dos redes que se solapan en el dibujo se leen como una sola.
+                self.assertFalse(x1 < x2 + w2 and x2 < x1 + w1
+                                 and y1 < y2 + h2 and y2 < y1 + h1,
+                                 "dos áreas de red se solapan")
+        for net in lab["networks"]:
+            self.assertIn(f'>{net["name"]}<', svg)
+        self.assertIn(">cortafuegos<", svg)  # la clase va en la clave
+        self.assertIn(">servidor<", svg)
+
+    def test_el_cableado_dice_los_puertos_de_cada_cable(self):
+        lab = {"lab": "x", "address_spaces": ["10.9.0.0/16"],
+               "networks": [{"name": "lan", "address": "10.9.0.0/24"}],
+               "nodes": [{"role": "r", "type": "router", "stage": 1, "networks": ["lan"],
                           "address": "10.9.0.1/24"},
-                         {"role": "s", "type": "switch", "networks": ["lan", "lan"]},
-                         {"role": "h", "type": "workstation", "networks": ["lan"],
-                          "address": "dhcp"}],
+                         {"role": "s", "type": "switch", "stage": 2, "after": ["r"],
+                          "networks": ["lan", "lan"]},
+                         {"role": "h", "type": "workstation", "stage": 3, "after": ["s"],
+                          "networks": ["lan"], "address": "dhcp"}],
                "links": [{"a": {"node": "r", "port": 1}, "z": {"node": "s", "port": 1}},
                          {"a": {"node": "s", "port": 2}, "z": {"node": "h", "port": 1}}]}
-        lineas = identity._mermaid_cableado(lab)
-        self.assertIn('    n_s{{"s<br/>p1, p2"}}', lineas)
-        self.assertEqual([l.strip() for l in lineas if " ---|" in l],
-                         ["n_r ---|rp1 ↔ sp1| n_s", "n_s ---|sp2 ↔ hp1| n_h"])
+        svg = plano.plano(lab, "cableado")
+        # Un cable, una línea; y cada punta con su puerto, junto al equipo que lo ocupa.
+        self.assertEqual(svg.count('stroke="#94a3b8"'), 2)
+        self.assertEqual(re.findall(r">(p\d)<", svg), ["p1", "p1", "p2", "p1"])
+        # El puerto va al costado del cable, no debajo del símbolo: ahí vive el nombre.
+        self.assertIn(">s<", svg)
+        # El cableado no dibuja la salida a Internet: no hay cable declarado que la una.
+        self.assertNotIn("Internet", svg)
 
 
 class ElRegistroDeLosEquipos(unittest.TestCase):

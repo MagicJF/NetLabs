@@ -14,6 +14,7 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import identity  # noqa: E402
+import plano  # noqa: E402
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 
@@ -71,6 +72,24 @@ def escribir(nombre: str, env: dict, comprobar: bool = False) -> int:
         else:
             print(f"sin cambios {pagina.relative_to(RAIZ)}")
 
-    # Los dibujos van dentro de la propia página, como bloques ```mermaid: son código,
-    # no ficheros de imagen que puedan quedarse viejos sin que nadie lo note.
+    # Los planos se escriben al lado de la página y la página los enlaza. No pueden
+    # quedarse viejos: se regeneran aquí y `./netlabs check` compara los dos con la
+    # declaración, así que un SVG tocado a mano se ve en el mismo commit.
+    for modo in (("topologia", "cableado") if lab.get("networks") else ()):
+        dibujo = pagina.with_name(f"{nombre}-{modo}.svg")
+        nuevo = plano.plano(lab, modo)
+        if comprobar:
+            if not dibujo.exists():
+                print(f"falta {dibujo.relative_to(RAIZ)} (ejecuta `./netlabs docs`)")
+                codigo = 1
+            elif dibujo.read_text() != nuevo:
+                print(f"{dibujo.relative_to(RAIZ)}: el plano no coincide con la declaración")
+                codigo = 1
+            else:
+                print(f"ok     {dibujo.relative_to(RAIZ)}")
+        elif not dibujo.exists() or dibujo.read_text() != nuevo:
+            dibujo.write_text(nuevo)
+            print(f"escrito {dibujo.relative_to(RAIZ)}")
+        else:
+            print(f"sin cambios {dibujo.relative_to(RAIZ)}")
     return codigo

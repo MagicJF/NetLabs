@@ -10,55 +10,15 @@ Address spaces: `10.44.0.0/16`
 
 ### Topología
 
-```mermaid
----
-title: b_router_dos_puestos · 10.44.x.x/16
----
-flowchart LR
-    classDef red fill:#3b82f6,fill-opacity:0.12,stroke:#3b82f6,stroke-width:1px,color:#0f172a
-    classDef equipo fill:#ffffff,stroke:#3b82f6,stroke-width:1px,color:#0f172a
-    classDef puerta fill:#ffffff,stroke:#3b82f6,stroke-width:2px,color:#0f172a
-    classDef internet fill:#f8fafc,stroke:#64748b,stroke-width:1px,color:#0f172a
-    internet(["Internet"])
-    class internet internet
-    n_rte1(("rte1<br/>10.44.1.1/24<br/>10.44.2.1/24"))
-    class n_rte1 puerta
-    subgraph red0["lan1 · 10.44.1.x/24"]
-        direction TB
-        n_wsp1["wsp1<br/>dhcp"]
-        class n_wsp1 equipo
-    end
-    class red0 red
-    subgraph red1["lan2 · 10.44.2.x/24"]
-        direction TB
-        n_wsp2["wsp2<br/>dhcp"]
-        class n_wsp2 equipo
-    end
-    class red1 red
-    internet --- n_rte1
-    red0 --- n_rte1
-    n_rte1 --- red1
-```
+![Topología de `b_router_dos_puestos`](b_router_dos_puestos-topologia.svg)
 
-*clase por forma — círculo: router; rectángulo: workstation. Las áreas son las redes y un equipo con pata en varias va en su frontera; aristas sin flecha: sólo la jerarquía declarada.*
+*cada área es una red; su cabecera dice la subred y la dirección de su puerta. La forma del símbolo dice la clase de equipo y la línea dice que están conectados: sin flechas, que el plano no inventa un sentido de tráfico.*
 
 ### Cableado (L2)
 
-```mermaid
-flowchart TB
-    classDef equipo fill:#ffffff,stroke:#1d4ed8,stroke-width:1px,color:#0f172a
-    classDef puerta fill:#ffffff,stroke:#1d4ed8,stroke-width:2px,color:#0f172a
-    n_rte1(("rte1<br/>p1, p2"))
-    class n_rte1 puerta
-    n_wsp1["wsp1<br/>p1"]
-    class n_wsp1 equipo
-    n_wsp2["wsp2<br/>p1"]
-    class n_wsp2 equipo
-    n_rte1 ---|rte1p1 ↔ wsp1p1| n_wsp1
-    n_rte1 ---|rte1p2 ↔ wsp2p1| n_wsp2
-```
+![Cableado de `b_router_dos_puestos`](b_router_dos_puestos-cableado.svg)
 
-*cada arista dice las dos puntas que une.*
+*cada punta de cada cable dice el puerto que ocupa; la línea, el cable que los une tal y como se declara.*
 
 ### Networks
 
