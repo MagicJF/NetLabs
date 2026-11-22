@@ -207,6 +207,55 @@ class ElInteriorLinux(unittest.TestCase):
         # en bucle de reinicio con la configuración vieja.
         self.assertIn("systemctl restart x", ops[0]["cmd"][2])
 
+    def test_el_contenido_igual_con_los_permisos_cambiados_se_corrige(self):
+        # El contenido y el modo son cosas distintas: un fichero con el texto bueno
+        # pero sin el bit de ejecución estaba "bien" y nunca se corregía.
+        nodo = self.nodo(files=[{"path": "/usr/local/bin/x", "content": "#!/bin/sh\n", "mode": "0755"}])
+        huella = converge._sha256("#!/bin/sh\n")
+        ops = converge.linux_ops(nodo, {"hostname": "netxms",
+                                        "files": {"/usr/local/bin/x": huella},
+                                        "modes": {"/usr/local/bin/x": "644"}})
+        self.assertEqual(len(ops), 1)
+        self.assertIn("chmod 0755", ops[0]["cmd"][2])
+
+    def test_el_mismo_contenido_y_los_mismos_permisos_no_escriben(self):
+        nodo = self.nodo(files=[{"path": "/usr/local/bin/x", "content": "#!/bin/sh\n", "mode": "0755"}])
+        huella = converge._sha256("#!/bin/sh\n")
+        self.assertEqual(
+            converge.linux_ops(nodo, {"hostname": "netxms",
+                                      "files": {"/usr/local/bin/x": huella},
+                                      "modes": {"/usr/local/bin/x": "755"}}),
+            [],
+        )
+
+    def test_el_estado_lee_los_permisos_de_cada_fichero(self):
+        estado = converge.linux_state("MODE:/usr/local/bin/x:755\n")
+        self.assertEqual(estado["modes"]["/usr/local/bin/x"], "755")
+
+    def test_el_estado_lee_si_el_servicio_arranca_al_iniciar(self):
+        estado = converge.linux_state("SVC:x:active\nSVC_ENABLED:x:enabled\n")
+        self.assertEqual(estado["services"]["x"], "active")
+        self.assertEqual(estado["enabled"]["x"], "enabled")
+
+    def test_un_servicio_activo_pero_deshabilitado_se_habilita(self):
+        # Activo y arranca-al-iniciar son dos cosas: sin mirar la segunda, un
+        # servicio activo pero deshabilitado nunca recibía `enable`.
+        nodo = self.nodo(services={"x": True})
+        ops = converge.linux_ops(nodo, {"hostname": "netxms",
+                                        "services": {"x": "active"},
+                                        "enabled": {"x": "disabled"}})
+        self.assertEqual(len(ops), 1)
+        self.assertIn("systemctl enable x", ops[0]["cmd"][2])
+
+    def test_un_servicio_que_ya_arranca_y_esta_habilitado_no_se_toca(self):
+        nodo = self.nodo(services={"x": True})
+        self.assertEqual(
+            converge.linux_ops(nodo, {"hostname": "netxms",
+                                      "services": {"x": "active"},
+                                      "enabled": {"x": "enabled"}}),
+            [],
+        )
+
 
 class LaClaveDelRouter(unittest.TestCase):
     """El laboratorio nombra la credencial; el valor vive en secrets.yml."""
@@ -539,11 +588,18 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertNotIn("s3cr3t", " ".join(op["cmd"]))
         self.assertIn("s3cr3t", op["cuerpo"])
 
-    def test_el_testigo_se_lee_de_la_entrada_y_no_de_la_orden(self):
+    def test_el_testigo_no_se_expande_en_la_orden_y_el_error_http_falla(self):
+        # El testigo se lee de la entrada y llega a `curl` por una cabecera leída de
+        # un descriptor (`-H @/dev/fd/3`): si se expandiera en `-H`, acabaría en los
+        # argumentos de `curl` y `ps` lo vería. Y `--fail-with-body` hace que un
+        # 403/409/500 no se dé por bueno: una alta rechazada no puede parecer correcta.
         cmd = converge.netxms_censo_cmd(self.API)
         self.assertEqual(cmd[:2], ["sh", "-c"])
         self.assertIn("IFS= read -r t", cmd[2])
-        self.assertIn("Bearer $t", cmd[2])
+        self.assertIn("-H @/dev/fd/3", cmd[2])
+        self.assertIn("--fail-with-body", cmd[2])
+        # La cabecera se lee de un descriptor, no se entrecomilla como argumento.
+        self.assertNotIn('Bearer "', cmd[2])
         self.assertIn("/objects/search", cmd[2])
 
     def test_el_censo_pregunta_solo_por_equipos(self):

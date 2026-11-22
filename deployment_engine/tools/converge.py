@@ -487,6 +487,7 @@ for p in {packages}; do
 done
 for s in {services}; do
   echo "SVC:$s:$(systemctl is-active "$s" 2>/dev/null || true)"
+  echo "SVC_ENABLED:$s:$(systemctl is-enabled "$s" 2>/dev/null || true)"
 done
 for f in /etc/apt/sources.list.d/*.list; do
   [ -e "$f" ] || continue
@@ -495,6 +496,7 @@ done
 for f in {files}; do
   if [ -f "$f" ]; then
     echo "FILE:$f:$(sha256sum "$f" | cut -d' ' -f1)"
+    echo "MODE:$f:$(stat -c '%a' "$f")"
   else
     echo "FILE:$f:-"
   fi
@@ -539,14 +541,18 @@ def linux_state(text: str) -> dict:
     """
     import base64
 
-    state = {"hostname": "", "packages": {}, "services": {}, "repositories": {},
-             "files": {}, "commands": {}, "stamps": {}}
+    state = {"hostname": "", "packages": {}, "services": {}, "enabled": {},
+             "repositories": {}, "files": {}, "modes": {}, "commands": {},
+             "stamps": {}}
     for linea in (text or "").splitlines():
         if linea.startswith("HOST:"):
             state["hostname"] = linea[5:].strip()
         elif linea.startswith("PKG:"):
             _, nombre, valor = linea.split(":", 2)
             state["packages"][nombre] = valor.strip() == "1"
+        elif linea.startswith("SVC_ENABLED:"):
+            _, nombre, valor = linea.split(":", 2)
+            state["enabled"][nombre] = valor.strip()
         elif linea.startswith("SVC:"):
             _, nombre, valor = linea.split(":", 2)
             state["services"][nombre] = valor.strip()
@@ -556,6 +562,11 @@ def linux_state(text: str) -> dict:
                 state["repositories"][nombre] = base64.b64decode(valor.strip()).decode("utf-8", "replace")
             except Exception:  # noqa: BLE001 - una línea rota no debe tumbar el plan
                 state["repositories"][nombre] = ""
+        elif linea.startswith("MODE:"):
+            # La ruta puede llevar `:`, así que se parte por el último separador.
+            resto = linea[5:]
+            ruta, _, modo = resto.rpartition(":")
+            state["modes"][ruta] = modo.strip()
         elif linea.startswith("FILE:"):
             # La ruta puede llevar `:`, así que se parte por el último separador.
             resto = linea[5:]
@@ -603,6 +614,26 @@ def _repo_script(repo: dict) -> str:
 def _sha256(content: str) -> str:
     """La huella del contenido declarado, que es lo que se compara con el fichero."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _modo_igual(fichero: dict, current: dict) -> bool:
+    """¿El fichero tiene, además del contenido, los permisos declarados?
+
+    El contenido y los permisos son cosas distintas: un fichero con el contenido
+    correcto pero el modo cambiado —un ayudante al que alguien quitó el bit de
+    ejecución— pasaba por bueno y nunca se corregía. Si la declaración no fija
+    `mode`, los permisos no se tocan. `stat -c %a` y el modo declarado son ambos
+    octales; se comparan como número para que `0755` y `755` sean el mismo.
+    """
+    if not fichero.get("mode"):
+        return True
+    tiene = (current.get("modes") or {}).get(fichero["path"])
+    if tiene is None:
+        return False
+    try:
+        return int(str(fichero["mode"]).strip(), 8) == int(str(tiene).strip(), 8)
+    except ValueError:
+        return False
 
 
 def _file_script(fichero: dict) -> str:
@@ -697,7 +728,8 @@ def linux_ops(node: dict, current: dict, credenciales: dict | None = None) -> li
     # configuración que aún no está escrita falla y se queda en bucle de reinicio.
     for fichero in configure.get("files") or []:
         esperado = _sha256(fichero["content"])
-        if (current.get("files") or {}).get(fichero["path"]) == esperado:
+        if ((current.get("files") or {}).get(fichero["path"]) == esperado
+                and _modo_igual(fichero, current)):
             continue
         ops.append({
             "cmd": _sh(_file_script(fichero)),
@@ -750,10 +782,17 @@ def linux_ops(node: dict, current: dict, credenciales: dict | None = None) -> li
             "secret": nombre,
         })
 
+    habilitado_ahora = current.get("enabled") or {}
     for service, activo in sorted((configure.get("services") or {}).items()):
-        quiere = "active" if activo else "inactive"
-        tiene = servicios_ahora.get(service, "unknown")
-        if tiene == quiere:
+        # Arrancar y arrancar-al-iniciar son dos cosas distintas: un servicio
+        # activo pero deshabilitado no recibía `enable` y uno parado pero
+        # habilitado no recibía `disable`, así que se quedaba mal para siempre.
+        # Se comparan las dos.
+        quiere_activo = "active" if activo else "inactive"
+        tiene_activo = servicios_ahora.get(service, "unknown")
+        quiere_arranque = "enabled" if activo else "disabled"
+        tiene_arranque = habilitado_ahora.get(service, "unknown")
+        if tiene_activo == quiere_activo and tiene_arranque == quiere_arranque:
             continue
         # `restart` y no `start`: un servicio que ya está en bucle de reinicio por
         # una configuración mala no vuelve a leerla con un `start`; con `restart`
@@ -765,7 +804,7 @@ def linux_ops(node: dict, current: dict, credenciales: dict | None = None) -> li
         ops.append({"cmd": comando,
                     "effect": f"servicio {service} {'al alta' if activo else 'de baja'}",
                     "check": ["systemctl", "is-active", service],
-                    "want": quiere})
+                    "want": quiere_activo})
 
     identidad = node["name"]
     if identidad and identidad != current.get("hostname"):
@@ -892,7 +931,14 @@ def netxms_cmd(api: str, ruta: str) -> list:
     suyo— y ni él ni el cuerpo aparecen en la línea de órdenes, donde los vería `ps`.
     """
     return _sh(
-        'IFS= read -r t; curl -sS -H "Authorization: Bearer $t" '
+        # El testigo se lee de la entrada y se entrega a `curl` por una cabecera
+        # leída de un descriptor (`-H @/dev/fd/3`): así no se expande en la línea
+        # de órdenes y `ps` no lo ve. `--fail-with-body` hace fallar un 4xx/5xx en
+        # vez de darlo por bueno: un alta rechazada no puede parecer correcta.
+        "IFS= read -r t; exec 3<<EOF\n"
+        "Authorization: Bearer $t\n"
+        "EOF\n"
+        "curl -sS --fail-with-body -H @/dev/fd/3 "
         f"-H 'Content-Type: application/json' -d @- {api}{ruta}"
     )
 
