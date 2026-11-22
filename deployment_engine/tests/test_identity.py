@@ -457,7 +457,8 @@ class Documentacion(unittest.TestCase):
         # las redes como áreas translúcidas) y qué puerto va con qué puerto (cableado,
         # con texto en la arista). Los dos en `flowchart TB`: N-S arriba-abajo.
         self.assertEqual(texto.count("```mermaid\nflowchart TB"), 2)
-        self.assertIn('n_rte1["📡 rte1<br/>p1, p2"]', texto)
+        # El router es un círculo, sin emoji: la forma dice la clase.
+        self.assertIn('n_rte1(("rte1<br/>p1, p2"))', texto)
         # El cable dice sus dos puntas sin haber que mirar la tabla.
         self.assertIn("rte1p1 ↔ wsp1p1", texto)
         # El diagrama es código dentro de la página: ni imagen enlazada ni fichero aparte.
@@ -478,15 +479,21 @@ class Documentacion(unittest.TestCase):
         self.assertEqual(len(re.findall(r"subgraph red\d+\[", topologia)), len(lab["networks"]))
         for net in lab["networks"]:
             self.assertIn(identity._subred(net["address"]), topologia)
-        # Todos los equipos aparecen en el plano; ninguno inventado.
-        dibujados = set(re.findall(r"(?m)^\s+(\w+)[\[(]", topologia))
+        # Todos los equipos aparecen en el plano; ninguno inventado. `internet` no es
+        # un equipo del laboratorio: es el borde por el que se sale, y va aparte.
+        dibujados = set(re.findall(r"(?m)^\s+(\w+)[\[(]", topologia)) - {"internet"}
         self.assertEqual(dibujados, nodos)
-        self.assertEqual(set(re.findall(r"(?m)^\s+(\w+)\[", cableado)), nodos)
+        self.assertEqual(set(re.findall(r"(?m)^\s+(\w+)[\[(]", cableado)), nodos)
 
-        # Topología: una arista por `after`. Cableado: una por cable.
+        # Topología: una arista por `after`, más una por cada puerta de salida a
+        # Internet. Cableado: una por cable. Ninguna con flecha: el plano no inventa
+        # un sentido de tráfico.
         patas = sum(len(n.get("after") or []) for n in lab["nodes"])
-        self.assertEqual(len(re.findall(r"-->", topologia)), patas)
-        aristas = re.findall(r"(\w+) -->\|([^|]+)\| (\w+)", cableado)
+        salidas = sum(1 for n in lab["nodes"] if identity._profundidad(lab)[n["role"]] == 0)
+        self.assertEqual(len(re.findall(r" --- ", topologia)), patas + salidas)
+        self.assertNotIn("-->", topologia)
+        self.assertNotIn("-->", cableado)
+        aristas = re.findall(r"(\w+) ---\|([^|]+)\| (\w+)", cableado)
         self.assertEqual(len(aristas), len(lab["links"]))
         # El cableado baja: la punta de arriba es la menos profunda.
         profundidad = {identity._id(rol): d for rol, d in identity._profundidad(lab).items()}
@@ -510,9 +517,9 @@ class Documentacion(unittest.TestCase):
                "links": [{"a": {"node": "r", "port": 1}, "z": {"node": "s", "port": 1}},
                          {"a": {"node": "s", "port": 2}, "z": {"node": "h", "port": 1}}]}
         lineas = identity._mermaid_cableado(lab)
-        self.assertIn('    n_s["🔀 s<br/>p1, p2"]', lineas)
-        self.assertEqual([l.strip() for l in lineas if " -->|" in l],
-                         ["n_r -->|rp1 ↔ sp1| n_s", "n_s -->|sp2 ↔ hp1| n_h"])
+        self.assertIn('    n_s{{"s<br/>p1, p2"}}', lineas)
+        self.assertEqual([l.strip() for l in lineas if " ---|" in l],
+                         ["n_r ---|rp1 ↔ sp1| n_s", "n_s ---|sp2 ↔ hp1| n_h"])
 
 
 if __name__ == "__main__":

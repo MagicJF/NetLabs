@@ -12,36 +12,63 @@ Address spaces: `10.46.0.0/16`
 
 ```mermaid
 flowchart TB
-    classDef red0 fill:#3b82f6,fill-opacity:0.15,stroke:#3b82f6,stroke-width:2px,color:#0f172a
-    subgraph red0["lan · 10.46.1.x/24"]
+    classDef contorno fill:#f5f0e6,fill-opacity:0.55,stroke:#a8a29e,stroke-width:2px,color:#0f172a
+    classDef red fill:#3b82f6,fill-opacity:0.12,stroke:#1d4ed8,stroke-width:2px,color:#0f172a
+    classDef equipo fill:#ffffff,stroke:#1d4ed8,stroke-width:1px,color:#0f172a
+    classDef puerta fill:#ffffff,stroke:#1d4ed8,stroke-width:2px,color:#0f172a
+    classDef internet fill:#f8fafc,stroke:#475569,stroke-width:2px,color:#0f172a
+    internet(["Internet"])
+    class internet internet
+    subgraph contorno["c_enrutar_y_conmutar · 10.46.x.x/16"]
         direction TB
-        n_rte1(("📡 rte1<br/>10.46.1.1/24"))
-        n_swc1["🔀 swc1"]
-        n_swa1["🔀 swa1"]
-        n_wsp1["🖥️ wsp1<br/>dhcp"]
-        n_wsp2["🖥️ wsp2<br/>dhcp"]
+        subgraph red0["lan · 10.46.1.x/24"]
+            direction TB
+            n_rte1(("rte1<br/>10.46.1.1/24"))
+            class n_rte1 puerta
+            n_swc1{{"swc1"}}
+            class n_swc1 equipo
+            n_swa1{{"swa1"}}
+            class n_swa1 equipo
+            n_wsp1["wsp1<br/>dhcp"]
+            class n_wsp1 equipo
+            n_wsp2["wsp2<br/>dhcp"]
+            class n_wsp2 equipo
+        end
+        class red0 red
     end
-    class red0 red0
-    n_rte1 --> n_swc1
-    n_swc1 --> n_swa1
-    n_swa1 --> n_wsp1
-    n_swa1 --> n_wsp2
+    class contorno contorno
+    internet --- n_rte1
+    n_rte1 --- n_swc1
+    n_swc1 --- n_swa1
+    n_swa1 --- n_wsp1
+    n_swa1 --- n_wsp2
 ```
+
+*`c_enrutar_y_conmutar` · 10.46.x.x/16 — círculo: router; hexágono: switch; rectángulo: host; arista sin flecha: jerarquía declarada.*
 
 ### Cableado (L2)
 
 ```mermaid
 flowchart TB
-    n_rte1["📡 rte1<br/>p1"]
-    n_swc1["🔀 swc1<br/>p1, p2"]
-    n_swa1["🔀 swa1<br/>p1, p2, p3"]
-    n_wsp1["🖥️ wsp1<br/>p1"]
-    n_wsp2["🖥️ wsp2<br/>p1"]
-    n_rte1 -->|rte1p1 ↔ swc1p1| n_swc1
-    n_swc1 -->|swc1p2 ↔ swa1p1| n_swa1
-    n_swa1 -->|swa1p2 ↔ wsp1p1| n_wsp1
-    n_swa1 -->|swa1p3 ↔ wsp2p1| n_wsp2
+    classDef equipo fill:#ffffff,stroke:#1d4ed8,stroke-width:1px,color:#0f172a
+    classDef puerta fill:#ffffff,stroke:#1d4ed8,stroke-width:2px,color:#0f172a
+    n_rte1(("rte1<br/>p1"))
+    class n_rte1 puerta
+    n_swc1{{"swc1<br/>p1, p2"}}
+    class n_swc1 equipo
+    n_swa1{{"swa1<br/>p1, p2, p3"}}
+    class n_swa1 equipo
+    n_wsp1["wsp1<br/>p1"]
+    class n_wsp1 equipo
+    n_wsp2["wsp2<br/>p1"]
+    class n_wsp2 equipo
+    n_rte1 ---|rte1p1 ↔ swc1p1| n_swc1
+    n_swc1 ---|swc1p2 ↔ swa1p1| n_swa1
+    n_swa1 ---|swa1p2 ↔ wsp1p1| n_wsp1
+    n_swa1 ---|swa1p3 ↔ wsp2p1| n_wsp2
 ```
+
+*`c_enrutar_y_conmutar` · 10.46.x.x/16 — cada arista dice las dos puntas que une; arriba lo que da salida a Internet.*
 
 ### Networks
 

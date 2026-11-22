@@ -177,11 +177,18 @@ dice las dos puntas que une). Los dos son **código**: bloques `` ```mermaid `` 
 `.md`, sin PNG ni SVG generados ni guardados. Un diagrama es una línea más del documento: se lee,
 se compara y se revisa en el diff como cualquier otra. Los dos van en `flowchart TB` —no en
 `architecture-beta`— porque allí las áreas no admiten color ni transparencia, ni texto en la
-arista, y aquí hacen falta las tres cosas: el color distingue una red de otra, el nombre y la
-numeración van en el área, y cada cable dice sus dos puertos. El sentido es N-S: arriba lo que
-da salida y abajo lo más cerrado, con los equipos del mismo nivel alineados en la franja E-O.
-Un diagrama que no sale de la declaración no se dibuja: se pudre el primero que alguien cambie
-algo a mano.
+arista, y aquí hacen falta las tres cosas.
+
+El plano se dibuja como un plano de red, no como un organigrama: primero el contorno del
+laboratorio, dentro las redes como áreas translúcidas, y **fuera del contorno** el borde por el
+que se sale a Internet. Un solo color para todas las redes —el color dice «esto es una red», no
+«esta red es distinta»; separarlas es trabajo del nombre y del sitio en el plano—. La clase de
+equipo la dice la forma, no un emoji: círculo el router, hexágono el switch, rectángulo el host.
+Las aristas van **sin flecha**: la jerarquía se lee de arriba abajo y una punta sugeriría un
+tráfico que nadie declaró. El sentido es N-S —arriba lo que da salida y abajo lo más cerrado—,
+con los equipos del mismo nivel alineados en la franja E-O. Debajo de cada bloque va el pie de
+figura: qué se está mirando y la clave de formas. Un diagrama que no sale de la declaración no
+se dibuja: se pudre el primero que alguien cambie algo a mano.
 
 *Evita:* el documento que describe un sistema que ya no existe.
 
