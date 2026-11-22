@@ -456,7 +456,8 @@ class Documentacion(unittest.TestCase):
         # Dos dibujos sacados de la declaración: quién está en qué red (topología, con
         # las redes como áreas translúcidas) y qué puerto va con qué puerto (cableado,
         # con texto en la arista). Los dos en `flowchart TB`: N-S arriba-abajo.
-        self.assertEqual(texto.count("```mermaid\nflowchart TB"), 2)
+        self.assertEqual(texto.count("```mermaid\n"), 2)
+        self.assertEqual(texto.count("flowchart TB"), 2)
         # El router es un círculo, sin emoji: la forma dice la clase.
         self.assertIn('n_rte1(("rte1<br/>p1, p2"))', texto)
         # El cable dice sus dos puntas sin haber que mirar la tabla.
@@ -470,7 +471,7 @@ class Documentacion(unittest.TestCase):
         """Ni un servicio inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""
         lab = laboratorio()
         texto = identity.render_docs(lab, entorno())
-        bloques = re.findall(r"```mermaid\nflowchart TB\n(.*?)```", texto, re.S)
+        bloques = re.findall(r"```mermaid\n.*?flowchart TB\n(.*?)```", texto, re.S)
         self.assertEqual(len(bloques), 2)
         topologia, cableado = bloques
 
