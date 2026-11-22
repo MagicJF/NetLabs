@@ -21,6 +21,19 @@
   tasks:
     - include_tasks: ../tasks/world.yml
 
+    # El laboratorio de control no es un laboratorio efímero: su invitado es el
+    # servicio persistente que observa el sitio (NetXMS), con su base y su histórico,
+    # y sobrevive a cualquier destroy (docs/diseno.md §2.4, §3.4-§3.5). Su pool se
+    # llama como él, así que sin esta puerta se seleccionaría como propio y se
+    # borraría con purge. Se rechaza ANTES de tocar nada.
+    - name: destroy · el servicio persistente no se destruye desde aquí
+      ansible.builtin.assert:
+        that: lab.kind | default('topology') != 'control'
+        fail_msg: >-
+          `{{ lab.lab }}` es el laboratorio de control (kind: control) y su invitado es el
+          servicio persistente: no es un laboratorio efímero y no se retira desde la
+          herramienta. Lo persistente sobrevive a los destroy de los demás.
+
     - name: destroy · calcular qué es de este laboratorio
       ansible.builtin.set_fact:
         pool: "{{ lab.lab }}"
