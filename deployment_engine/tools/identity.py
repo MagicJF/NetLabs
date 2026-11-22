@@ -757,9 +757,16 @@ def _rutas(lab: dict, nodes: list[dict]) -> list[dict]:
     tener su primera dirección en otro sitio y seguir siendo el salto.
 
     Un espacio sin ningún router dentro no se puede alcanzar desde la gestión: no
-    se inventa un salto ni se calla — el plan lo dice. Y el salto de prueba es la
-    primera pata del router que cae dentro del espacio: si no responde desde la
-    gestión, o falta la ruta o el router no deja pasar.
+    se inventa un salto ni se calla — el plan lo dice.
+
+    Lo que se sondea para saber que el cruce está abierto es una dirección
+    **detrás** del router —una pata declarada de otro equipo dentro del mismo
+    espacio—, porque es lo único que demuestra que el router reenvía. Cuando no
+    hay ninguna declarada (los puestos toman dirección por DHCP, y una dirección
+    prestada no se declara), se sondea la pata del router y se dice que se
+    comprobó el **salto**, no la red: el router responde a su propio ping aunque
+    no deje pasar nada, y dar el salto por la red es declarar visto un
+    laboratorio que puede seguir siendo un agujero negro.
     """
     routers = [n for n in nodes if n["type"] == "router" and n.get("management")]
     rutas = []
@@ -773,14 +780,23 @@ def _rutas(lab: dict, nodes: list[dict]) -> list[dict]:
                 break
         if salto is None:
             continue
-        router, prueba = salto
+        router, pata = salto
+        detras = None
+        for node in nodes:
+            if node is router:
+                continue
+            detras = next((d for d in _patas(node) if _dentro(d, red)), None)
+            if detras is not None:
+                break
         rutas.append({
             "space": str(red),
             "via": router["mgmt_address"],
             "role": router["role"],
-            # La dirección que se sondea para saber que el cruce está abierto: la
-            # primera pata del router dentro del espacio.
-            "prueba": str(ipaddress.ip_interface(prueba).ip),
+            # La dirección que se sondea para saber que el cruce está abierto, y
+            # hasta dónde llega esa comprobación: la red (hay algo detrás del
+            # router) o sólo el salto.
+            "prueba": str(ipaddress.ip_interface(detras or pata).ip),
+            "alcance": "red" if detras is not None else "salto",
         })
     return rutas
 
@@ -865,9 +881,14 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     # agujero negro: se despliega y no se ve.
     rutas = [] if control else _rutas(lab, nodes)
     for ruta in rutas:
+        # El plan dice hasta dónde llega la comprobación: con una dirección declarada
+        # detrás del router se prueba la red; sin ella, sólo el salto, y decirlo es lo
+        # que evita dar por visto un laboratorio que puede seguir siendo un agujero negro.
+        comprobacion = ("se comprueba la red" if ruta["alcance"] == "red"
+                        else "sólo hay dirección del router: se comprueba el salto")
         effects.append(
             f"ruta {ruta['space']} -> {ruta['via']} ({ruta['role']}): la red del "
-            "laboratorio, vista desde la gestión"
+            f"laboratorio, vista desde la gestión — {comprobacion}"
         )
     con_router = {r["space"] for r in rutas}
     for espacio in lab.get("address_spaces") or []:
@@ -1230,8 +1251,11 @@ def _check_foreign_spaces(world: dict, lab: dict, env: dict) -> None:
 def _lab_from_comment(comment: str):
     # El nombre de un laboratorio lleva guion bajo (`b_router_dos_puestos`) y la letra
     # por la que empieza: si la marca se partiera en la primera palabra, el laboratorio
-    # no se reconocería a sí mismo y se tomaría por otro con el mismo espacio.
-    match = re.search(r"netlabs\s+lab=([A-Za-z0-9][A-Za-z0-9_-]*)", comment)
+    # no se reconocería a sí mismo y se tomaría por otro con el mismo espacio. El
+    # patrón es el de un nombre válido (`LAB_NAME_RE`: minúsculas, una letra inicial y
+    # guion bajo), no uno más ancho: una marca como `lab=a_x-space=...` contaría como
+    # un laboratorio distinto, y esto decide qué puentes se retiran en `bridge_destroy`.
+    match = re.search(r"netlabs\s+lab=([a-z][a-z0-9_]*)", comment)
     return match.group(1) if match else None
 
 

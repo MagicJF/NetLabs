@@ -396,7 +396,7 @@ class LasRutas(unittest.TestCase):
         nodes = [self.nodo("rte1", "router", "10.44.1.1/24", "10.30.0.104")]
         self.assertEqual(identity._rutas(lab, nodes),
                          [{"space": "10.44.0.0/16", "via": "10.30.0.104",
-                           "role": "rte1", "prueba": "10.44.1.1"}])
+                           "role": "rte1", "prueba": "10.44.1.1", "alcance": "salto"}])
         # El salto es la dirección de gestión: por la del laboratorio no se llega
         # desde la red de gestión, que es de donde sale todo lo que observa.
         self.assertNotEqual(identity._rutas(lab, nodes)[0]["via"], "10.44.1.1")
@@ -427,7 +427,18 @@ class LasRutas(unittest.TestCase):
         ]}
         self.assertEqual(identity._rutas(lab, [router]),
                          [{"space": "10.44.0.0/16", "via": "10.30.0.104",
-                           "role": "rte1", "prueba": "10.44.1.1"}])
+                           "role": "rte1", "prueba": "10.44.1.1", "alcance": "salto"}])
+
+    def test_se_sondea_una_direccion_detras_del_router_cuando_se_declara(self):
+        # El router contesta a su propia pata aunque no reenvíe hacia atrás. Si el
+        # laboratorio declara una dirección **detrás** de él —otra pata, dentro del mismo
+        # espacio—, esa es la que se sondea: es lo único que demuestra que reenvía.
+        lab = {"address_spaces": ["10.44.0.0/16"]}
+        router = self.nodo("rte1", "router", "10.44.1.1/24", "10.30.0.104")
+        puesto = self.nodo("wsp1", "workstation", "10.44.1.50/24", None, management=False)
+        self.assertEqual(identity._rutas(lab, [router, puesto]),
+                         [{"space": "10.44.0.0/16", "via": "10.30.0.104", "role": "rte1",
+                           "prueba": "10.44.1.50", "alcance": "red"}])
 
     def test_un_espacio_sin_router_no_inventa_salto(self):
         lab = {"address_spaces": ["10.44.0.0/16", "10.99.0.0/16"]}
@@ -439,8 +450,11 @@ class LasRutas(unittest.TestCase):
         rte1 = next(n for n in plan["nodes"] if n["role"] == "rte1")
         self.assertEqual(plan["rutas"],
                          [{"space": "10.44.0.0/16", "via": rte1["mgmt_address"],
-                           "role": "rte1", "prueba": "10.44.1.1"}])
+                           "role": "rte1", "prueba": "10.44.1.1", "alcance": "salto"}])
         self.assertTrue([e for e in plan["effects"] if "vista desde la gestión" in e])
+        # El plan dice hasta dónde llega la comprobación: sin dirección detrás del
+        # router, lo que se comprueba es el salto, no la red.
+        self.assertTrue([e for e in plan["effects"] if "se comprueba el salto" in e])
         # Las rutas viven dentro del invitado de gestión: el plan no las puede leer
         # sin entrar, así que las declara como trabajo pendiente.
         self.assertEqual([s["op"] for s in plan["steps"] if s["op"] == "rutas_converge"],

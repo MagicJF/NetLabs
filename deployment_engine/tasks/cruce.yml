@@ -4,7 +4,10 @@
 #              para en vez de seguir.
 # INVARIANTES: se sondea con tope, y el tope va dentro del script porque `until` no es
 #              válido sobre un `include_tasks` (medido). Un silencio no es un verde.
-#              Si no responde, se dice la ruta que falta y el router que no contesta.
+#              Lo que se sondea y lo que eso demuestra se dice: una dirección declarada
+#              **detrás** del router prueba que la red se alcanza; la pata del propio
+#              router sólo prueba que el salto responde, y no se da por visto lo que no
+#              se ha comprobado.
 # VER:         docs/diseno.md §4.2, §4.3
 
 - name: "cruce · {{ cruce.space }} desde la gestión"
@@ -18,12 +21,35 @@
     interior_falla: false
     comando: "{{ cruce | netlabs_cruce_cmd }}"
 
+# El router contesta a su propia pata aunque no reenvíe nada hacia atrás, así que sin
+# una dirección declarada detrás de él lo comprobado es el salto, no la red. Se dice en
+# vez de llamarlo «la red»: un cruce dado por abierto que no lo está deja el
+# laboratorio desplegado y un agujero negro que nadie mira.
+- name: "cruce · hasta dónde llega la comprobación de {{ cruce.space }}"
+  ansible.builtin.debug:
+    msg: >-
+      {{ cruce.space }}: {{ cruce.role }} responde en {{ cruce.prueba }} desde la
+      gestión, pero no hay ninguna dirección declarada detrás de él —los puestos toman
+      la suya por DHCP, y una dirección prestada no se declara—. Esto demuestra el
+      salto, no que la red posterior sea alcanzable.
+  when:
+    - interior.rc | default(1) | int == 0
+    - cruce.alcance | default('salto') == 'salto'
+
 - name: "cruce · {{ cruce.space }} no responde desde la gestión"
   ansible.builtin.fail:
     msg: >-
-      Desde el invitado de gestión no se llega a {{ cruce.prueba }} —la pata de
-      {{ cruce.role }} dentro de {{ cruce.space }}—. O falta la ruta
-      {{ cruce.space }} por {{ cruce.via }}, o el router no deja pasar el tráfico que
-      viene de la red de gestión. El laboratorio quedaría desplegado y no se vería:
-      no se sigue. {{ interior.stderr | default('') | trim }}
+      Desde el invitado de gestión no se llega a {{ cruce.prueba }} dentro de
+      {{ cruce.space }}. Se sondeó {{ que_se_sondeo }}. O falta la ruta {{ cruce.space }}
+      por {{ cruce.via }}, o el router no deja pasar el tráfico que viene de la red de
+      gestión. El laboratorio quedaría desplegado y no se vería: no se sigue.
+      {{ interior.stderr | default('') | trim }}
+  vars:
+    # Lo que se sondeó y lo que eso demuestra, para que el fallo no prometa más de lo
+    # comprobado. Cada frase va en su propia línea y sin partirse: dentro de una cadena,
+    # un salto de línea se queda en el texto.
+    que_se_sondeo: >-
+      {{ 'una dirección declarada detrás de ' ~ cruce.role ~ ', y llegar a ella demuestra que reenvía'
+         if cruce.alcance | default('salto') == 'red'
+         else 'la pata de ' ~ cruce.role ~ ': el router responde a su propia dirección, y eso no prueba que reenvíe' }}
   when: interior.rc | default(1) | int != 0
