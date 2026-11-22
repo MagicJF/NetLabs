@@ -144,3 +144,23 @@ Están aquí para que no las pagues otra vez. Si encuentras una nueva, añádela
 
 **Un solo fichero de contexto por repositorio.** Este. Nunca un `.hermes.md` al lado: Hermes lo carga
 primero y este quedaría invisible, con lo que las reglas dejarían de aplicarse sin que nadie lo note.
+
+## 9. La puerta del merge
+
+Un PR no entra en `main` porque esté verde en local: entra cuando lo dicen los checks. La
+protección de `main` exige tres cosas y ninguna se puede saltar desde la interfaz:
+
+- **`netlabs check`** — el mismo comando de §5, corriendo en CI (`.github/workflows/verificar.yml`).
+- **`CodeRabbit`** — el check de CodeRabbit (`.coderabbit.yaml`), en español y en perfil `assertive`.
+- **`Greptile Review`** — el check de Greptile (`.greptile/config.json`, `strictness: 3`).
+
+Y además que **no quede ninguna conversación sin resolver**: los dos revisores comentan en el PR,
+y un comentario abierto bloquea el merge aunque los checks estén en verde.
+
+Cómo se itera: se corrigen los hallazgos en la misma rama, se empuja, y los dos revisores vuelven
+a mirar el commit nuevo —Greptile en cada push, CodeRabbit con `@coderabbitai full review` si hizo
+falta pedirlo. Se repite hasta que los dos quedan en verde y sin conversaciones abiertas.
+
+Si un check se queda colgado por una caída de la herramienta, no se desactiva la protección: se
+arregla el check o se quita ese contexto de la lista (`gh api -X PATCH .../protection/required_status_checks`),
+y se deja escrito por qué en el propio PR.
