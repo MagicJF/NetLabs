@@ -1068,5 +1068,67 @@ class ElMapaAtaCadaCableASuInterfaz(unittest.TestCase):
         self.assertIn("/objects/search", converge.netxms_interfaces_cmd("http://x/v1")[2])
 
 
+class LaCuentaDelMapa(unittest.TestCase):
+    """Lo que el mapa dice de sí mismo al escribirse: cuántas puntas quedaron atadas.
+
+    El debug del apply presenta ese número como «interfaces puestas en sus puntas». Contar
+    todas las interfaces que la vista le ha descubierto a cada equipo —`lo`, la de gestión,
+    las de puertos cuyos cables no salen en el mapa— diría de más y no diría cuántas puntas
+    quedaron atadas, que es lo que hay que poder comprobar.
+    """
+
+    API = "http://127.0.0.1:8000/v1"
+    NODOS = [
+        {"role": "rte1", "name": "rte1", "type": "router", "mgmt_address": "10.30.0.101",
+         "networks": ["lan1"]},
+        {"role": "rta1", "name": "rta1", "type": "router", "mgmt_address": "10.30.0.102",
+         "networks": ["lan1"]},
+    ]
+    CENSO = [
+        {"id": 100, "name": "rte1", "ipAddress": {"address": "10.30.0.101"}},
+        {"id": 101, "name": "rta1", "ipAddress": {"address": "10.30.0.102"}},
+    ]
+    # Cada equipo tiene su `lo` y su `ether1`: contar las interfaces descubiertas daría
+    # cuatro; sólo dos puntas —una por extremo del único cable— quedan atadas.
+    FICHAS = [
+        {"id": 100, "class": "Node", "children": [1, 2]},
+        {"id": 101, "class": "Node", "children": [3, 4]},
+    ]
+    INTERFACES = [
+        {"id": 1, "class": "Interface", "name": "lo"},
+        {"id": 2, "class": "Interface", "name": "ether1"},
+        {"id": 3, "class": "Interface", "name": "lo"},
+        {"id": 4, "class": "Interface", "name": "ether1"},
+    ]
+    LAB = {
+        "lab": "z_prueba",
+        "networks": [{"name": "lan1", "address": "10.20.0.0/24"}],
+        "nodes": [
+            {"role": "rte1", "name": "rte1", "type": "router", "networks": ["lan1"]},
+            {"role": "rta1", "name": "rta1", "type": "router", "networks": ["lan1"]},
+        ],
+        "links": [{"a": {"node": "rte1", "port": 1}, "z": {"node": "rta1", "port": 1}}],
+    }
+    SVG = ('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300">'
+           '<g data-area="Núcleo" data-x="10" data-y="10" data-ancho="180" data-alto="120" '
+           'data-subred="10.20.0.0/24" data-nube="0"/>'
+           '<g data-rol="rte1" data-x="60.0" data-y="60.0"/>'
+           '<g data-rol="rta1" data-x="120.0" data-y="60.0"/></svg>')
+
+    def test_la_cuenta_suma_las_puntas_atadas_y_no_todas_las_interfaces(self):
+        plan = converge.netxms_mapa_ops(self.LAB, self.NODOS, self.CENSO, None, self.API,
+                                        "7", self.FICHAS, self.INTERFACES, self.SVG)
+        self.assertEqual(plan["equipos"], 2)
+        self.assertEqual(plan["cables"], 1)
+        # Dos puntas atadas —una por extremo—, no las cuatro interfaces descubiertas.
+        self.assertEqual(plan["interfaces"], 2)
+
+    def test_sin_interfaces_descubiertas_la_cuenta_es_cero_y_el_mapa_se_dibuja(self):
+        plan = converge.netxms_mapa_ops(self.LAB, self.NODOS, self.CENSO, None, self.API,
+                                        "7", [], [], self.SVG)
+        self.assertEqual(plan["interfaces"], 0)
+        self.assertEqual(plan["cables"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

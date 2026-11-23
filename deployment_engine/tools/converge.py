@@ -1537,7 +1537,12 @@ def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: di
         svg = plano.plano(lab, "topologia")
     atadas = netxms_interfaces_de(nodes, censo, fichas, interfaces)
     deseado = mapa.contenido(lab, svg, objetos, atadas)
-    cuantas = sum(len(nombres) for nombres in atadas.values())
+    # Las interfaces que de verdad quedaron atadas: cuántas puntas de los cables generados
+    # traen la interfaz de la que salen. Contar las interfaces que la vista le ha descubierto
+    # a cada equipo diría de más —entran `lo`, la de gestión y las de puertos cuyos cables no
+    # salen en el mapa— y no diría cuántas puntas quedaron atadas, que es lo que se comprueba.
+    cuantas = sum(1 for enlace in deseado["links"] for punta in ("interface1", "interface2")
+                  if int(enlace.get(punta) or 0))
     # Las áreas son las cajas del plano y los rótulos, las cajas de texto: la ficha de cada
     # equipo y el nombre y el bloque de cada zona. Contar por todo lo que no es un equipo y
     # llamarlo «áreas» es contar mal lo que se está mirando.
