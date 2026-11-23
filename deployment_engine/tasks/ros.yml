@@ -36,6 +36,11 @@
   # El arranque acaba de mover la dirección de gestión: el REST puede tardar unos
   # segundos en contestar. Se sondea con tope, no se da por caído al primer intento.
   failed_when: false
+  # Agotar los reintentos marca la tarea como fallida aunque `failed_when` sea falso
+  # (medido, y `ignore_errors` sí vale sobre un `uri`): sin esto, el play se pararía aquí
+  # y la aserción de más abajo —la que dice que no hay camino hasta el router— no llegaría
+  # a hablar, que es justo el mensaje que se pagó una tarde por no tener.
+  ignore_errors: true
   until: ros_login.status in [200, 401]
   retries: 20
   delay: 3
@@ -67,6 +72,9 @@
   register: ros_login_ok
   changed_when: false
   failed_when: false
+  # Lo mismo que en el sondeo de arriba: el tope agotado no puede parar el play antes de
+  # las aserciones, que son las que dicen qué pasó y por dónde mirar.
+  ignore_errors: true
   until: ros_login_ok.status in [200, 401]
   retries: 10
   delay: 3

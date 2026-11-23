@@ -12,11 +12,14 @@
     pve_method: GET
     pve_path: "/nodes/{{ invitado.node }}/{{ invitado.type }}/{{ invitado.vmid }}/config"
     pve_do: "leer el config de {{ invitado.name }} ({{ invitado.vmid }})"
-    # 404 y 500 se aceptan para no tumbar un plan entero porque un invitado se esté
-    # retirando justo entonces; sin config, el plan no compara sus recursos.
+    # 404 se acepta para no tumbar un plan entero porque un invitado ajeno se esté
+    # retirando justo entonces; sin config, el plan no compara sus recursos. Un 500 no es
+    # una desaparición: es el hipervisor diciendo que no pudo leer, y aceptarlo dejaba sin
+    # memoria a un invitado declarado y el plan decía «convergido» sobre una lectura que
+    # no ocurrió. Se para con el cuerpo del error.
     # `failed_when` no vale sobre un include (medido, igual que `until`): los códigos
     # que se aceptan van en `pve_status`, y el resto sigue siendo un fallo con su cuerpo.
-    pve_status: [200, 404, 500]
+    pve_status: [200, 404]
 
 - name: "anotar los recursos escritos de {{ invitado.name }}"
   ansible.builtin.set_fact:

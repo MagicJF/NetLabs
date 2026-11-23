@@ -189,7 +189,7 @@ def cajas_y_equipos(svg):
         for m in re.finditer(
             r'<g data-area="([^"]*)" data-x="([\d.-]+)" data-y="([\d.-]+)" '
             r'data-ancho="([\d.-]+)" data-alto="([\d.-]+)" data-subred="([^"]*)" '
-            r'data-nube="(\d)" data-hijas="(\d)"/>', svg)
+            r'data-nube="(\d)" data-hijas="(\d+)"/>', svg)
     ]
     equipos = [
         {"rol": m.group(1), "x": float(m.group(2)), "y": float(m.group(3))}
@@ -199,13 +199,35 @@ def cajas_y_equipos(svg):
 
 
 def routers_de_borde(lab):
-    """Los equipos con una pata en la nube: son los que van a caballo de su sede."""
-    _, _, cruces, _, _ = montar(laboratorio(lab))
+    """Los equipos con una pata en la nube, con el título de la caja de su sede.
+
+    El título —y no el nombre interno— es lo que el plano escribe en su SVG, y la sede es
+    la red de la pata terrestre: la única caja que ese router puede cabalgar.
+    """
+    # La pata terrestre es la red que declara el laboratorio, no el área que el reparto
+    # acaba envolviendo al router: el plano lo apoya en el borde de la red que conecta.
+    _, _, _, patas, _ = montar(laboratorio(lab))
     salida = []
-    for rol, grupos in cruces.items():
-        if any(g.nube for g in grupos):
-            salida.append((rol, [g for g in grupos if not g.nube][0].nombre))
+    for nodo in laboratorio(lab)["nodes"]:
+        redes = patas.get(nodo["role"]) or []
+        tierra = [r for r in redes if not r.nube]
+        if any(r.nube for r in redes) and tierra:
+            salida.append((nodo["role"], tierra[0].titulo))
     return salida
+
+
+class TestLoQueElPlanoDeclara(unittest.TestCase):
+    def test_una_caja_con_diez_hijas_se_lee_igual_que_una_con_una(self):
+        """El patrón pedía una sola cifra, y un área con diez hijas se caía de la lista.
+
+        Demuestra que la lectura no pierde ninguna caja: lo que no se lee no existe para
+        las pruebas que recorren las áreas, así que la que se perdía no fallaba —se
+        esfumaba— y su geometría dejaba de comprobarse.
+        """
+        svg = ('<g data-area="sede" data-x="1.0" data-y="2.0" data-ancho="3.0" '
+               'data-alto="4.0" data-subred="" data-nube="0" data-hijas="10"/>')
+        areas, _ = cajas_y_equipos(svg)
+        self.assertEqual([a["hijas"] for a in areas], [10])
 
 
 class TestConvenciones(unittest.TestCase):
@@ -241,10 +263,11 @@ class TestConvenciones(unittest.TestCase):
             areas, equipos = cajas_y_equipos(plano.plano(laboratorio(lab), "topologia"))
             por_rol = {e["rol"]: e for e in equipos}
             for rol, sede in routers_de_borde(lab):
-                if rol not in por_rol:
-                    continue
-                e = por_rol[rol]
                 with self.subTest(laboratorio=lab, equipo=rol):
+                    # Sin símbolo no hay nada que comprobar, y saltárselo dejaba la prueba
+                    # pasando por un router de borde que el plano no dibuja.
+                    self.assertIn(rol, por_rol, f"{rol} no tiene símbolo en el plano")
+                    e = por_rol[rol]
                     abajo = [a for a in areas
                              if a["x"] - 0.5 <= e["x"] <= a["x"] + a["ancho"] + 0.5
                              and a["y"] - 0.5 <= e["y"] <= a["y"] + a["alto"] + 0.5]
@@ -253,9 +276,12 @@ class TestConvenciones(unittest.TestCase):
                     # dentro de la red y media fuera. Y no el de la caja que la envuelve.
                     cabalga = [a for a in abajo if abs(a["y"] - e["y"]) <= 1.0]
                     self.assertTrue(cabalga, f"{rol} no está a caballo del techo de su sede")
-                    # Y la caja que cabalga es su sede, no la caja que envuelve la
-                    # empresa: la sede tiene que estar dentro de otra caja.
-                    sede_caja = cabalga[0]
+                    # Y la caja que cabalga es SU sede —la red de su pata terrestre—, no
+                    # otra que también toque ese centro: mirando sólo la primera, la prueba
+                    # pasaba con el router a caballo de una caja que no es la suya.
+                    sede_caja = next((a for a in cabalga if a["titulo"] == sede), None)
+                    self.assertIsNotNone(sede_caja, f"{rol} no cabalga el techo de {sede}")
+                    # Y su sede está dentro de otra caja: la que envuelve la empresa.
                     madres = [a for a in areas if a is not sede_caja
                               and a["x"] < sede_caja["x"] + 1 and a["y"] < sede_caja["y"] - 1
                               and a["x"] + a["ancho"] > sede_caja["x"] + sede_caja["ancho"] - 1

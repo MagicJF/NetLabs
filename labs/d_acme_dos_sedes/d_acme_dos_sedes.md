@@ -185,15 +185,17 @@ Configured areas: `addresses`, `dhcp_server`, `routes`, `services`, `snmp`, `use
   motor no tenía ninguna primitiva que la aplicara: un laboratorio que la declaraba se
   desplegaba sin las rutas y sin decir nada. Se añadió `_route_ops` (crea, corrige el
   salto y retira lo marcado que sobra) con sus pruebas, y aquí es lo que hace que las
-  dos sedes se vean: `ruta 10.40.0.0/16 -> 10.99.0.2` en `rte1` y la simétrica en `rte2`.
-- **Sin switch, un servidor no cabe en un departamento.** Un puerto de router es un
-  cable y no se comparte: para que `svs1` y `wsp2` compartan el segmento de ingeniería
-  de Nueva York hay un switch de acceso (`swa1`, puente `netlabs-ny_ingenieria`). Las
-  demás áreas cuelgan un solo equipo de su puerta.
-- **El tránsito es una red más, no un puente especial.** `10.99.0.0/30` con una pata en
-  cada router; el camino entre sedes es la ruta estática, no un cable compartido.
+  dos sedes se vean: `ruta 10.40.0.0/16 -> 203.0.113.2` en `rte1` y la simétrica en `rte2`.
+- **Sin switch, un departamento no cabe.** Un puerto de router es un cable y no se
+  comparte: cada departamento tiene su switch de acceso (`swa1`…`swa6`) y sus equipos
+  cuelgan de él. En el de ingeniería de Nueva York, `svs1` (el servidor) y `wsp3` comparten
+  el segmento por `swa2` (puente `netlabs-ny_ingenieria`), y en el de ventas `wsp1` y `wsp2`
+  por `swa1`.
+- **El tránsito es una red más, no un puente especial.** `203.0.113.0/30` con una pata en
+  cada router —`rte1` en `.1` y `rte2` en `.2`—; el camino entre sedes es la ruta estática,
+  no un cable compartido.
 - **Los tres espacios se ven desde la gestión**, cada uno con su salto: `10.20.0.0/16`
-  por `rte1`, `10.40.0.0/16` por `rte2` y `10.99.0.0/30` por `rte1`. El cruce de
+  por `rte1`, `10.40.0.0/16` por `rte2` y `203.0.113.0/30` por `rte1`. El cruce de
   `10.20.0.0/16` se comprueba contra `svs1` (dirección declarada), así que dice «red» y
   no «salto».
 - **Medido**: segundo `apply` con `changed=0`; `rte1` alcanza `10.40.55.199` (puesto de

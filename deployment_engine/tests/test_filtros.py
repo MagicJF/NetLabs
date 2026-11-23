@@ -46,13 +46,13 @@ class LasDireccionesVivas(unittest.TestCase):
 
 class LosRecursosEscritos(unittest.TestCase):
     def test_pega_el_config_leido_y_respeta_el_que_no_lo_tiene(self):
-        mundo = {"guests": [{"vmid": 100, "cores": 1}, {"vmid": 101, "cores": 4}]}
+        mundo = {"invitados": [{"vmid": 100, "cores": 1}, {"vmid": 101, "cores": 4}]}
         salida = filtros.netlabs_con_config(mundo, {"100": {"cores": 2, "memory": 2048}})
-        self.assertEqual(salida["guests"][0]["config_cores"], 2)
-        self.assertEqual(salida["guests"][0]["config_memory"], 2048)
+        self.assertEqual(salida["invitados"][0]["config_cores"], 2)
+        self.assertEqual(salida["invitados"][0]["config_memory"], 2048)
         # El que no tiene config leído se queda con lo que dijo el clúster.
-        self.assertNotIn("config_cores", salida["guests"][1])
-        self.assertNotIn("config_memory", salida["guests"][1])
+        self.assertNotIn("config_cores", salida["invitados"][1])
+        self.assertNotIn("config_memory", salida["invitados"][1])
 
 
 if __name__ == "__main__":

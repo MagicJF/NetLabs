@@ -389,7 +389,11 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
                 str(ruta.get("gateway", "")).split("%")[0])
 
     es_dinamica = lambda r: str(r.get("dynamic", "false")).lower() in ("true", "yes")
-    estaticas = [r for r in actuales or [] if not es_dinamica(r)]
+    # El área administra la tabla `main`: una ruta de otra tabla (`backup`, o la que
+    # declare una regla de enrutado) no la consulta este tráfico, así que no satisface
+    # una declarada, no compite con ella y no se retira. Se queda fuera del área entera.
+    es_main = lambda r: str(r.get("routing-table") or "main") == "main"
+    estaticas = [r for r in actuales or [] if not es_dinamica(r) and es_main(r)]
     propias = [r for r in estaticas
                if str(r.get("comment", "")).startswith(PREFIX)]
 
@@ -423,7 +427,13 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
     # rutas al mismo destino con saltos distintos son dos rutas, y si las dos reclamaran
     # la misma entrada cada pasada le cambiaría el salto a la otra y no convergería.
     sin_reclamar = list(propias)
-    for red, via in deseadas:
+    # Se reservan PRIMERO las coincidencias exactas de todas las declaradas, antes de
+    # corregir ninguna. Con dos saltos declarados (A, B) y sólo la entrada propia por B,
+    # corregir en el orden declarado tomaba la de B para A y luego volvía a crear B: un
+    # PATCH y un PUT donde basta un PUT, y si el PUT falla el equipo pierde el salto que
+    # ya tenía. Reservando, cada declarada encuentra la suya o se crea.
+    exactas: list = [None] * len(deseadas)
+    for i, (red, via) in enumerate(deseadas):
         # Una ruta ajena ENCENDIDA al mismo destino y por un salto que el laboratorio no
         # declara compite con la declarada —RouterOS se queda con la de menos distancia y,
         # a distancias iguales, reparte el tráfico— y el motor no puede retirarla: se dice.
@@ -437,13 +447,14 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
                 "puede poner la que declara el laboratorio. Se retira a mano o se cambia "
                 "el destino declarado"
             )
-        # La propia se reclama ANTES de mirar las ajenas: aunque fuera haya una ruta al
-        # mismo destino y salto, la del motor es la que el laboratorio sostiene, y darla
-        # por puesta con la ajena dejaría que el barrido final borrara la propia —una que
-        # alguien apagó fuera no puede llevarse por delante la que el motor mantiene—.
         igual = next((r for r in sin_reclamar if clave(r) == (red, via)), None)
         if igual is not None:
             sin_reclamar.remove(igual)
+            exactas[i] = igual
+
+    for i, (red, via) in enumerate(deseadas):
+        igual = exactas[i]
+        if igual is not None:
             # Una ruta propia apagada no lleva tráfico: declararla es quererla en uso, y
             # una que alguien apagó a mano no puede quedarse así para siempre mientras el
             # laboratorio siga declarándola —las sedes se quedarían sin comunicación y
@@ -1300,10 +1311,14 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
     pendiente, porque el API de esta versión sólo las acepta al crear el equipo.
     """
     por_nombre: dict = {}
+    por_ip: dict = {}
     for objeto in encontrados or []:
         nombre_visto = str(objeto.get("name") or "").strip()
         if nombre_visto:
             por_nombre.setdefault(nombre_visto, []).append(objeto)
+        suya = str((objeto.get("ipAddress") or {}).get("address") or "")
+        if suya:
+            por_ip.setdefault(suya, []).append(objeto)
     leidos: dict = {}
     for detalle in detalles or []:
         if isinstance(detalle, dict) and detalle.get("id") is not None:
@@ -1317,43 +1332,65 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
                            else {str(n.get("mgmt_address")) for n in nodes or []
                                  if n.get("mgmt_address")})
 
+    def marca_de(node: dict) -> str:
+        """La marca que el motor escribe en el comentario del equipo, si es suya.
+
+        Compartir nombre y que la dirección la tenga hoy un invitado de este laboratorio
+        no demuestra quién creó el registro: el asignador puede reutilizar un vmid y su
+        dirección para un puesto de otro laboratorio, y entonces el histórico de aquél
+        cae dentro de lo que parece de éste. La marca que se escribe al crear el equipo
+        sí lo dice, y sin ella el registro se conserva y se informa.
+        """
+        descripcion = str(node.get("description") or "")
+        return descripcion if descripcion.startswith("netlabs lab=") else ""
+
     # Las retiradas van ANTES que las altas, todas juntas: un equipo viejo puede estar
     # ocupando la dirección del que hay que dar de alta —el API contesta 409 si la
     # dirección ya es de otro—, y las retiradas se descubren al recorrer los equipos,
     # así que en un solo recorrido la del último llegaría después del alta del primero.
+    #
+    # Se hace en dos pasadas —primero las retiradas, después las altas— por la misma
+    # razón llevada al plan: la segunda pasada sabe qué direcciones va a liberar la
+    # primera y no toma por ocupada una que este mismo `apply` deja libre.
     borrados: list[dict] = []
-    altas: list[dict] = []
+    retirados: set[int] = set()
     pendientes: list[str] = []
+    equipos: list[tuple[dict, list[dict], dict | None]] = []
     for node in nodes or []:
         direccion = node.get("mgmt_address")
         if not direccion:
             continue
         nombre = node.get("name") or node.get("role")
-        usuario = _declared_user(node) or "admin"
-        clave = ros_clave(node, secrets or {})
         candidatos = por_nombre.get(str(nombre), [])
         objeto = next(
             (o for o in candidatos
              if str((o.get("ipAddress") or {}).get("address")) == str(direccion)), None)
+        equipos.append((node, candidatos, objeto))
 
         # Los que llevan el mismo nombre y no son este equipo: o son restos de este
         # laboratorio —una máquina suya que ya no es la que dicen—, o son de otro
         # laboratorio. Compartir nombre no basta para saberlo: sólo se retira lo que se
-        # puede demostrar de aquí, es decir, un objeto que apunta a una dirección que hoy
-        # tiene un invitado de este laboratorio. Un objeto que apunta a una dirección que
-        # ya no tiene nadie puede ser el histórico de un laboratorio destruido, y eso no
-        # se borra (AGENTS.md §3.6): se dice y lo retira una persona si es un resto.
+        # puede demostrar de aquí, es decir, un objeto con la marca de este laboratorio
+        # que apunta a una dirección que hoy tiene un invitado suyo. Un objeto que apunta
+        # a una dirección que ya no tiene nadie puede ser el histórico de un laboratorio
+        # destruido, y eso no se borra (AGENTS.md §3.6): se dice y lo retira una persona
+        # si es un resto.
         for sobrante in candidatos:
             if sobrante is objeto:
                 continue
             suya = str((sobrante.get("ipAddress") or {}).get("address") or "")
-            if suya in direcciones_del_lab:
+            ficha = leidos.get(int(sobrante["id"])) or {}
+            suya_de_aqui = (marca_de(node)
+                            and marca_de(node) in str(ficha.get("comments") or ""))
+            if suya_de_aqui and suya in direcciones_del_lab:
                 borrados.append({
                     "cmd": netxms_borrar_cmd(api, sobrante["id"]),
                     "cuerpo": "",
                     "effect": (f"retirar {nombre}, que apuntaba a {suya} "
                                f"y ya no es esa máquina"),
                 })
+                if sobrante.get("id") is not None:
+                    retirados.add(int(sobrante["id"]))
             elif suya not in vivas_set:
                 pendientes.append(
                     f"{nombre}: hay un equipo con ese nombre apuntando a {suya or 'ninguna dirección'}, "
@@ -1361,8 +1398,38 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
                     "suyo, así que no se retira para no borrar el histórico de otro laboratorio. "
                     "Si es un resto de este, retíralo a mano en la consola"
                 )
+            elif suya in direcciones_del_lab:
+                # La dirección es de aquí, pero el registro no lleva la marca de este
+                # laboratorio: pudo crearlo otro sobre una máquina que hoy es nuestra.
+                # No hay prueba, así que no se borra; se dice para que alguien decida.
+                pendientes.append(
+                    f"{nombre}: hay un equipo con ese nombre apuntando a {suya}, que hoy es "
+                    "de este laboratorio, pero su registro no lleva la marca de aquí: no "
+                    "consta que sea suyo y no se retira. Si es un resto, retíralo a mano"
+                )
 
+    altas: list[dict] = []
+    for node, _candidatos, objeto in equipos:
+        direccion = node.get("mgmt_address")
+        nombre = node.get("name") or node.get("role")
+        usuario = _declared_user(node) or "admin"
+        clave = ros_clave(node, secrets or {})
         if objeto is None:
+            # El API contesta 409 si la dirección ya es de otro equipo, y el play se
+            # pararía después de haber creado el invitado. Se mira antes: si la ocupa un
+            # objeto que este plan no retira, se informa con su nombre y su id y no se
+            # intenta el alta —un reintento encontraría el mismo objeto y el mismo 409—.
+            ocupantes = [o for o in por_ip.get(str(direccion), [])
+                         if o.get("id") is None or int(o["id"]) not in retirados]
+            if ocupantes:
+                otro = ocupantes[0]
+                pendientes.append(
+                    f"{nombre}: la dirección {direccion} ya la ocupa el equipo "
+                    f"{otro.get('name') or '(sin nombre)'} (id {otro.get('id')}), que no "
+                    "consta como retirada en este plan: el API rechazaría el alta con 409. "
+                    "Retíralo a mano si es un resto"
+                )
+                continue
             cuerpo = {
                 "class": "Node",
                 "name": nombre,
@@ -1370,6 +1437,9 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
                 "sshLogin": usuario,
                 "sshPassword": clave,
                 "sshPort": int(puerto),
+                # La marca de propiedad: sin ella, mañana no se puede demostrar que este
+                # registro lo creó este laboratorio y su histórico no se puede retirar.
+                "comments": node.get("description") or "",
             }
             altas.append({
                 "cmd": netxms_crear_cmd(api),
@@ -1396,17 +1466,21 @@ def netxms_ids(nodes: list[dict], encontrados: list | None) -> list:
 
     La búsqueda devuelve resúmenes sin credenciales, así que la ficha hay que pedirla:
     se pide **de una vez** por los que interesan, y no la de todo el censo — que sería
-    leer lo de todos los laboratorios para escribir lo de uno.
+    leer lo de todos los laboratorios para escribir lo de uno—.
     """
-    # Se piden las fichas de los equipos que ya están **con su nombre y su dirección**:
-    # son los únicos cuyo estado hay que mirar. Un equipo con ese nombre apuntando a otra
-    # máquina no se arregla leyendo su ficha: se retira y se da de alta de nuevo.
+    # Se piden las fichas de dos clases de objeto, y ninguna más: los equipos que ya
+    # están **con su nombre y su dirección**, cuyo estado hay que mirar; y los que llevan
+    # el nombre de un equipo del laboratorio aunque apunten a otra dirección, porque su
+    # ficha es la única prueba de quién los creó —la marca del comentario— y sin ella un
+    # resto no se puede retirar sin arriesgar el histórico de otro laboratorio.
     claves = {(str(n.get("name") or n.get("role")), str(n["mgmt_address"]))
               for n in nodes or [] if n.get("mgmt_address")}
+    nombres = {str(n.get("name") or n.get("role")) for n in nodes or []}
     ids = []
     for objeto in encontrados or []:
         direccion = (objeto.get("ipAddress") or {}).get("address")
-        clave = (str(objeto.get("name") or ""), str(direccion or ""))
-        if direccion and clave in claves and objeto.get("id") is not None:
+        nombre = str(objeto.get("name") or "").strip()
+        clave = (nombre, str(direccion or ""))
+        if direccion and (clave in claves or nombre in nombres) and objeto.get("id") is not None:
             ids.append(int(objeto["id"]))
     return sorted(ids)

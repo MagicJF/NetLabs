@@ -945,6 +945,9 @@ class ElRegistroEnLaVista(unittest.TestCase):
     def equipo(self, role="rte1", address="10.30.0.101", usuario="admin"):
         return {
             "role": role, "name": role, "type": "router", "mgmt_address": address,
+            # La marca que el motor pone en el invitado y copia al registro de la vista:
+            # sin ella no se puede demostrar que un resto es de este laboratorio.
+            "description": f"netlabs lab=b_prueba role={role}",
             "configure": {"users": [{"name": usuario, "password_from": "secrets.routeros_clave"}]},
         }
 
@@ -1034,7 +1037,8 @@ class ElRegistroEnLaVista(unittest.TestCase):
         # .116 es de un equipo de ESTE laboratorio (swa2): el `rta6` que apunta ahí es
         # un resto, no un equipo ajeno.
         swa2 = self.equipo(role="swa2", address="10.30.0.116")
-        plan = converge.netxms_ops([equipo, swa2], [sobrante, bueno_swa2], [], self.API,
+        detalles = [{"id": 269, "comments": "netlabs lab=b_prueba role=rta6"}]
+        plan = converge.netxms_ops([equipo, swa2], [sobrante, bueno_swa2], detalles, self.API,
                                    self.SECRETS, vivas=["10.30.0.114", "10.30.0.116"])
         efectos = [op["effect"] for op in plan["ops"]]
         self.assertEqual(len(efectos), 2)
@@ -1049,7 +1053,8 @@ class ElRegistroEnLaVista(unittest.TestCase):
             {"id": 326, "name": "rta6", "ipAddress": {"address": "10.30.0.114"}},
             {"id": 272, "name": "swa4", "ipAddress": {"address": "10.30.0.120"}},
         ]
-        detalles = [{"id": 326, "sshLogin": "admin", "sshPassword": "s3cr3t", "sshPort": 22}]
+        detalles = [{"id": 326, "sshLogin": "admin", "sshPassword": "s3cr3t", "sshPort": 22},
+                    {"id": 269, "comments": "netlabs lab=b_prueba role=rta6"}]
         plan = converge.netxms_ops([self.equipo(role="rta6", address="10.30.0.114"),
                                     self.equipo(role="swa4", address="10.30.0.120")],
                                    censo, detalles, self.API, self.SECRETS,
@@ -1079,11 +1084,35 @@ class ElRegistroEnLaVista(unittest.TestCase):
         ]
         nodes = [self.equipo(role="swc1", address="10.30.0.107"),
                  self.equipo(role="swa1", address="10.30.0.115")]
-        plan = converge.netxms_ops(nodes, censo, [], self.API, self.SECRETS,
+        plan = converge.netxms_ops(nodes, censo,
+                                   [{"id": 234, "comments": "netlabs lab=b_prueba role=swa1"}],
+                                   self.API, self.SECRETS,
                                    vivas=["10.30.0.107", "10.30.0.109", "10.30.0.115"])
         efectos = [op["effect"].split()[0] for op in plan["ops"]]
         self.assertEqual(efectos, ["retirar", "registrar", "registrar"])
         self.assertIn("/objects/234", plan["ops"][0]["cmd"][2])
+
+    def test_un_resto_propio_que_apunta_a_un_puesto_del_laboratorio_se_retira(self):
+        """La dirección de un puesto es de este laboratorio, aunque el puesto no se registre.
+
+        Demuestra que la retirada no depende de que la dirección sea la de un equipo de red
+        declarado: un puesto no se registra y no está en los equipos, así que lo único que
+        demuestra que ese `rte1` viejo apuntaba a una máquina de aquí es la lista de
+        direcciones de los invitados de este laboratorio. Sin ella, el registro no se
+        retira —está vivo, y vivo y ajeno no es un resto— y el equipo se quedaría con la
+        dirección de la máquina equivocada.
+        """
+        resto = {"id": 411, "name": "rte1", "ipAddress": {"address": "10.30.0.150"}}
+        plan = converge.netxms_ops([self.equipo()], [resto],
+                                   [{"id": 411, "comments": "netlabs lab=b_prueba role=rte1"}],
+                                   self.API, self.SECRETS,
+                                   vivas=["10.30.0.101", "10.30.0.150"],
+                                   propias=["10.30.0.150"])
+        self.assertEqual([op["effect"].split()[0] for op in plan["ops"]],
+                         ["retirar", "registrar"])
+        self.assertIn("/objects/411", plan["ops"][0]["cmd"][2])
+        self.assertIn("registrar rte1 (10.30.0.101)", plan["ops"][1]["effect"])
+        self.assertEqual(plan["pendientes"], [])
 
     def test_un_resto_que_no_consta_de_este_laboratorio_no_se_borra(self):
         """Compartir nombre y que la dirección no sea de nadie no demuestra propiedad.
@@ -1102,18 +1131,21 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertIn("10.30.0.140", plan["pendientes"][0])
         self.assertIn("no se retira", plan["pendientes"][0])
 
-    def test_las_fichas_se_piden_solo_por_los_equipos_de_este_laboratorio(self):
+    def test_las_fichas_se_piden_por_los_equipos_y_por_sus_homonimos(self):
         # La búsqueda devuelve resúmenes sin credenciales: la ficha hay que pedirla, y se
-        # pide de una vez y sólo por los equipos de este laboratorio —leer la de todos
-        # para escribir uno sería leer de más—.
+        # pide de una vez por los equipos que ya están con su dirección —su estado— y por
+        # los homónimos que apuntan a otra —su marca de propiedad, sin la cual un resto no
+        # se puede retirar—. La de un nombre que no es de este laboratorio no se pide:
+        # leer la de todos para escribir uno sería leer de más.
         encontrados = [
             {"id": 7, "name": "rte1", "ipAddress": {"address": "10.30.0.101"}},  # de este
-            {"id": 9, "name": "rte1", "ipAddress": {"address": "10.30.0.108"}},  # de otro
+            {"id": 9, "name": "rte1", "ipAddress": {"address": "10.30.0.108"}},  # homónimo
             {"id": 5, "name": "rte1", "ipAddress": {"address": "10.30.0.101"}},  # de este
+            {"id": 4, "name": "swx9", "ipAddress": {"address": "10.30.0.199"}},  # de nadie
         ]
         ids = converge.netxms_ids([self.equipo()], encontrados)
-        self.assertEqual(ids, [5, 7])
-        self.assertEqual(json.loads(converge.netxms_fichas_cuerpo(ids)), {"ids": [5, 7]})
+        self.assertEqual(ids, [5, 7, 9])
+        self.assertEqual(json.loads(converge.netxms_fichas_cuerpo(ids)), {"ids": [5, 7, 9]})
 
 
 if __name__ == "__main__":
