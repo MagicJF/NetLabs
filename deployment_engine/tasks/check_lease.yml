@@ -2,24 +2,56 @@
 #              se sondea su tabla de interfaces por la API con un tope.
 # INVARIANTES: el sondeo pasa por la puerta (`pve.yml`). Si el tope se agota, se para
 #              con el nombre del puesto: un laboratorio con un puesto mudo no es verde.
-# VER:         AGENTS.md §2, §3.5
+#              «Tiene dirección» es una IPv4 fuera de `lo`, no la palabra `inet` en
+#              cualquier sitio: el bucle local siempre la tiene y el sondeo mentiría.
+#              Un puesto que arrancó antes de que el router sirviera DHCP se reinicia
+#              UNA vez; es la única reparación y está acotada, no un reintento infinito.
+# VER:         AGENTS.md §3.5, §5
 
-- name: "PVE · esperar la dirección de {{ guest.name }}"
+- name: "PVE · leer las interfaces de {{ guest.name }}"
   include_tasks: pve.yml
   vars:
     pve_method: GET
-    pve_path: "/nodes/{{ env.proxmox.node }}/lxc/{{ guest.vmid }}/interfaces"
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ guest.guest }}/{{ guest.vmid }}/interfaces"
     pve_do: "leer las interfaces de {{ guest.name }}"
     pve_status: [200]
-    pve_return_content: true
-    pve_until: "{{ (pve_r.content | default('')) is search('\"inet\"') }}"
+    pve_until: "{{ true }}"
+    pve_retries: 1
+    pve_delay: 1
+
+- name: "PVE · reiniciar {{ guest.name }}: nació antes de que hubiera DHCP"
+  include_tasks: pve.yml
+  vars:
+    pve_method: POST
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ guest.guest }}/{{ guest.vmid }}/status/reboot"
+    pve_do: "reiniciar {{ guest.name }} para que vuelva a pedir dirección"
+    pve_status: [200]
+  when: >-
+    (pve_r.json.data | default([]) | rejectattr('name', 'equalto', 'lo')
+     | selectattr('inet', 'defined') | map(attribute='inet')
+     | select('search', '^[0-9]+\.') | list | length) == 0
+
+- name: "PVE · esperar la dirección de {{ guest.name }} tras el reinicio"
+  include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ guest.guest }}/{{ guest.vmid }}/interfaces"
+    pve_do: "leer las interfaces de {{ guest.name }}"
+    pve_status: [200]
+    pve_until: >-
+      {{ (pve_r.json.data | default([]) | rejectattr('name', 'equalto', 'lo')
+          | selectattr('inet', 'defined') | map(attribute='inet')
+          | select('search', '^[0-9]+\.') | list | length) > 0 }}
     pve_retries: "{{ pve_lease_intentos | default(30) }}"
     pve_delay: 4
 
 - name: "{{ guest.name }} se quedó sin dirección"
   ansible.builtin.assert:
-    that: (pve_r.content | default('')) is search('"inet"')
+    that: >-
+      (pve_r.json.data | default([]) | rejectattr('name', 'equalto', 'lo')
+       | selectattr('inet', 'defined') | map(attribute='inet')
+       | select('search', '^[0-9]+\.') | list | length) > 0
     fail_msg: >-
-      {{ guest.name }} ({{ guest.vmid }}) no tiene dirección después de esperar: el
-      router no le sirvió una concesión. No se sigue con un laboratorio donde un
-      puesto no habla.
+      {{ guest.name }} ({{ guest.vmid }}) no tiene dirección después de esperar y de
+      reiniciarlo: el router no le sirvió una concesión. No se sigue con un laboratorio
+      donde un puesto no habla.

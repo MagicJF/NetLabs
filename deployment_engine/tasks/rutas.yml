@@ -1,0 +1,44 @@
+# PROPÓSITO:   poner en el invitado de gestión las rutas hacia las redes de este
+#              laboratorio —una por espacio declarado, con su router como salto— y
+#              retirar las suyas que ya no se declaran. Es por donde entra todo lo
+#              que observa (NetXMS) y todo lo que el motor toca por SSH.
+# INVARIANTES: primero se leen las rutas reales; sin lectura no se escribe nada.
+#              La frontera son los espacios que declara el laboratorio: dentro se
+#              quita lo que sobra, fuera no se entra —la ruta por defecto y la de la
+#              red de gestión no son suyas y no se tocan—.
+#              Con `rutas_deseadas: []` sólo retira: es lo que hace `destroy`.
+#              La clave y el puerto del túnel los pone quien llama (apply.yml,
+#              destroy.yml): esta tarea no inventa el camino hacia la gestión.
+# VER:         docs/diseno.md §4.2, §4.3
+
+- name: "rutas · leer las del invitado de gestión"
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "rutas · leer las rutas del invitado de gestión"
+    objetivo: 127.0.0.1
+    # El túnel aterriza en el invitado de gestión: se entra directo, sin `-W`.
+    interior_salto: false
+    comando: ["ip", "-4", "-j", "route", "show"]
+
+- name: "rutas · la diferencia entre lo declarado y lo que hay"
+  ansible.builtin.set_fact:
+    rutas_ops: >-
+      {{ interior.stdout | default('[]', true) | from_json
+         | netlabs_rutas_ops(rutas_deseadas, espacios) }}
+
+- name: "rutas · {{ rutas_ops | length }} cambio(s)"
+  ansible.builtin.debug:
+    msg: "{{ rutas_ops | map(attribute='effect') | list }}"
+  when: rutas_ops | length > 0
+
+- name: "rutas · escribir la diferencia"
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "rutas · {{ ruta_op.effect }}"
+    objetivo: 127.0.0.1
+    interior_salto: false
+    interior_escribe: true
+    comando: "{{ ruta_op.cmd }}"
+  loop: "{{ rutas_ops }}"
+  loop_control: {loop_var: ruta_op, label: "{{ ruta_op.effect }}"}
+  when: rutas_ops | length > 0

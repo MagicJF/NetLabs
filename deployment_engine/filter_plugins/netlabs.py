@@ -23,11 +23,12 @@ def _world(resources, networks, pools):
             "name": item.get("name"),
             "type": "lxc" if item.get("type") == "lxc" else "qemu",
             "pool": item.get("pool") or "",
-            # `/cluster/resources` no trae la descripción; sí las etiquetas. Es la
-            # marca que el plan puede leer sin una llamada por invitado.
-            "description": item.get("description") or "",
-            "tags": item.get("tags") or "",
             "status": item.get("status"),
+            # Los recursos que el invitado tiene de verdad: `/cluster/resources` los trae
+            # (cores y memoria), así que el plan puede decir si la declaración pide otra
+            # cosa sin una llamada más por invitado.
+            "cores": item.get("maxcpu"),
+            "memory_bytes": item.get("maxmem"),
         }
         for item in resources
         if item.get("type") in ("qemu", "lxc") and item.get("vmid") is not None
@@ -63,11 +64,6 @@ def _create_body(node, env, pool, ssh_public_key=None):
         "memory": node["memory"],
         "description": node["description"],
         "pool": pool,
-        # La etiqueta lleva el rol: `/cluster/resources` sí la devuelve, así que el
-        # plan reconoce sus invitados sin una llamada de configuración por cada uno.
-        # Una etiqueta de Proxmox no admite `=`: se separa con guion. El `=` vive
-        # en la descripción, que sí es texto libre.
-        "tags": f"netlabs;role-{node['role']}",
     }
     if node["guest"] == "lxc":
         body.update({
@@ -126,7 +122,25 @@ class FilterModule:
             "netlabs_bootstrap": lambda node, env, secret: converge.bootstrap_script(node, env, secret),
             "netlabs_bootstrap_path": lambda node: _create_command(node, None),
             "netlabs_ros_reads": lambda node: list(converge.ROS_READS),
-            "netlabs_ros_ops": lambda node, current, secret: converge.ros_ops(node, current, secret),
-            "netlabs_linux_ops": lambda node, hostname: converge.linux_ops(node, hostname),
+            "netlabs_ros_clave": lambda node, secrets: converge.ros_clave(node, secrets),
+            "netlabs_secreto": lambda secrets, nombre: converge.secreto(secrets, nombre),
+            "netlabs_ros_ops": lambda node, current, secret, secrets=None, cidr=None: converge.ros_ops(node, current, secret, secrets, cidr),
+            "netlabs_linux_ops": lambda node, current, credenciales=None: converge.linux_ops(node, current, credenciales),
+            "netlabs_linux_probe": lambda node: converge.linux_probe(node),
+            "netlabs_linux_probe_cmd": lambda node: converge.linux_probe_cmd(node),
+            "netlabs_linux_state": lambda text: converge.linux_state(text),
+            "netlabs_rutas_ops": lambda actuales, deseadas, espacios: converge.rutas_ops(
+                actuales, deseadas, espacios),
+            "netlabs_cruce_cmd": lambda cruce: converge.cruce_cmd(cruce),
             "netlabs_tunnel_port": lambda vmid: identity.tunnel_port(int(vmid)),
+            # La quinta vía: el registro de los equipos en lo que observa el sitio.
+            "netlabs_netxms_login_cmd": lambda api: converge.netxms_login_cmd(api),
+            "netlabs_netxms_login_cuerpo": lambda usuario, clave: converge.netxms_login_cuerpo(usuario, clave),
+            "netlabs_netxms_censo_cmd": lambda api: converge.netxms_censo_cmd(api),
+            "netlabs_netxms_censo_cuerpo": lambda api=None: converge.netxms_censo_cuerpo(),
+            "netlabs_netxms_fichas_cmd": lambda api: converge.netxms_fichas_cmd(api),
+            "netlabs_netxms_fichas_cuerpo": lambda ids=None, api=None: converge.netxms_fichas_cuerpo(ids),
+            "netlabs_netxms_ids": lambda nodes, encontrados: converge.netxms_ids(nodes, encontrados),
+            "netlabs_netxms_ops": lambda nodes, encontrados, detalles, api, secrets=None:
+                converge.netxms_ops(nodes, encontrados, detalles, api, secrets),
         }

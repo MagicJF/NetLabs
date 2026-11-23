@@ -1,0 +1,95 @@
+# Varios equipos de red en un solo dominio de difusión: un router de borde, dos
+# switches y dos puestos. Existe para ver la frontera entre enrutar y conmutar con
+# los ojos:
+#
+#   rte1 --- swc1 --- swa1 --- wsp1
+#                      \------- wsp2
+#
+# Todo el laboratorio es UN dominio de difusión (`lan`, 10.46.1.0/24). El router
+# sólo tiene una pata en él: si tuviera dos, estaría conmutando y sería un switch.
+# Los que reparten el cable son los switches, cada uno con su puente dentro de su
+# RouterOS y su pata de gestión FUERA del puente.
+#
+# Cada equipo se llama igual en todas partes: `swc1` es el rol declarado, el
+# hostname de su RouterOS, su nombre en Proxmox y la punta de sus cables. El nombre
+# de cada cable lleva la letra del laboratorio y sus dos puntas, así que este
+# laboratorio no choca con ningún otro en el mismo hipervisor. Ningún número
+# derivado se declara: ni vmid, ni MAC, ni dirección de gestión.
+
+lab: c_enrutar_y_conmutar
+
+# Espacio disjunto del resto: el plan lo comprueba contra lo que ya vive en el nodo.
+address_spaces:
+  - 10.46.0.0/16
+
+networks:
+  - name: lan
+    address: 10.46.1.0/24
+
+nodes:
+  - role: rte1
+    type: router
+    stage: 1
+    resources: {cores: 2, memory: 512, disk: 1}
+    networks: [lan]
+    address: 10.46.1.1/24
+    configure:
+      addresses:
+        - {network: lan, address: 10.46.1.1/24}
+      dhcp_server:
+        - {network: lan, pool: 10.46.1.100-10.46.1.199, gateway: 10.46.1.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  # Los switches no declaran dirección de laboratorio: su gestión es la pata OOB
+  # derivada del vmid. Todas sus patas son de la misma red porque un switch no une
+  # redes; eso lo hace el router.
+  - role: swc1                    # el switch de núcleo
+    type: switch
+    stage: 2
+    after: [rte1]
+    resources: {cores: 2, memory: 512, disk: 1}
+    networks: [lan, lan]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: swa1                    # el switch de acceso
+    type: switch
+    stage: 2
+    after: [swc1]
+    resources: {cores: 2, memory: 512, disk: 1}
+    networks: [lan, lan, lan]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: wsp1
+    type: workstation
+    stage: 3
+    after: [swa1]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [lan]
+    address: dhcp
+
+  - role: wsp2
+    type: workstation
+    stage: 3
+    after: [swa1]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [lan]
+    address: dhcp
+
+links:
+  - a: {node: rte1, port: 1}
+    z: {node: swc1, port: 1}
+  - a: {node: swc1, port: 2}
+    z: {node: swa1, port: 1}
+  - a: {node: swa1, port: 2}
+    z: {node: wsp1, port: 1}
+  - a: {node: swa1, port: 3}
+    z: {node: wsp2, port: 1}

@@ -8,6 +8,7 @@
 
 import copy
 import pathlib
+import re
 import sys
 import unittest
 
@@ -17,13 +18,14 @@ RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ / "deployment_engine" / "tools"))
 
 import identity  # noqa: E402
+import plano  # noqa: E402
 
 
 def entorno():
     return yaml.safe_load((RAIZ / "netlabs.yml").read_text())
 
 
-def laboratorio(nombre="uno"):
+def laboratorio(nombre="b_router_dos_puestos"):
     return yaml.safe_load((RAIZ / "labs" / nombre / f"{nombre}.yml").read_text())
 
 
@@ -67,38 +69,38 @@ class ElPlan(unittest.TestCase):
     def test_plan_reparte_los_vmids_libres_mas_bajos(self):
         plan = identity.plan(mundo(used=[100, 101, 105]), laboratorio(), entorno())
         self.assertEqual({n["role"]: n["vmid"] for n in plan["nodes"]},
-                         {"edge": 102, "pc-1": 103, "pc-2": 104})
+                         {"rte1": 102, "wsp1": 103, "wsp2": 104})
 
     def test_plan_conserva_el_vmid_de_un_rol_que_ya_vive_en_el_pool(self):
-        viejos = [{"vmid": 200, "name": "rt-edge", "type": "qemu", "pool": "netlabs-lab-uno",
-                   "description": "netlabs lab=uno role=edge", "status": "running"}]
+        viejos = [{"vmid": 200, "name": "rte1", "type": "qemu", "pool": "b_router_dos_puestos",
+                   "description": "netlabs lab=b_router_dos_puestos role=rte1", "status": "running"}]
         plan = identity.plan(mundo(guests=viejos), laboratorio(), entorno())
-        self.assertEqual({n["role"]: n["vmid"] for n in plan["nodes"]}["edge"], 200)
+        self.assertEqual({n["role"]: n["vmid"] for n in plan["nodes"]}["rte1"], 200)
         self.assertEqual(len({n["vmid"] for n in plan["nodes"]}), 3)
 
     def test_plan_es_idempotente_cuando_el_mundo_ya_es_lo_declarado(self):
         primero = identity.plan(mundo(), laboratorio(), entorno())
         creados = [{"vmid": n["vmid"], "name": n["name"],
                     "type": "qemu" if n["guest"] == "qemu" else "lxc",
-                    "pool": "netlabs-lab-uno", "description": n["description"], "status": "running"}
+                    "pool": "b_router_dos_puestos", "description": n["description"], "status": "running"}
                    for n in primero["nodes"]]
         puentes = [{"iface": s["bridge"], "type": "bridge", "cidr": None, "comments": s["comment"]}
                    for s in primero["steps"] if s["op"] == "bridge_ensure"]
-        segundo = identity.plan(mundo(guests=creados, bridges=puentes, pools=["netlabs-lab-uno"]),
+        segundo = identity.plan(mundo(guests=creados, bridges=puentes, pools=["b_router_dos_puestos"]),
                                 laboratorio(), entorno())
         self.assertEqual([s for s in segundo["steps"]
                           if s["op"] in ("guest_create", "pool_ensure", "bridge_ensure", "guest_start")], [])
 
-    def test_plan_reconoce_sus_invitados_por_la_etiqueta_sin_descripcion(self):
-        # `/cluster/resources` no devuelve la descripción: si el plan sólo mirara
-        # ahí, cada apply crearía un juego nuevo de invitados. La etiqueta sí vuelve.
-        viejos = [{"vmid": 210, "name": "rt-edge", "type": "qemu", "pool": "netlabs-lab-uno",
-                   "description": "", "tags": "netlabs;role=edge", "status": "running"}]
+    def test_plan_reconoce_sus_invitados_por_su_nombre(self):
+        # El invitado se reconoce por su nombre —que es el del equipo— dentro del pool
+        # del laboratorio. No hace falta ninguna marca más: el pool ya dice de quién es.
+        viejos = [{"vmid": 210, "name": "rte1", "type": "qemu", "pool": "b_router_dos_puestos",
+                   "status": "running"}]
         plan = identity.plan(mundo(guests=viejos), laboratorio(), entorno())
-        self.assertEqual({n["role"]: n["vmid"] for n in plan["nodes"]}["edge"], 210)
+        self.assertEqual({n["role"]: n["vmid"] for n in plan["nodes"]}["rte1"], 210)
         # El router que ya vive no se vuelve a crear; los puestos que faltan, sí.
         self.assertEqual([s["guest"]["role"] for s in plan["steps"] if s["op"] == "guest_create"],
-                         ["pc-1", "pc-2"])
+                         ["wsp1", "wsp2"])
 
     def test_un_mundo_ya_convergido_no_da_ningun_paso(self):
         # Si el plan emite "asegurar" para lo que ya está, el segundo apply nunca
@@ -108,12 +110,22 @@ class ElPlan(unittest.TestCase):
         primero = identity.plan(mundo(), lab, env)
         pool = primero["pool"]
         guests = [{"vmid": n["vmid"], "name": n["name"], "type": n["guest"],
-                   "pool": pool, "status": "running", "tags": f"netlabs;role={n['role']}"}
+                   "pool": pool, "status": "running"}
                   for n in primero["nodes"]]
         bridges = [{"iface": s["bridge"], "comments": s["comment"]}
                    for s in primero["steps"] if s["op"] == "bridge_ensure"]
         plan = identity.plan(mundo(guests=guests, bridges=bridges, pools=[pool]), lab, env)
-        self.assertEqual(plan["steps"], [])
+        # Lo único que queda son las dos cosas que viven FUERA del hipervisor —las
+        # rutas, dentro del invitado de gestión, y el registro de los equipos en lo
+        # que observa el sitio—: el plan no puede leerlas sin entrar, así que no puede
+        # callarlas. Decir "nada que hacer" con una ruta sin poner o un equipo sin
+        # registrar sería la mentira que este caso evita.
+        self.assertEqual(
+            [s for s in plan["steps"] if s["op"] not in ("rutas_converge", "netxms_registro")], []
+        )
+        # El paso dice qué equipos son: los de red, con su dirección de gestión.
+        registro = next(s for s in plan["steps"] if s["op"] == "netxms_registro")
+        self.assertEqual(registro["equipos"], [{"role": "rte1", "address": "10.30.0.101"}])
         self.assertEqual([e for e in plan["effects"] if e not in primero["effects"]], [])
 
     def test_plan_es_determinista(self):
@@ -123,8 +135,8 @@ class ElPlan(unittest.TestCase):
     def test_plan_marca_los_puentes_con_el_laboratorio(self):
         plan = identity.plan(mundo(), laboratorio(), entorno())
         self.assertEqual({s["bridge"]: s["comment"] for s in plan["steps"] if s["op"] == "bridge_ensure"},
-                         {"rt01p01_ws01p01": "netlabs lab=uno space=10.44.1.0/24 cable=rt01p01_ws01p01",
-                          "rt01p02_ws02p01": "netlabs lab=uno space=10.44.2.0/24 cable=rt01p02_ws02p01"})
+                         {"b_rte1p1_wsp1p1": "netlabs lab=b_router_dos_puestos space=10.44.1.0/24 cable=b_rte1p1_wsp1p1",
+                          "b_rte1p2_wsp2p1": "netlabs lab=b_router_dos_puestos space=10.44.2.0/24 cable=b_rte1p2_wsp2p1"})
 
     def test_un_puente_es_un_cable_entre_dos_puntas_y_nada_mas(self):
         # El nombre del puente son sus dos puntas, y el puente no lleva ni CIDR,
@@ -132,35 +144,34 @@ class ElPlan(unittest.TestCase):
         # switch, y el motor no crea switches.
         plan = identity.plan(mundo(), laboratorio(), entorno())
         puentes = [s for s in plan["steps"] if s["op"] == "bridge_ensure"]
-        self.assertEqual([s["bridge"] for s in puentes], ["rt01p01_ws01p01", "rt01p02_ws02p01"])
+        self.assertEqual([s["bridge"] for s in puentes], ["b_rte1p1_wsp1p1", "b_rte1p2_wsp2p1"])
         for step in puentes:
             # Ni `cidr`, ni `gateway`, ni `mac`: el puente es el cable y nada más.
             self.assertEqual(set(step), {"op", "bridge", "comment"})
         for node in plan["nodes"]:
             for iface in node["interfaces"]:
                 if iface["network"] is not None:
-                    self.assertEqual(len(iface["bridge"]), 15)
+                    self.assertLessEqual(len(iface["bridge"]), 15)
                     self.assertIn("_", iface["bridge"])
 
-    def test_el_slot_separa_los_nombres_de_dos_laboratorios(self):
-        # Dos laboratorios con la misma topología en el mismo hipervisor no
-        # comparten un nombre de cable: el slot va dentro del identificador.
+    def test_la_letra_separa_los_nombres_de_dos_laboratorios(self):
+        # Dos laboratorios con la misma topología en el mismo hipervisor no comparten
+        # un nombre de cable: la letra del laboratorio es la cabeza de cada puente.
         primero = identity.plan(mundo(), laboratorio(), entorno())
         otro = copy.deepcopy(laboratorio())
-        otro["lab"] = "dos"
-        otro["slot"] = 1
+        otro["lab"] = "d_otra_cosa"
         segundo = identity.plan(mundo(), otro, entorno())
         cables_uno = {s["bridge"] for s in primero["steps"] if s["op"] == "bridge_ensure"}
-        cables_dos = {s["bridge"] for s in segundo["steps"] if s["op"] == "bridge_ensure"}
-        self.assertEqual(cables_uno & cables_dos, set())
-        self.assertIn("rt11p01_ws11p01", cables_dos)
+        cables_otros = {s["bridge"] for s in segundo["steps"] if s["op"] == "bridge_ensure"}
+        self.assertEqual(cables_uno & cables_otros, set())
+        self.assertIn("d_rte1p1_wsp1p1", cables_otros)
 
     def test_el_router_nace_con_la_pata_de_gestion_la_ultima(self):
         plan = identity.plan(mundo(), laboratorio(), entorno())
-        edge = next(n for n in plan["nodes"] if n["role"] == "edge")
-        self.assertEqual([i["network"] for i in edge["interfaces"]], ["lan1", "lan2", None])
-        self.assertEqual(edge["interfaces"][-1]["bridge"], "vmbr30")
-        self.assertTrue(edge["mgmt_address"].startswith("10.30."))
+        rte1 = next(n for n in plan["nodes"] if n["role"] == "rte1")
+        self.assertEqual([i["network"] for i in rte1["interfaces"]], ["lan1", "lan2", None])
+        self.assertEqual(rte1["interfaces"][-1]["bridge"], "vmbr30")
+        self.assertTrue(rte1["mgmt_address"].startswith("10.30."))
 
     def test_los_puestos_no_tienen_pata_de_gestion(self):
         plan = identity.plan(mundo(), laboratorio(), entorno())
@@ -168,6 +179,43 @@ class ElPlan(unittest.TestCase):
             if node["type"] == "workstation":
                 self.assertIsNone(node["mgmt_address"])
                 self.assertTrue(all(i["network"] is not None for i in node["interfaces"]))
+
+    def test_rechaza_cambiar_los_recursos_de_un_invitado_vivo(self):
+        # Los recursos no se cambian en caliente. Sin esta comprobación, subir los cores en
+        # la declaración dejaría al invitado con los viejos y el plan diría que no hay nada
+        # que hacer: la mentira que este fichero evita.
+        vivos = [{"vmid": 210, "name": "rte1", "type": "qemu", "pool": "b_router_dos_puestos",
+                  "status": "running", "cores": 1, "memory_bytes": 256 * 1024 * 1024}]
+        with self.assertRaisesRegex(identity.LabError, "core"):
+            identity.plan(mundo(guests=vivos), laboratorio(), entorno())
+        # Y con los cores bien y la memoria corta, lo dice por la memoria.
+        vivos[0]["cores"] = 2
+        with self.assertRaisesRegex(identity.LabError, "256 MB"):
+            identity.plan(mundo(guests=vivos), laboratorio(), entorno())
+
+    def test_un_equipo_se_llama_igual_en_el_plan_y_en_sus_cables(self):
+        # El nombre del equipo es el rol declarado: el mismo en el invitado, en su
+        # descripción y en la punta de cada cable que lo toca. Uno, no tres.
+        plan = identity.plan(mundo(), laboratorio(), entorno())
+        rte1 = next(n for n in plan["nodes"] if n["role"] == "rte1")
+        self.assertEqual(rte1["name"], "rte1")
+        self.assertEqual(rte1["description"], "netlabs lab=b_router_dos_puestos role=rte1")
+        self.assertEqual([i["bridge"] for i in rte1["interfaces"] if i["network"]],
+                         ["b_rte1p1_wsp1p1", "b_rte1p2_wsp2p1"])
+
+
+class ElSwitch(unittest.TestCase):
+    """Un switch reparte el cable dentro de UN dominio; no enruta ni lleva IP de laboratorio."""
+
+    def test_sus_patas_de_laboratorio_van_a_un_solo_dominio(self):
+        plan = identity.plan(mundo(), laboratorio("c_enrutar_y_conmutar"), entorno())
+        switch = next(n for n in plan["nodes"] if n["role"] == "swc1")
+        self.assertEqual([i["network"] for i in switch["interfaces"]], ["lan", "lan", None])
+        self.assertIsNone(switch["address"])
+        self.assertIsNone(switch["interfaces"][0]["address"])
+        # La pata de gestión queda fuera del puente, pero se deriva como la del router.
+        self.assertEqual(switch["interfaces"][-1]["bridge"], "vmbr30")
+        self.assertTrue(switch["mgmt_address"].startswith("10.30."))
 
 
 class Rechazos(unittest.TestCase):
@@ -190,6 +238,23 @@ class Rechazos(unittest.TestCase):
             password_from="secrets.otra"), "solo puede tomar la clave"),
         (lambda l: l["nodes"][0]["configure"]["addresses"][0].update(
             network="lan9"), "que no existe"),
+        # Un router con dos patas en la misma red estaría conmutando; eso es un switch.
+        (lambda l: l["nodes"][0].update(networks=["lan1", "lan1"]), "no conmuta"),
+        (lambda l: l["nodes"][1].update(role="swa2", type="switch", networks=["lan1", "lan2"]),
+         "un solo dominio de difusión"),
+        (lambda l: l["nodes"][1].update(address=None), "no declara 'address'"),
+        # El nombre del equipo lo dice todo, y el motor no admite uno que no encaje:
+        # un nombre que no sigue el patrón, uno que dice un tipo que no es el suyo, una
+        # función que no existe para su tipo y un ordinal fuera de 1-9.
+        (lambda l: l["nodes"][0].update(role="rt1"), "dos letras de tipo, una de función"),
+        (lambda l: l["nodes"][0].update(role="swc1"), "tienen que contar lo mismo"),
+        (lambda l: l["nodes"][0].update(role="rtx1"), "no existe para un router"),
+        (lambda l: l["nodes"][0].update(role="rte0"), "dos letras de tipo, una de función"),
+        # El nombre del laboratorio es una letra y un título; la letra es la cabeza de
+        # cada cable, así que no se admite un nombre sin ella.
+        (lambda l: l.update(lab="router_dos_puestos"), "una letra y un título"),
+        # Un puerto de dos cifras no cabe en los 15 caracteres del nombre del cable.
+        (lambda l: l["links"][0]["a"].update(port=10), "un entero de 1 a 9"),
     ]
 
     def test_rechaza_lo_que_no_entiende(self):
@@ -202,27 +267,27 @@ class Rechazos(unittest.TestCase):
 
     def test_rechaza_un_ciclo_en_after(self):
         lab = copy.deepcopy(laboratorio())
-        lab["nodes"][1]["after"] = ["pc-2"]
-        lab["nodes"][2]["after"] = ["pc-1"]
+        lab["nodes"][1]["after"] = ["wsp2"]
+        lab["nodes"][2]["after"] = ["wsp1"]
         with self.assertRaisesRegex(identity.LabError, "ciclo"):
             identity.plan(mundo(), lab, entorno())
 
     def test_rechaza_pisar_el_espacio_de_otro_laboratorio_vivo(self):
         # El cable del otro laboratorio no lleva CIDR en el puente: el espacio
         # viaja en el comentario, que es lo único que se puede leer de un cable.
-        puentes = [{"iface": "rt01p01_ws01p01", "type": "bridge", "cidr": None,
-                    "comments": "netlabs lab=otro space=10.44.1.0/24 cable=rt01p01_ws01p01"}]
+        puentes = [{"iface": "b_rte1p1_wsp1p1", "type": "bridge", "cidr": None,
+                    "comments": "netlabs lab=otro space=10.44.1.0/24 cable=b_rte1p1_wsp1p1"}]
         with self.assertRaisesRegex(identity.LabError, "se pisa con el de 'otro'"):
             identity.plan(mundo(bridges=puentes), laboratorio(), entorno())
 
     def test_retira_un_cable_marcado_que_ya_no_se_declara(self):
         # La diferencia va en los dos sentidos también para los cables: un puente
         # con la marca de este laboratorio que ya no une nada es basura suya.
-        puentes = [{"iface": "rt01p09_ws09p09", "type": "bridge", "cidr": None,
-                    "comments": "netlabs lab=uno space=10.44.9.0/24 cable=rt01p09_ws09p09"}]
+        puentes = [{"iface": "b_rte1p9_wsp1p9", "type": "bridge", "cidr": None,
+                    "comments": "netlabs lab=b_router_dos_puestos space=10.44.9.0/24 cable=b_rte1p9_wsp1p9"}]
         plan = identity.plan(mundo(bridges=puentes), laboratorio(), entorno())
         retiros = [s for s in plan["steps"] if s["op"] == "bridge_destroy"]
-        self.assertEqual([s["bridge"] for s in retiros], ["rt01p09_ws09p09"])
+        self.assertEqual([s["bridge"] for s in retiros], ["b_rte1p9_wsp1p9"])
 
     def test_no_toca_un_puente_sin_marca_aunque_sobre(self):
         # Un puente sin marca no es de este laboratorio: puede ser del hipervisor
@@ -232,7 +297,7 @@ class Rechazos(unittest.TestCase):
         self.assertEqual([s for s in plan["steps"] if s["op"] == "bridge_destroy"], [])
 
     def test_rechaza_un_puente_ajeno_con_el_mismo_nombre(self):
-        puentes = [{"iface": "rt01p01_ws01p01", "type": "bridge", "cidr": None, "comments": ""}]
+        puentes = [{"iface": "b_rte1p1_wsp1p1", "type": "bridge", "cidr": None, "comments": ""}]
         with self.assertRaisesRegex(identity.LabError, "no es suyo"):
             identity.plan(mundo(bridges=puentes), laboratorio(), entorno())
 
@@ -246,21 +311,196 @@ class Rechazos(unittest.TestCase):
 
     def test_rechaza_un_cable_que_mezcla_dos_redes(self):
         lab = copy.deepcopy(laboratorio())
-        lab["links"][0]["z"] = {"node": "pc-2", "port": 1}
+        lab["links"][0]["z"] = {"node": "wsp2", "port": 1}
         with self.assertRaisesRegex(identity.LabError, "misma red"):
             identity.plan(mundo(), lab, entorno())
 
     def test_rechaza_cambiar_de_contenedor_a_maquina(self):
-        viejos = [{"vmid": 200, "name": "rt-edge", "type": "lxc", "pool": "netlabs-lab-uno",
-                   "description": "netlabs lab=uno role=edge", "status": "running"}]
+        viejos = [{"vmid": 200, "name": "rte1", "type": "lxc", "pool": "b_router_dos_puestos",
+                   "description": "netlabs lab=b_router_dos_puestos role=rte1", "status": "running"}]
         with self.assertRaisesRegex(identity.LabError, "contenedor a máquina"):
             identity.plan(mundo(guests=viejos), laboratorio(), entorno())
+
+
+class ElPlanDeControl(unittest.TestCase):
+    """Un laboratorio de control adopta un invitado que ya existía; no lo crea."""
+
+    def test_control_adopta_el_invitado_por_su_nombre_y_su_pool(self):
+        viejos = [{"vmid": 102, "name": "netxms", "type": "lxc", "pool": "a_bootstrap",
+                   "description": "netlabs lab=a_bootstrap role=netxms", "status": "running"}]
+        plan = identity.plan(mundo(guests=viejos, pools=["a_bootstrap"]),
+                             laboratorio("a_bootstrap"), entorno())
+        self.assertEqual(plan["pool"], "a_bootstrap")
+        self.assertEqual([n["vmid"] for n in plan["nodes"]], [102])
+        # Adoptar no es crear: ningún paso de creación ni de arranque.
+        self.assertEqual([s["op"] for s in plan["steps"]], ["interior_converge"])
+
+    def test_control_usa_los_recursos_que_declara_el_sitio(self):
+        # El invitado de control ES el de gestión, que se declara en `netlabs.yml`: si el
+        # laboratorio no dice otra cosa, sus recursos son los del sitio. Sin esto, el plan
+        # pedía 1 core contra los 2 del invitado vivo y `plan`/`apply a_bootstrap` se paraba
+        # diciendo que hacía falta destroy —un desacuerdo que no existe en la realidad—.
+        env = entorno()
+        vivos = [{"vmid": 102, "name": "netxms", "type": "lxc", "pool": "a_bootstrap",
+                  "description": "netlabs lab=a_bootstrap role=netxms", "status": "running",
+                  "cores": env["management"]["cores"],
+                  "memory_bytes": env["management"]["memory"] * 1024 * 1024}]
+        plan = identity.plan(mundo(guests=vivos, pools=["a_bootstrap"]),
+                             laboratorio("a_bootstrap"), entorno())
+        self.assertEqual(plan["nodes"][0]["cores"], env["management"]["cores"])
+        self.assertEqual(plan["nodes"][0]["memory"], env["management"]["memory"])
+
+    def test_control_puede_sobreescribir_los_recursos_del_sitio(self):
+        lab = laboratorio("a_bootstrap")
+        lab["nodes"][0]["resources"] = {"cores": 4}
+        plan = identity.plan(mundo(), lab, entorno())
+        self.assertEqual(plan["nodes"][0]["cores"], 4)
+
+    def test_control_sin_pool_ni_invitado_crea_el_que_falta(self):
+        plan = identity.plan(mundo(), laboratorio("a_bootstrap"), entorno())
+        self.assertEqual([s["op"] for s in plan["steps"]],
+                         ["pool_ensure", "guest_create", "interior_converge"])
+
+    def test_control_declara_la_convergencia_de_su_interior(self):
+        # El plan no puede leer el interior sin entrar, así que lo declara como
+        # paso pendiente: decir "nada que hacer" con un interior sin converger
+        # sería una mentira, y el segundo apply no podría distinguirse del primero.
+        plan = identity.plan(mundo(), laboratorio("a_bootstrap"), entorno())
+        paso = next(s for s in plan["steps"] if s["op"] == "interior_converge")
+        self.assertEqual(paso["role"], "netxms")
+        # Mundo vacío: el menor vmid libre es el 100 y su dirección se deriva de él.
+        self.assertEqual(paso["address"], "10.30.0.101")
+        self.assertTrue([e for e in plan["effects"] if "converger el interior" in e])
+
+    def test_control_no_dibuja_cables_ni_redes(self):
+        plan = identity.plan(mundo(), laboratorio("a_bootstrap"), entorno())
+        self.assertEqual(plan["tunnel_forwards"], [])
+        self.assertFalse([s for s in plan["steps"] if s["op"].startswith("bridge")])
+        self.assertEqual(plan["nodes"][0]["networks"], [])
+
+
+class LasRutas(unittest.TestCase):
+    """Una ruta por espacio declarado, con el router del laboratorio como salto.
+
+    Las pone el invitado de gestión —por donde entra el SSH del motor y donde vive
+    lo que observa—: sin ellas el laboratorio se despliega y no se ve.
+    """
+
+    @staticmethod
+    def nodo(role, tipo, address, mgmt, management=True):
+        return {"role": role, "type": tipo, "address": address,
+                "mgmt_address": mgmt, "management": management}
+
+    def test_una_ruta_por_espacio_con_el_router_como_salto(self):
+        lab = {"address_spaces": ["10.44.0.0/16"]}
+        nodes = [self.nodo("rte1", "router", "10.44.1.1/24", "10.30.0.104")]
+        self.assertEqual(identity._rutas(lab, nodes),
+                         [{"space": "10.44.0.0/16", "via": "10.30.0.104",
+                           "role": "rte1", "prueba": "10.44.1.1", "alcance": "salto"}])
+        # El salto es la dirección de gestión: por la del laboratorio no se llega
+        # desde la red de gestión, que es de donde sale todo lo que observa.
+        self.assertNotEqual(identity._rutas(lab, nodes)[0]["via"], "10.44.1.1")
+
+    def test_el_salto_es_el_primer_router_declarado_dentro_del_espacio(self):
+        lab = {"address_spaces": ["10.44.0.0/16"]}
+        nodes = [self.nodo("swc1", "switch", None, "10.30.0.109"),
+                 self.nodo("rte2", "router", "10.44.9.1/24", "10.30.0.108"),
+                 self.nodo("rte1", "router", "10.44.1.1/24", "10.30.0.104")]
+        # Un switch no enruta; entre dos routers decide el orden de la declaración.
+        self.assertEqual(identity._rutas(lab, nodes)[0]["role"], "rte2")
+
+    def test_un_router_sin_pata_de_gestion_no_puede_ser_el_salto(self):
+        lab = {"address_spaces": ["10.44.0.0/16"]}
+        nodes = [self.nodo("rte1", "router", "10.44.1.1/24", None, management=False)]
+        self.assertEqual(identity._rutas(lab, nodes), [])
+
+    def test_un_router_de_varias_patas_cuenta_por_cualquiera_de_ellas(self):
+        # Un router que enruta entre varias redes declara sus direcciones en
+        # `configure.addresses`. Mirando sólo `address` quedaría fuera de su propio
+        # espacio —su primera pata está en otra red— y ese espacio se quedaría sin
+        # ruta. El salto de prueba es la primera pata que cae dentro.
+        lab = {"address_spaces": ["10.44.0.0/16"]}
+        router = self.nodo("rte1", "router", "10.55.0.1/24", "10.30.0.104")
+        router["configure"] = {"addresses": [
+            {"address": "10.55.0.1/24"},
+            {"address": "10.44.1.1/24"},
+        ]}
+        self.assertEqual(identity._rutas(lab, [router]),
+                         [{"space": "10.44.0.0/16", "via": "10.30.0.104",
+                           "role": "rte1", "prueba": "10.44.1.1", "alcance": "salto"}])
+
+    def test_se_sondea_una_direccion_detras_del_router_cuando_se_declara(self):
+        # El router contesta a su propia pata aunque no reenvíe hacia atrás. Si el
+        # laboratorio declara una dirección **detrás** de él —otra pata, dentro del mismo
+        # espacio—, esa es la que se sondea: es lo único que demuestra que reenvía.
+        lab = {"address_spaces": ["10.44.0.0/16"]}
+        router = self.nodo("rte1", "router", "10.44.1.1/24", "10.30.0.104")
+        puesto = self.nodo("wsp1", "workstation", "10.44.1.50/24", None, management=False)
+        self.assertEqual(identity._rutas(lab, [router, puesto]),
+                         [{"space": "10.44.0.0/16", "via": "10.30.0.104", "role": "rte1",
+                           "prueba": "10.44.1.50", "alcance": "red"}])
+
+    def test_un_espacio_sin_router_no_inventa_salto(self):
+        lab = {"address_spaces": ["10.44.0.0/16", "10.99.0.0/16"]}
+        nodes = [self.nodo("rte1", "router", "10.44.1.1/24", "10.30.0.104")]
+        self.assertEqual([r["space"] for r in identity._rutas(lab, nodes)], ["10.44.0.0/16"])
+
+    def test_el_plan_del_laboratorio_lleva_sus_rutas_y_lo_dice(self):
+        plan = identity.plan(mundo(), laboratorio(), entorno())
+        rte1 = next(n for n in plan["nodes"] if n["role"] == "rte1")
+        self.assertEqual(plan["rutas"],
+                         [{"space": "10.44.0.0/16", "via": rte1["mgmt_address"],
+                           "role": "rte1", "prueba": "10.44.1.1", "alcance": "salto"}])
+        self.assertTrue([e for e in plan["effects"] if "vista desde la gestión" in e])
+        # El plan dice hasta dónde llega la comprobación: sin dirección detrás del
+        # router, lo que se comprueba es el salto, no la red.
+        self.assertTrue([e for e in plan["effects"] if "se comprueba el salto" in e])
+        # Las rutas viven dentro del invitado de gestión: el plan no las puede leer
+        # sin entrar, así que las declara como trabajo pendiente.
+        self.assertEqual([s["op"] for s in plan["steps"] if s["op"] == "rutas_converge"],
+                         ["rutas_converge"])
+
+    def test_un_espacio_sin_router_se_dice_en_el_plan(self):
+        lab = laboratorio()
+        lab["address_spaces"].append("10.99.0.0/16")
+        plan = identity.plan(mundo(), lab, entorno())
+        self.assertEqual([r["space"] for r in plan["rutas"]], ["10.44.0.0/16"])
+        self.assertTrue([e for e in plan["effects"]
+                         if "10.99.0.0/16 no tiene ningún router dentro" in e])
+
+    def test_el_plan_de_control_no_tiene_rutas(self):
+        # El invitado de gestión no se observa a sí mismo: no declara espacios.
+        plan = identity.plan(mundo(), laboratorio("a_bootstrap"), entorno())
+        self.assertEqual(plan["rutas"], [])
+
+
+class ElSitio(unittest.TestCase):
+    """El invitado de gestión: se adopta el que ya corre, no se crea otro al lado."""
+
+    def test_reconoce_al_invitado_por_su_nombre_aunque_cambie_el_pool(self):
+        # Renombrar el laboratorio de control cambia el nombre de su pool: si el motor
+        # reconociera su invitado por el pool, lo daría por ausente y crearía un segundo
+        # servicio de observación junto al que ya está en pie.
+        viejos = [{"vmid": 102, "name": "netxms", "type": "lxc", "pool": "lab-00_bootstrap",
+                   "status": "running"}]
+        sitio = identity.site(mundo(guests=viejos), entorno())
+        self.assertEqual(sitio["vmid"], 102)
+        self.assertTrue(sitio["exists"])
+        self.assertEqual(sitio["pool"], "a_bootstrap")
+        self.assertEqual(sitio["pool_actual"], "lab-00_bootstrap")
+        self.assertTrue(sitio["mover"])
+
+    def test_sin_invitado_de_gestion_no_lo_da_por_existente(self):
+        sitio = identity.site(mundo(), entorno())
+        self.assertFalse(sitio["exists"])
+        self.assertFalse(sitio["mover"])
+        self.assertIsNone(sitio["pool_actual"])
 
 
 class Documentacion(unittest.TestCase):
     def test_la_documentacion_generada_no_lleva_nada_derivado(self):
         texto = identity.render_docs(laboratorio(), entorno())
-        self.assertIn("edge", texto)
+        self.assertIn("rte1", texto)
         self.assertIn("10.44.2.0/24", texto)
         self.assertNotIn("vmid", texto.lower())
         self.assertNotIn("BC:24:11", texto)
@@ -268,6 +508,184 @@ class Documentacion(unittest.TestCase):
     def test_la_documentacion_generada_es_estable(self):
         self.assertEqual(identity.render_docs(laboratorio(), entorno()),
                          identity.render_docs(laboratorio(), entorno()))
+
+    def test_la_pagina_lleva_dentro_los_dos_planos(self):
+        """Los dibujos son SVG en texto dentro de la página, no imágenes ni ficheros.
+
+        Al ser texto, el plano no se puede quedar viejo por separado: entra en el mismo
+        diff que la declaración que lo produce y no hay que regenerar nada aparte.
+        """
+        texto = identity.render_docs(laboratorio(), entorno())
+        self.assertEqual(texto.count("<svg"), 2)
+        self.assertEqual(texto.count("</svg>"), 2)
+        self.assertIn(">Topología<", texto.replace("### Topología", ">Topología<"))
+        self.assertIn("### Cableado (L2)", texto)
+        # Ni enlaces a una imagen ni bloques de otro lenguaje de dibujo: una sola verdad.
+        self.assertNotIn(".svg)", texto)
+        self.assertNotIn("```", texto)
+        self.assertNotIn("mermaid", texto)
+
+    def test_los_planos_salen_enteros_de_la_declaracion(self):
+        """Ni un equipo inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""
+        lab = laboratorio()
+        topologia = plano.plano(lab, "topologia")
+        cableado = plano.plano(lab, "cableado")
+
+        # Cada equipo aparece con su nombre, y cada red con el suyo y su subred.
+        for nodo in lab["nodes"]:
+            self.assertIn(f">{nodo["role"]}<", topologia + cableado)
+        for net in lab["networks"]:
+            self.assertIn(identity._subred(net["address"]), topologia)
+            self.assertIn(f">{net["name"]}<", topologia)
+
+        # Las conexiones son las declaradas por cables (`links`), no por `after`: la
+        # topología dibuja una por cable más la salida a Internet; el cableado, una
+        # por cable. `after` sólo ordena el arranque y la colocación, no dibuja líneas.
+        def conexiones(svg):
+            # El gris de línea es el de una conexión: los símbolos no lo usan.
+            return svg.count('stroke="#94a3b8"')
+
+        self.assertEqual(conexiones(topologia), len(lab["links"]) + 1)  # +1: Internet
+        self.assertEqual(conexiones(cableado), len(lab["links"]))
+
+        # La clase la dice el símbolo, plano y de línea: el router es el círculo con las
+        # cuatro flechas y el switch la caja con las flechas cruzadas. Un laboratorio sin
+        # switches no puede acabar con un símbolo de switch.
+        self.assertIn('<circle r="15.5"', topologia)
+        self.assertNotIn('<rect x="-24" y="-10" width="48" height="20"', topologia)
+
+        # Y un laboratorio con switches los dibuja, con su clase en la clave.
+        lab_c = laboratorio("c_enrutar_y_conmutar")
+        svg_c = plano.plano(lab_c, "topologia")
+        self.assertIn('<rect x="-24" y="-10" width="48" height="20"', svg_c)
+
+    def test_el_plano_escribe_lo_que_no_cambia(self):
+        """La dirección estática va en su equipo y el rango servido, en su red.
+
+        Un plano que sólo dice «dhcp» esconde justo lo que hay que apuntar en un papel:
+        qué dirección tiene cada equipo y qué rango reparte la red.
+        """
+        svg = plano.plano(laboratorio(), "topologia")
+
+        # El router enseña una dirección por pata, no una sola ni ninguna.
+        self.assertIn(">10.44.1.1/24<", svg)
+        self.assertIn(">10.44.2.1/24<", svg)
+        # El rango que sirve cada red, en la cabecera de su área y sin repetir la subred.
+        self.assertIn(">dhcp 10.44.1.100-199<", svg)
+        self.assertIn(">dhcp 10.44.2.100-199<", svg)
+        # Un puesto que sale por DHCP lo dice, que también es un dato fijo del plano.
+        self.assertIn(">dhcp<", svg)
+
+    def test_un_equipo_en_tres_redes_se_rodea_de_ellas(self):
+        """Con tres redes el equipo de varias patas va al cruce, y las áreas no se pisan.
+
+        Una red sin equipos sigue tocando al equipo que la declara: su pata se dibuja
+        hasta el borde del área, que es lo único que hay dentro.
+        """
+        lab = {"lab": "tres_redes", "address_spaces": ["10.70.0.0/16"],
+               "networks": [{"name": "lan", "address": "10.70.1.0/24"},
+                            {"name": "dmz", "address": "10.70.2.0/24"},
+                            {"name": "wan", "address": "10.70.3.0/24"}],
+               "nodes": [
+                   {"role": "fwl1", "type": "firewall", "stage": 1,
+                    "networks": ["wan", "dmz", "lan"], "address": "dhcp"},
+                   {"role": "srv1", "type": "server", "stage": 2, "after": ["fwl1"],
+                    "networks": ["dmz"], "address": "10.70.2.10/24"},
+                   {"role": "swa1", "type": "switch", "stage": 2, "after": ["fwl1"],
+                    "networks": ["lan"]},
+                   {"role": "wsp1", "type": "workstation", "stage": 3, "after": ["swa1"],
+                    "networks": ["lan"], "address": "dhcp"}],
+               "links": []}
+        svg = plano.plano(lab, "topologia")
+
+        cajas = [tuple(float(v) for v in c) for c in re.findall(
+            r'<rect x="(-?[\d.]+)" y="(-?[\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="14"',
+            svg)]
+        self.assertEqual(len(cajas), 3)
+        for i, (x1, y1, w1, h1) in enumerate(cajas):
+            for x2, y2, w2, h2 in cajas[i + 1:]:
+                # Dos redes que se solapan en el dibujo se leen como una sola.
+                self.assertFalse(x1 < x2 + w2 and x2 < x1 + w1
+                                 and y1 < y2 + h2 and y2 < y1 + h1,
+                                 "dos áreas de red se solapan")
+        for net in lab["networks"]:
+            self.assertIn(f'>{net["name"]}<', svg)
+        # Cada clase deja su forma: el muro del cortafuegos y la torre del servidor.
+        self.assertIn('<rect x="-23" y="-13" width="46" height="26"', svg)
+        self.assertIn('<rect x="-12" y="-18" width="24" height="36"', svg)
+
+    def test_el_cableado_dice_los_puertos_de_cada_cable(self):
+        lab = {"lab": "x", "address_spaces": ["10.9.0.0/16"],
+               "networks": [{"name": "lan", "address": "10.9.0.0/24"}],
+               "nodes": [{"role": "r", "type": "router", "stage": 1, "networks": ["lan"],
+                          "address": "10.9.0.1/24"},
+                         {"role": "s", "type": "switch", "stage": 2, "after": ["r"],
+                          "networks": ["lan", "lan"]},
+                         {"role": "h", "type": "workstation", "stage": 3, "after": ["s"],
+                          "networks": ["lan"], "address": "dhcp"}],
+               "links": [{"a": {"node": "r", "port": 1}, "z": {"node": "s", "port": 1}},
+                         {"a": {"node": "s", "port": 2}, "z": {"node": "h", "port": 1}}]}
+        svg = plano.plano(lab, "cableado")
+        # Un cable, una línea; y cada punta con su puerto, junto al equipo que lo ocupa.
+        self.assertEqual(svg.count('stroke="#94a3b8"'), 2)
+        self.assertEqual(re.findall(r">(p\d)<", svg), ["p1", "p1", "p2", "p1"])
+        # El puerto va al costado del cable, no debajo del símbolo: ahí vive el nombre.
+        self.assertIn(">s<", svg)
+        # El cableado no dibuja la salida a Internet: no hay cable declarado que la una.
+        self.assertNotIn("Internet", svg)
+
+
+class ElRegistroDeLosEquipos(unittest.TestCase):
+    """El plan declara el registro de los equipos de red en lo que observa el sitio.
+
+    Es una de las dos cosas que viven fuera del hipervisor, así que el plan no puede
+    saber si falta: la declara como trabajo y el apply escribe sólo la diferencia.
+    """
+
+    def test_el_plan_declara_el_registro_de_los_equipos_de_red(self):
+        plan = identity.plan(mundo(), laboratorio(), entorno())
+        paso = next(s for s in plan["steps"] if s["op"] == "netxms_registro")
+        # Sólo los equipos de red: los puestos no tienen credencial que registrar.
+        self.assertEqual([e["role"] for e in paso["equipos"]], ["rte1"])
+        self.assertTrue([e for e in plan["effects"] if "registrar en lo que observa" in e])
+
+    def test_los_puestos_no_se_registran(self):
+        plan = identity.plan(mundo(), laboratorio(), entorno())
+        registrados = {n["role"] for n in plan["nodes"] if n["management"]}
+        declarados = {e["role"] for s in plan["steps"]
+                      if s["op"] == "netxms_registro" for e in s["equipos"]}
+        self.assertEqual(declarados, registrados)
+        self.assertNotIn("wsp1", declarados)
+
+    def test_un_laboratorio_de_control_no_registra_nada(self):
+        # El nodo de control ES el servicio que observa: no se registra a sí mismo.
+        plan = identity.plan(mundo(), laboratorio("a_bootstrap"), entorno())
+        self.assertEqual([s for s in plan["steps"] if s["op"] == "netxms_registro"], [])
+
+
+class ElReinicioDeUnFichero(unittest.TestCase):
+    """`restart` en un fichero: la configuración de un servicio se relee al cambiarla."""
+
+    def laboratorio_base(self):
+        lab = laboratorio("a_bootstrap")
+        return copy.deepcopy(lab)
+
+    def test_un_fichero_puede_decir_qué_servicio_lo_relee(self):
+        lab = self.laboratorio_base()
+        lab["nodes"][0]["configure"]["files"][0]["restart"] = "netxms-server"
+        identity.validate(lab, entorno())  # no levanta: la clave es válida
+
+    def test_un_reinicio_que_no_es_un_nombre_de_unidad_se_rechaza(self):
+        lab = self.laboratorio_base()
+        lab["nodes"][0]["configure"]["files"][0]["restart"] = 7
+        with self.assertRaises(identity.LabError):
+            identity.validate(lab, entorno())
+
+    def test_una_clave_de_mas_en_un_fichero_se_rechaza(self):
+        lab = self.laboratorio_base()
+        lab["nodes"][0]["configure"]["files"][0]["reiniciar"] = "netxms-server"
+        with self.assertRaisesRegex(identity.LabError, "mode\\?, restart\\?"):
+            identity.validate(lab, entorno())
 
 
 if __name__ == "__main__":

@@ -1,0 +1,62 @@
+# PROPÓSITO:   converger el interior de un nodo Linux: repositorios, paquetes y
+#              servicios. Es la otra mitad de tasks/interior_ssh.yml: aquel lee, éste
+#              compara y escribe sólo la diferencia.
+# INVARIANTES: primero se lee el estado real por SSH; si no responde, no se escribe
+#              nada. Cada escritura está condicionada a la diferencia calculada: la
+#              segunda pasada no lanza ningún comando.
+#              El interior se toca por la puerta de siempre: SSH a su dirección con el
+#              salto hecho por el servicio de gestión.
+# VER:         docs/diseno.md §4.3, §4.4; deployment_engine/tools/converge.py
+
+# El sondeo pregunta sólo por lo declarado. Se ejecuta como `sh -c <script>`: argv
+# evita que el shell del hipervisor interprete el script antes de tiempo.
+- name: "interior · leer el estado de {{ linux_descripcion | default(objetivo) }}"
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "interior · leer el estado"
+    # El túnel aterriza en el invitado de gestión: si el que se converge es ése,
+    # no hay salto que hacer (ver interior_ssh.yml).
+    interior_salto: "{{ linux_nodo.name != env.management.guest }}"
+    comando: "{{ linux_nodo | netlabs_linux_probe_cmd }}"
+    # El sondeo no se imprime: entre sus líneas van las huellas de las claves que las
+    # marcas guardan, y una huella no tiene por qué acabar en un informe. Quien quiera
+    # ver qué se va a escribir lo tiene en la lista de cambios de más abajo.
+    interior_imprime: false
+  when: linux_nodo.configure is defined
+
+- name: "interior · la diferencia entre lo declarado y lo que hay"
+  ansible.builtin.set_fact:
+    linux_actual: "{{ interior.stdout | default('') | netlabs_linux_state }}"
+  when: linux_nodo.configure is defined
+
+- name: "interior · lo que hay que escribir"
+  ansible.builtin.set_fact:
+    # Las credenciales viven en secrets.yml y se leen por su nombre: el
+    # laboratorio nunca lleva una clave escrita. Si el laboratorio no declara
+    # ninguna, el mapa llega vacío y nada cambia.
+    linux_ops: "{{ linux_nodo | netlabs_linux_ops(linux_actual, secrets.credenciales | default({})) }}"
+  when: linux_nodo.configure is defined
+
+- name: "interior · {{ linux_ops | length }} cambio(s) en {{ linux_descripcion | default(objetivo) }}"
+  ansible.builtin.debug:
+    msg: "{{ linux_ops | map(attribute='effect') | list }}"
+  when: linux_ops | length > 0
+
+- name: "interior · escribir la diferencia"
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "interior · {{ linux_op.effect }}"
+    interior_salto: "{{ linux_nodo.name != env.management.guest }}"
+    interior_escribe: true
+    # Una operación que lleva credencial recibe su clave por la entrada
+    # estándar, nunca por la línea de órdenes: así no aparece en `ps` ni en el
+    # informe. El resto de operaciones no recibe nada.
+    interior_secreto: >-
+      {{ (secrets.credenciales[linux_op.secret].clave
+          if secrets.credenciales[linux_op.secret] is mapping
+          else secrets.credenciales[linux_op.secret])
+         if linux_op.secret is defined else '' }}
+    comando: "{{ linux_op.cmd }}"
+  loop: "{{ linux_ops }}"
+  loop_control: {loop_var: linux_op, label: "{{ linux_op.effect }}"}
+  when: linux_ops | length > 0

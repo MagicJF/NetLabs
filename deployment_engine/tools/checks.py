@@ -77,6 +77,10 @@ def comprobar_yaml() -> list[str]:
 RAIZ_PERMITIDA = {
     "netlabs", "netlabs.yml", "secrets.yml", "README.md", "AGENTS.md",
     ".gitignore", ".yamllint", "deployment_engine", "labs", "docs", "logs",
+    # Greptile busca su configuración en la raíz y en ningún otro sitio: movida a un
+    # punto-directorio deja de revisar, su check obligatorio no se pronuncia y el PR se
+    # queda cerrado sin que nada lo explique. Se queda aquí por eso, no por descuido.
+    "greptile.json",
 }
 MOTOR_PERMITIDO = {"playbooks", "tasks", "filter_plugins", "tools", "tests"}
 
@@ -104,6 +108,7 @@ def comprobar_estructura() -> list[str]:
         if not carpeta.is_dir():
             errores.append(f"labs/{carpeta.name}: no es una carpeta de laboratorio")
             continue
+        # La declaración y su página, que ya lleva dentro los planos: nada más.
         permitidos = {f"{carpeta.name}.yml", f"{carpeta.name}.md"}
         for dentro in sorted(carpeta.iterdir()):
             if dentro.name not in permitidos:
@@ -166,28 +171,39 @@ def comprobar_espacios(env) -> list[str]:
     return errores
 
 
-def comprobar_slots(env) -> list[str]:
-    """Dos laboratorios no pueden compartir slot: el slot va dentro del nombre de cada cable.
+def comprobar_letras(env) -> list[str]:
+    """Dos laboratorios no pueden compartir letra: la letra va dentro del nombre de cada cable.
 
-    Un cable se llama por sus dos puntas (`rt01p02_sw01p01`) y el número de laboratorio
-    vive en el identificador del nodo. Si dos laboratorios comparten slot, sus cables
-    comparten nombre y el segundo `apply` se encuentra puentes ajenos con su propio
-    nombre. El slot es la única defensa contra eso, así que se comprueba aquí.
+    Un cable se llama por la letra del laboratorio y sus dos puntas (`c_rte1p1_swc1p1`),
+    y el pool de Proxmox se llama como el laboratorio. Si dos laboratorios comparten
+    letra comparten nombre de cable y de pool, y el segundo `apply` se encuentra
+    puentes ajenos con el suyo. La letra es la única defensa contra eso, así que se
+    comprueba aquí.
     """
     errores = []
     vistos = {}
     for nombre, (ruta, lab) in laboratorios().items():
-        slot = lab.get("slot", 0)
-        if not isinstance(slot, int) or not 0 <= slot <= 9:
-            errores.append(f"{ruta.relative_to(RAIZ)}: slot {slot!r} fuera de 0-9")
+        # El nombre tiene que ser una cadena antes de mirarle la primera letra: un `lab: 4`
+        # o `lab: [a_bootstrap]` es un nombre mal escrito, y tomarlo por una ruta de fichero
+        # o un índice hacía fallar la comprobación consigo misma —una lista no tiene
+        # `[:1]`— en vez de decir el error. Un YAML se escribe a mano y esto no se negocia.
+        valor = lab.get("lab")
+        if not isinstance(valor, str):
+            errores.append(f"{ruta.relative_to(RAIZ)}: el nombre del laboratorio "
+                           f"{valor!r} ({type(valor).__name__}) no es una cadena")
             continue
-        if slot in vistos:
+        letra = valor[:1]
+        if not re.fullmatch(r"[a-z]", letra):
+            errores.append(f"{ruta.relative_to(RAIZ)}: el nombre del laboratorio "
+                           f"{valor!r} no empieza por una letra de la a a la z")
+            continue
+        if letra in vistos:
             errores.append(
-                f"{ruta.relative_to(RAIZ)}: slot {slot} ya lo usa '{vistos[slot]}'; "
-                "dos laboratorios con el mismo slot comparten nombres de cable"
+                f"{ruta.relative_to(RAIZ)}: la letra {letra!r} ya la usa '{vistos[letra]}'; "
+                "dos laboratorios con la misma letra comparten nombres de cable y de pool"
             )
         else:
-            vistos[slot] = nombre
+            vistos[letra] = nombre
     return errores
 
 
@@ -213,7 +229,16 @@ def comprobar_documentacion(env) -> list[str]:
 
 def comprobar_pureza(env) -> list[str]:
     """El motor no puede mencionar nada de un laboratorio concreto: si lo hace, es un bug
-    aunque funcione, porque el siguiente laboratorio lo hereda."""
+    aunque funcione, porque el siguiente laboratorio lo hereda.
+
+    La excepción es el vocabulario del **sitio**: el invitado de gestión y su pool se
+    declaran en `netlabs.yml`, no en un laboratorio, y el motor sí habla con el servicio
+    que observa el sitio (la quinta vía, `tasks/netxms.yml`). Que el laboratorio de control
+    adopte ese invitado como su nodo no lo convierte en palabra de ese laboratorio; si un
+    laboratorio lo reusara para otra cosa, su declaración y la del sitio discreparían y lo
+    diría `comprobar_declaraciones`, no esto.
+    """
+    del_sitio = {env["management"]["guest"], env["management"]["pool"]}
     errores = []
     for nombre, (ruta, lab) in laboratorios().items():
         vocabulario = {nombre}
@@ -221,6 +246,7 @@ def comprobar_pureza(env) -> list[str]:
         vocabulario |= {n["name"] for n in lab.get("networks") or []}
         vocabulario |= set(lab.get("address_spaces") or [])
         vocabulario |= {n["address"] for n in lab.get("networks") or []}
+        vocabulario -= del_sitio
         for fichero in sorted(MOTOR.rglob("*")):
             if not fichero.is_file() or fichero.suffix not in (".py", ".yml", ".yaml", ".j2"):
                 continue
@@ -303,7 +329,7 @@ def ejecutar() -> int:
         ("YAML válido y sin claves duplicadas", lambda: comprobar_yaml()),
         ("declaraciones del vocabulario cerrado", lambda: comprobar_declaraciones(env)),
         ("espacios de direcciones disjuntos", lambda: comprobar_espacios(env)),
-        ("slots de laboratorio distintos", lambda: comprobar_slots(env)),
+        ("letras de laboratorio distintas", lambda: comprobar_letras(env)),
         ("documentación generada al día", lambda: comprobar_documentacion(env)),
         ("el motor no conoce ningún laboratorio", lambda: comprobar_pureza(env)),
         ("enlaces de la documentación", comprobar_enlaces),

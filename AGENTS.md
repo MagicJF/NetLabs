@@ -19,16 +19,16 @@ Tres consecuencias que ordenan todo lo demás:
 - **Lo que no se demuestra, no se ha hecho.** Cada «ya funciona» va con el comando y su salida.
 
 Y una frontera de carpetas que no se cruza: **cada carpeta de primer nivel tiene un solo dueño.**
-`deployment_engine/` es el motor y no lee `labs/`; `labs/<lab>/` sólo declara `<lab>.yml` y
-`<lab>.md`; los informes de ejecución van a `logs/`, nunca dentro del motor ni de un laboratorio;
+`deployment_engine/` es el motor y no lee `labs/`; `labs/<lab>/` sólo declara `<lab>.yml` y su
+`<lab>.md`, que lleva dentro los dos planos como SVG en texto; los informes de ejecución van a `logs/`, nunca dentro del motor ni de un laboratorio;
 `netlabs.yml` en la raíz es configuración del **sitio** (nodo, almacenes, gestión), no de un
 laboratorio concreto. La raíz no guarda código. `./netlabs check` comprueba esta estructura: un
 fichero fuera de su sitio es un fallo, no una convención.
 
-## 2. Las cuatro vías
+## 2. Las cinco vías
 
-Sólo hay cuatro formas de hablar con el mundo, y cada una vive en un fichero. Si necesitas una
-quinta, para y plantéala; no la abras por tu cuenta.
+Sólo hay cinco formas de hablar con el mundo, y cada una vive en un fichero. Si necesitas una
+sexta, para y plantéala; no la abras por tu cuenta.
 
 | A dónde | Por dónde | Fichero |
 | --- | --- | --- |
@@ -36,10 +36,22 @@ quinta, para y plantéala; no la abras por tu cuenta.
 | RouterOS | su REST, por la red de gestión | `tasks/ros.yml` |
 | Interior Linux (LXC) | SSH a su dirección, con ruta estática al router | `tasks/interior_ssh.yml` |
 | Primer arranque de un router | el agente del invitado, por la API | `tasks/bootstrap.yml` |
+| El servicio que observa el sitio (NetXMS) | su API REST, por el túnel, desde dentro de su invitado | `tasks/netxms.yml` |
 
 La cuarta existe por una razón concreta: un router recién creado **no tiene dirección**, así que no
 hay a dónde hacer SSH ni dónde pedir su REST. El agente del hipervisor escribe un fichero y lo
 ejecuta; es la única puerta que se abre antes de que exista red, y se cierra en cuanto la hay.
+
+La quinta la abre el motor para **registrar cada equipo de red en lo que observa el sitio**, con su
+usuario y su clave, de modo que quien mira lo vea en la consola y pueda abrir su terminal sin teclear
+nada. Va contra el API del servicio de gestión, que escucha **dentro** de su invitado: se llama con
+`curl` por la puerta de siempre (`interior_ssh.yml`), desde dentro. El servicio es **del sitio**, no
+de un laboratorio (`netlabs.yml` → `management.api` y `secrets.yml`), y por eso el motor sí puede
+nombrarlo aunque el laboratorio de control lo adopte como su nodo. Es una vía de **escritura de la
+diferencia**: se dan de alta los equipos que faltan y se dice en voz alta lo que no se puede
+corregir por el API (un equipo ya descubierto con otras credenciales). Sólo se abre donde el
+laboratorio tiene algo que registrar —los equipos de red, no los puestos—, así que un laboratorio de
+control no la usa. El porqué completo está en `docs/decisiones/0003`.
 
 ## 3. Lo que no se hace, y por qué
 
@@ -48,7 +60,9 @@ ejecuta; es la única puerta que se abre antes de que exista red, y se cierra en
    una costumbre. (Para *diagnosticar* sí puedes entrar por SSH: su fruto debe ser una comprobación
    nueva o un mensaje de error mejor, nunca un atajo.)
 2. **No se declaran números que se pueden derivar.** Ni identificadores, ni MACs, ni direcciones de
-   gestión. Se derivan del identificador que elige el motor; si un YAML los lleva, es un bug.
+   gestión. Se derivan del identificador que elige el motor; si un YAML los lleva, es un bug. El
+   **nombre de un equipo sí se declara entero** —dos letras de tipo, una de función y el ordinal—:
+   es su identidad, y el motor la comprueba contra el tipo declarado en vez de adivinarla.
 3. **No se escribe a mano dentro de lo generado.** Si el agente edita lo que genera la herramienta,
    el fichero pasa a tener dos verdades y la herramienta lo sobrescribe.
 4. **No se añaden colecciones de Ansible.** Sólo `ansible.builtin`: una dependencia menos que explicar
@@ -60,12 +74,15 @@ ejecuta; es la única puerta que se abre antes de que exista red, y se cierra en
 7. **No se configura fuera de las áreas que el laboratorio declara.** Dentro de un área, lo que sobra
    se quita; fuera, no se entra. Sin esta frontera, el motor se convierte en un `ssh` con esteroides.
 8. **El hipervisor no conmuta: un puente es un cable tonto.** Un `bridge` de Proxmox une exactamente
-   dos puertos y se llama por sus dos puntas, `<A-end>_<Z-end>`, cada una `<rol><id>p<puerto>` (por
-   ejemplo `rt01p02_sw01p01`, 15 caracteres como tope). No lleva CIDR, ni puerta, ni MAC, ni DHCP, ni
-   VLAN: esas cosas son del puerto, no del cable. Si un laboratorio necesita conmutar, se declara un
-   nodo `switch` (un RouterOS) y se cablea como cualquier otro equipo. El número de laboratorio va
-   dentro del identificador de cada nodo (slot + ordinal), no como sufijo del cable: así dos labs no
-   comparten nombres y el cable sigue cabiendo en 15 caracteres.
+   dos puertos y se llama por la letra del laboratorio y sus dos puntas,
+   `<letra>_<equipo>p<puerto>_<equipo>p<puerto>` (por ejemplo `c_rte1p1_swc1p1`, 15 caracteres como
+   tope). No lleva CIDR, ni puerta, ni MAC, ni DHCP, ni VLAN: esas cosas son del puerto, no del
+   cable. Si un laboratorio necesita conmutar, se declara un nodo `switch` (un RouterOS) y se cablea
+   como cualquier otro equipo. El nombre de cada equipo es su rol —dos letras de tipo, una de función
+   y el ordinal— y ese mismo nombre es el del invitado, el de su hostname y el de la punta de cada
+   cable que lo toca: un nombre, no tres. La punta mide seis caracteres, así que el cable cabe en los
+   15 de un nombre de interfaz de Linux porque **el puerto es de una cifra**: nueve puertos cableados
+   por equipo, y al agotarse el motor lo dice en vez de reventar al levantar el puente.
 
 ## 4. Quién pone los números
 
@@ -127,3 +144,26 @@ Están aquí para que no las pagues otra vez. Si encuentras una nueva, añádela
 
 **Un solo fichero de contexto por repositorio.** Este. Nunca un `.hermes.md` al lado: Hermes lo carga
 primero y este quedaría invisible, con lo que las reglas dejarían de aplicarse sin que nadie lo note.
+
+## 9. La puerta del merge
+
+Un PR no entra en `main` porque esté verde en local: entra cuando lo dicen los checks. La
+protección de `main` exige tres cosas y ninguna se puede saltar desde la interfaz:
+
+- **`netlabs check`** — el mismo comando de §5, corriendo en CI (`.github/workflows/verificar.yml`).
+- **`CodeRabbit`** — el check de CodeRabbit (`.coderabbit.yaml`), en español y en perfil `assertive`.
+- **`Greptile Review`** — el check de Greptile (`greptile.json` en la raíz, `strictness: 3`).
+  Va en la raíz y no en un punto-directorio porque es ahí donde Greptile lo busca: movido a
+  `.greptile/`, deja de revisar y su check obligatorio no se pronuncia, con lo que el PR se
+  queda cerrado sin decir por qué.
+
+Y además que **no quede ninguna conversación sin resolver**: los dos revisores comentan en el PR,
+y un comentario abierto bloquea el merge aunque los checks estén en verde.
+
+Cómo se itera: se corrigen los hallazgos en la misma rama, se empuja, y los dos revisores vuelven
+a mirar el commit nuevo —Greptile en cada push, CodeRabbit con `@coderabbitai full review` si hizo
+falta pedirlo. Se repite hasta que los dos quedan en verde y sin conversaciones abiertas.
+
+Si un check se queda colgado por una caída de la herramienta, no se desactiva la protección: se
+arregla el check o se quita ese contexto de la lista (`gh api -X PATCH .../protection/required_status_checks`),
+y se deja escrito por qué en el propio PR.

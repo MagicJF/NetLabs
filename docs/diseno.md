@@ -82,8 +82,10 @@ Cada laboratorio se declara en **un fichero YAML**, y ese fichero **es** el esta
 **Ansible** lo lleva a la realidad, es **idempotente** y no guarda nada propio en disco: ni
 inventario, ni fichero de asignaciones, ni memoria de lo que desplegó.
 
-Todo lo derivado se **re-deriva** preguntando al hipervisor: identificadores, nombres, MAC,
-direcciones de gestión y pertenencia. La **frontera de propiedad** —qué es de este
+Todo lo derivado se **re-deriva** preguntando al hipervisor: identificadores, MAC,
+direcciones de gestión y pertenencia. El **nombre de un equipo sí se declara** —es su
+identidad—, y de él salen el hostname del invitado, su nombre en el hipervisor y las
+puntas de sus cables. La **frontera de propiedad** —qué es de este
 laboratorio y qué es ajeno— se lee también del hipervisor: un grupo de recursos con el
 nombre del laboratorio y una descripción en cada nodo que dice a qué rol pertenece.
 
@@ -122,6 +124,13 @@ verde.
 *Evita:* el despliegue que tarda de más porque durmió, el que mira antes de tiempo y el proceso
 que se queda parado sin decir por qué.
 
+**La condición se escribe para que pueda fallar.** «El puesto tiene dirección» es una IPv4 en una
+interfaz que no sea `lo`, no la palabra `inet` en cualquier parte de la respuesta: el bucle local
+siempre la lleva y una comprobación así nunca falla —y una comprobación que no puede fallar no
+comprueba nada—. Si el puesto arrancó antes de que su router sirviera DHCP y se quedó mudo, el
+motor lo **reinicia una vez** (una reparación acotada, visible en el informe) y vuelve a sondear;
+si aun así no hay dirección, el `apply` para con su nombre.
+
 ### 2.6. Nunca para en silencio, nunca sigue de largo
 
 Un paso que no puede cumplirse **para y dice qué falta y cómo se arregla**. No hay «continuar
@@ -140,8 +149,11 @@ vez de recordar, comparar antes de escribir—, no un extra.
 
 Al hipervisor se le habla **sólo** por su API REST, desde un fichero del motor. A un RouterOS,
 **sólo** por su API REST —salvo su primer arranque, que va por el agente del hipervisor, es
-decir, también por la API (§3.8)—. A un Linux, **sólo** por SSH. Una vía nueva para lo mismo es
-un defecto, no una comodidad.
+decir, también por la API (§3.8)—. A un Linux, **sólo** por SSH. Al servicio que observa el sitio
+(NetXMS), **sólo** por su API REST y **desde dentro de su invitado** —ahí aterriza el túnel del
+motor—: por esa puerta registra el motor cada equipo de red con su credencial, y no toca su base
+por ninguna otra (§3.4; `docs/decisiones/0003`). Una vía nueva para lo mismo es un defecto, no una
+comodidad.
 
 *Evita:* llamadas a la API repartidas por todo el motor, imposibles de seguir y de auditar.
 
@@ -160,6 +172,42 @@ La página de cada laboratorio tiene dos regiones: una **generada** desde la dec
 (tablas de nodos, direcciones, etapas) y otra de **prosa** escrita a mano (por qué se hizo
 así, qué se aprendió). La comprobación re-renderiza la región generada y **falla si difiere**
 de lo que hay en el fichero.
+
+La región generada lleva además dos **planos**, también sacados de la declaración: la
+**topología** (cada red como área translúcida con su nombre, su subred y la dirección de su
+puerta, y dentro quién cuelga de ella) y el **cableado** (un equipo por nodo y una línea por
+cable, con el puerto que ocupa cada punta). Los dibuja `tools/plano.py` y los escribe **dentro
+de la propia página**, como SVG en texto. No hay fichero de imagen: el plano es código generado
+que se revisa en el diff como cualquier otra línea, no se puede quedar viejo por separado y
+`./netlabs docs --check` lo compara con lo que la declaración produce hoy. Mermaid no sirve para
+esto: no sabe dibujar los símbolos de una red (router, switch, cortafuegos, servidor) y sus áreas
+no pueden tocarse, así que un router con pata en dos redes no se puede poner entre ellas.
+
+El plano se dibuja como un plano de red, no como un organigrama. **El eje lo marca el router**:
+un equipo con pata en varias redes se sienta donde se tocan, **encima del cruce** —el borde de
+cada área pasa por debajo de su símbolo, no a un lado—, con una red a cada lado y la salida a
+Internet arriba; con una sola red, el router se sienta sobre el techo del área.
+
+**Lo que no cambia se escribe**: cada equipo lleva su dirección estática bajo el nombre —una por
+pata si tiene varias, como un router con un pie en cada red— y el que sale por DHCP lo dice con
+esa palabra. Cada área, en su cabecera, lleva su nombre, su subred y **el rango que sirve su
+DHCP**. La puerta no se repite en la cabecera: es la dirección del equipo que toca la red y va
+escrita en él, que es su dueño. Un equipo de una sola red vive
+dentro de la suya, y dentro de cada red la profundidad baja: lo que cuelga de la puerta queda
+pegado a ella. **La clase la dice el símbolo**, plano y de línea, sin volumen ni perspectiva: el router
+es el círculo con las cuatro flechas, el switch la caja con las flechas cruzadas y sus puertos, el
+cortafuegos el muro de ladrillos, el servidor la torre de bahías, el puesto la pantalla con su peana
+y el nodo de gestión la pantalla con la rueda dentada. El color de acento dice la familia, como en
+los juegos de iconos de AWS: morado para lo que conmuta y enruta, rojo para lo que filtra, gris para
+lo que atiende al usuario. Se dibujan aquí con vectores, hijo a hijo del mismo generador, y no se
+copian de ningún pack de iconos: los de Cisco y los de AWS son suyos, sus licencias no permiten
+redistribuirlos y este plano se versiona entero junto al laboratorio. No lleva clave de símbolos:
+la forma y el nombre de cada equipo ya dicen lo que es, y una clave que repite lo que el dibujo
+enseña sólo ocupa sitio. Un solo color para todas las redes —el color dice «esto es una red», no «esta red es distinta»—. Las líneas van **sin
+flecha**: el plano dice quién toca a quién, y una punta sugeriría un tráfico que nadie declaró;
+la salida a Internet se distingue por el trazo discontinuo, que no es un cable del laboratorio.
+Un plano que no sale de la declaración no se dibuja: se pudre el primero que alguien cambie algo
+a mano.
 
 *Evita:* el documento que describe un sistema que ya no existe.
 
@@ -421,27 +469,27 @@ une exactamente dos puertos y transporta lo que le metan. No tiene dirección, n
 ni DHCP, ni VLAN: si tuviera cualquiera de esas cosas, sería un conmutador, y el motor no crea
 conmutadores.
 
-**El nombre del cable son sus dos puntas.** Se nombra con lo que une, en el orden
-`<A-end>_<Z-end>`, y cada punta es `<código-de-rol><id>p<puerto>`:
+**El nombre del cable lleva la letra del laboratorio y sus dos puntas.** Se nombra
+`<letra>_<equipo>p<puerto>_<equipo>p<puerto>`, y cada equipo por su rol:
 
 ```
-rt01p01_ws01p01     router 01, puerto 01  ->  workstation 01, puerto 01
-fw01p02_rt01p01     firewall 01, puerto 02 -> router 01, puerto 01
-sw01p03_ws01p01     switch 01, puerto 03  ->  workstation 01, puerto 01
+c_rte1p1_swc1p1     laboratorio `c`: el router de borde 1 -> el switch de núcleo 1
+b_rte1p2_wsp2p1     laboratorio `b`: el router de borde 1 -> el segundo puesto
 ```
 
-Cada punta mide siempre 7 caracteres (código de dos letras, identificador de dos cifras, `p` y
-puerto de dos cifras), así que el nombre mide 15 y **cabe en el tope de 15 caracteres de un
-nombre de interfaz en Linux**. El nombre del cable dice qué une sin consultar la declaración: es
-la mitad de la documentación.
+**La letra es la del nombre del laboratorio** (`c_enrutar_y_conmutar`) y es lo que hace
+que dos laboratorios con la misma topología en el mismo hipervisor no compartan un solo
+nombre de puente. Cada punta mide seis caracteres (dos de tipo, una de función, el
+ordinal, `p` y el puerto), así que el nombre mide 15 y **cabe en el tope de 15
+caracteres de un nombre de interfaz en Linux** (`IFNAMSIZ` es 16, con el nulo final). El
+nombre del cable dice qué une sin consultar la declaración: es la mitad de la
+documentación.
 
-**Por qué el identificador lleva el slot.** Un cable no puede llamarse
-`rt01p02_sw01p01_XX` porque no cabe. El número de laboratorio va **dentro** del identificador de
-cada nodo: dos cifras, **slot + ordinal dentro del tipo**. Slot 0 y primer router -> `01`; slot 1
-y primer router -> `11`. Así dos laboratorios con la misma topología en el mismo hipervisor no
-comparten un solo nombre de cable, sin sufijos y sin alargar el nombre. El precio, dicho claro:
-**diez slots por hipervisor** (0-9) y **nueve nodos por tipo y laboratorio**; al agotarse, el
-motor lo dice en vez de repetir un nombre.
+**Por qué el puerto es de una cifra.** El tope de 15 no es una convención: es del
+kernel. Con la letra del laboratorio y las dos puntas dentro, el puerto cabe en una
+cifra, y de ahí que **un equipo no pueda tener más de nueve puertos cableados**. El
+límite se dice: al pedir el puerto 10 el motor se para con un mensaje, en vez de dejar
+que la API de Proxmox acepte el nombre y el puente falle después, al levantarlo.
 
 **El comentario del puente dice de quién es.** Como el cable no puede llevar CIDR, su marca vive
 en el comentario: `netlabs lab=<lab> space=<cidr> cable=<nombre>`. Es lo que permite a `destroy`
@@ -476,6 +524,15 @@ renumerar las interfaces declaradas— y su dirección de gestión se deriva del
 Por ahí los alcanza **Ansible** (entrando por el servicio persistente, §3.4) y por ahí los
 observa **NetXMS**.
 Es su plano de gestión; su tráfico de datos no pasa por ahí.
+
+**Un switch, dentro, es un puente.** El motor no le pone direcciones de laboratorio (no declara
+`address`) y converge su interior a un único `/interface/bridge` llamado `netlabs-<red>` con una
+sola entrada por cada pata de laboratorio; la pata de gestión queda **fuera** del puente, porque
+si entrara el switch sería un cable entre la red de gestión y el laboratorio. El puente va sin STP
+(`protocol-mode: none`): no hay bucles que romper en un cableado declarado, y un protocolo que no
+se declara no se enciende. Todas sus patas tienen que ser de la **misma red** —un switch que une
+dos redes está enrutando— y por eso el mismo tipo no admite la red repetida que un router sí
+prohíbe.
 
 ### 4.2. Nodos finales (`type: server`, `type: workstation`)
 
@@ -551,7 +608,8 @@ después los nodos, y los nodos se refieren a las redes por su nombre**. No hay 
 posicionales ni números mágicos, y el orden de las patas es el orden en que se declaran.
 
 ```yaml
-lab: <lab-name>                          # also the name of the folder
+lab: <letra>_<título>                    # la letra es la cabeza de cada cable y el nombre
+                                         # es también el de la carpeta, el fichero y el pool
 
 address_spaces: [<cidr>, ...]            # addresses this lab may use; no other lab may
 
@@ -560,7 +618,8 @@ networks:                                # named networks of the lab
     address: <cidr>
 
 nodes:
-  - role: <role-in-this-lab>             # the contract: how it is referenced
+  - role: <equipo>                       # su nombre en todas partes: dos letras de tipo,
+                                         # una de función y el ordinal (`swc2`)
     type: router | server | workstation | switch
     stage: <integer>                     # coarse order: a stage waits for the previous one
     after: [<role>, ...]                 # optional: fine order inside the same stage
@@ -574,7 +633,9 @@ nodes:
 
 Reglas:
 
-1. **Nada derivado.** Ni identificadores, ni MAC, ni direcciones de gestión.
+1. **Nada derivado.** Ni identificadores, ni MAC, ni direcciones de gestión. El **nombre de un
+   equipo sí se declara entero** —tipo, función y ordinal— y el motor lo comprueba contra el tipo
+   declarado: si no cuentan lo mismo, se para antes de tocar nada.
 2. **Los espacios de direcciones son exclusivos** entre laboratorios, y **no se confía en la
    palabra**: el plan lo comprueba contra lo que ya existe en el hipervisor (y contra el espacio
    de gestión), y falla antes de tocar nada si se pisan.
@@ -601,11 +662,19 @@ Tres vías, cada una en un fichero del motor:
   nodo, con la contraseña del fichero de secretos (§10).
 
 Lo configurable se declara por **áreas**, nombradas con el vocabulario de la API del equipo
-(`identity`, `addresses`, `routes`, `dhcp_server`, `services`, `users`). Un área declarada se
-converge entera; un área ausente se deja intacta. Todas las áreas y sus claves caben en **una
-tabla que se lee de una sentada**; si un laboratorio necesita algo que no está, se añade la
-primitiva al motor **con su prueba**, no se abre una puerta genérica del tipo «ejecuta esta
-orden» ni se permite un caso especial por laboratorio.
+(`addresses`, `routes`, `dhcp_server`, `services`, `users`, `snmp`). Un área declarada se
+converge entera; un área ausente se deja intacta. El **nombre del equipo no es un área**: sale del
+rol declarado y el motor lo escribe en todas partes (el hostname del invitado, la identidad del
+RouterOS), así que declararlo otra vez sería una segunda verdad esperando a contradecirse. Todas las
+áreas y sus claves caben en **una tabla que se lee de una sentada**; si un laboratorio necesita algo
+que no está, se añade la primitiva al motor **con su prueba**, no se abre una puerta genérica del
+tipo «ejecuta esta orden» ni se permite un caso especial por laboratorio.
+
+El área `snmp` enciende el servicio y mantiene una comunidad de **sólo lectura, restringida a la
+red de gestión**: el laboratorio dice `enabled` y nombra la comunidad (`community_from`), y el
+valor se resuelve en `secrets.yml`. Sin el área, el motor no toca el servicio; es lo que permite
+a NetXMS leer nombre, interfaces, rutas y tabla ARP del router, y de ahí lo que cuelga de sus
+redes (§3.4).
 
 El área que abre el laboratorio al plano de gestión (permitir el cruce desde la red de gestión
 hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.
@@ -780,12 +849,12 @@ ejemplo de declaración**, y el motor lo despliega **sin tocar `engine/`**.
 | **node** | un elemento del laboratorio: router, switch, server, workstation |
 | **network device** | el que hace la red (router, switch): tiene red de gestión |
 | **end node** | el que usa la red (server, workstation): se llega a él por su router |
-| **role** | el papel de un node dentro de su lab; es su contrato de referencia |
+| **role** | el papel de un node dentro de su lab: su contrato de referencia y su nombre en todas partes |
 | **stage** | unidad de orden: una no empieza hasta que la anterior converge y sirve |
 | **area** | conjunto de ajustes que se convergen enteros dentro de un node |
 | **OOB** | red de gestión compartida, por la que se llega a los equipos de red |
-| **management pool** | pool persistente del plano de gestión; ningún laboratorio lo toca |
-| **lab pool** | pool efímero de un laboratorio; es el alcance de `destroy` |
+| **management pool** | pool del servicio persistente: es el de su laboratorio de control, y ningún otro laboratorio lo toca |
+| **lab pool** | pool efímero de un laboratorio, que se llama como él; es el alcance de `destroy` |
 | **guest agent (QEMU)** | agente del hipervisor: sólo **lee** estado del invitado |
 | **serial console** | la consola de texto del router, alcanzada por la API; por ahí va la línea de arranque |
 | **guest agent (QGA)** | el agente del CHR: lee estado y puede ejecutar un script de RouterOS |

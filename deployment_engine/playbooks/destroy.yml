@@ -2,6 +2,8 @@
 #              Nada más. Lo que no está declarado es de otro y no se toca.
 # INVARIANTES: se borra por pool y por marca (`netlabs lab=<lab>`), nunca "todo lo
 #              parado" ni "lo que sobra".
+#              Las rutas hacia sus redes se retiran de la misma marca: son las que
+#              caen dentro de los espacios que el laboratorio declaraba.
 #              Si algo no se puede borrar, se para y se dice qué quedó.
 # VER:         docs/diseno.md §7; AGENTS.md §3.6
 
@@ -14,15 +16,30 @@
     env: "{{ lookup('file', raiz ~ '/netlabs.yml') | from_yaml }}"
     secrets: "{{ lookup('file', raiz ~ '/secrets.yml') | from_yaml }}"
     lab: "{{ lookup('file', raiz ~ '/labs/' ~ netlabs_lab ~ '/' ~ netlabs_lab ~ '.yml') | from_yaml }}"
+    clave: "{{ env.management.tunnel.key | expanduser }}"
+    puerto: "{{ env.management.tunnel.local_ssh_port }}"
   tasks:
     - include_tasks: ../tasks/world.yml
 
+    # El laboratorio de control no es un laboratorio efímero: su invitado es el
+    # servicio persistente que observa el sitio (NetXMS), con su base y su histórico,
+    # y sobrevive a cualquier destroy (docs/diseno.md §2.4, §3.4-§3.5). Su pool se
+    # llama como él, así que sin esta puerta se seleccionaría como propio y se
+    # borraría con purge. Se rechaza ANTES de tocar nada.
+    - name: destroy · el servicio persistente no se destruye desde aquí
+      ansible.builtin.assert:
+        that: lab.kind | default('topology') != 'control'
+        fail_msg: >-
+          `{{ lab.lab }}` es el laboratorio de control (kind: control) y su invitado es el
+          servicio persistente: no es un laboratorio efímero y no se retira desde la
+          herramienta. Lo persistente sobrevive a los destroy de los demás.
+
     - name: destroy · calcular qué es de este laboratorio
       ansible.builtin.set_fact:
-        pool: "netlabs-lab-{{ lab.lab }}"
+        pool: "{{ lab.lab }}"
         marca: "netlabs lab={{ lab.lab }}"
         puentes: "{{ world.bridges | selectattr('comments', 'search', 'netlabs lab=' ~ lab.lab) | list }}"
-        suyos: "{{ world.guests | selectattr('pool', 'equalto', 'netlabs-lab-' ~ lab.lab) | list }}"
+        suyos: "{{ world.guests | selectattr('pool', 'equalto', lab.lab) | list }}"
 
     - name: "destroy · {{ lab.lab }}"
       ansible.builtin.debug:
@@ -85,6 +102,17 @@
         pve_do: "borrar el pool {{ pool }}"
         pve_status: [200]
       when: pool in (world.pools | default([]))
+
+    # --- las rutas ---------------------------------------------------------
+    # Las rutas hacia las redes del laboratorio viven en el invitado de gestión y
+    # apuntan a espacios que este laboratorio declaraba: son suyas y se retiran con
+    # lo demás. Si se quedaran, el invitado seguiría enrutando hacia una red que ya
+    # no existe; si no se pueden retirar, se para y se dice qué quedó.
+    - name: destroy · retirar las rutas hacia las redes del laboratorio
+      include_tasks: ../tasks/rutas.yml
+      vars:
+        rutas_deseadas: []
+        espacios: "{{ lab.address_spaces | default([]) }}"
 
     # --- la comprobación que cuenta ---------------------------------------
     - include_tasks: ../tasks/world.yml

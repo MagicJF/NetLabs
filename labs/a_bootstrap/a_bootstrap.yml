@@ -1,0 +1,184 @@
+# a_bootstrap · el servicio que observa el sitio
+#
+# No dibuja una topología: es el invitado persistente que ya existía antes del
+# motor y que sobrevive a todos los laboratorios. Su única pata está en la red de
+# gestión y su dirección se deriva de su vmid, igual que la del resto.
+#
+# Aquí se declaran un repositorio, unos paquetes y unos ficheros de configuración. El
+# motor **sí sabe** que este servicio tiene un API y que su nombre es NetXMS
+# (`tasks/netxms.yml`, la quinta vía del diseño): con él registra cada equipo del
+# laboratorio con su credencial. Lo que sigue viviendo sólo aquí es *cómo* se instala
+# y *cómo* se configura este servicio; lo que el motor habla con él, está en el motor.
+
+lab: a_bootstrap
+kind: control
+
+nodes:
+  - role: netxms
+    type: control
+    stage: 1
+    configure:
+      repositories:
+        - name: netxms
+          url: https://packages.netxms.org/7.x/debian
+          suite: trixie
+          components: main
+          key: https://packages.netxms.org/netxms-keyring.gpg
+      packages:
+        - netxms-server
+        # La consola web no viene con el servidor: es un WAR de Jakarta Servlet
+        # que necesita un contenedor. Tomcat 11 está en trixie y trae el suyo.
+        - tomcat11
+        - default-jre-headless
+        # El agente no es un extra de monitorización del propio servidor: es quien
+        # abre el canal SSH interactivo de la consola, y sin él la terminal que el
+        # motor deja preparada (usuario y clave en el equipo) no tiene quien la abra.
+        # El servidor NO depende de él: hay que declararlo (medido).
+        - netxms-agent
+      # El servidor no arranca sin base de datos: sin esta sección sale con
+      # status=3 (NOTIMPLEMENTED) y se queda en bucle de reinicio. SQLite porque
+      # es una sola máquina y no hay un motor de base de datos que mantener.
+      files:
+        # `Module = webapi` enciende el API REST del servidor (`/v1/...` en el 8000,
+        # escuchando sólo dentro del invitado): por ahí entra el motor para registrar
+        # los equipos. Sin el módulo cargado el puerto contesta 404 a todo, así que
+        # `restart` no es un lujo: sin releer, el fichero nuevo no cambia nada.
+        - path: /etc/netxmsd.conf
+          restart: netxms-server
+          content: |
+            ## Logging
+            LogFile=/var/log/netxmsd
+            DebugLevel=2
+
+            ## Database configuration - SQLite (single host, no DBA to maintain)
+            DBDriver=sqlite.ddr
+            DBName=/var/lib/netxms/netxms.db
+
+            ## API REST (module webapi): /v1/... en 127.0.0.1:8000
+            Module = webapi
+        # El subagente SSH es lo que convierte al agente en el proxy de la consola:
+        # es él quien abre la sesión hacia el equipo. Va en el directorio de ficheros
+        # adicionales que lee el agente, y no tocando el del paquete: sus valores
+        # cambian con la versión y el motor no puede reescribirlos sin perderlos.
+        # Medido: sin esta línea, la consola contesta «Unknown command» al abrir la
+        # terminal aunque el equipo tenga sus credenciales y el agente esté en pie.
+        - path: /etc/nxagentd.conf.d/10-netlabs.conf
+          restart: netxms-agent
+          content: |
+            ### netlabs — el canal SSH interactivo lo abre el agente (subagente ssh)
+            SubAgent=ssh
+        # La consola tiene que saber a qué servidor hablar. Va en el classpath
+        # común de Tomcat; el servidor está en la misma máquina.
+        - path: /usr/share/tomcat11/lib/nxmc.properties
+          content: |
+            server=127.0.0.1
+        # `nxdbmgr set-user-password` lee la clave de /dev/tty, no de la entrada
+        # estándar: sin un pseudo-terminal contesta «Cannot read password». Este
+        # ayudante se lo da. La clave entra por stdin y no aparece en `ps`.
+        - path: /usr/local/sbin/netlabs-netxms-password
+          mode: '0755'
+          content: |
+            #!/usr/bin/env python3
+            """Cambia la clave de un usuario de NetXMS sin terminal interactiva."""
+            import os, pty, select, signal, sys, time
+
+            usuario = sys.argv[1] if len(sys.argv) > 1 else "admin"
+            clave = sys.stdin.readline().rstrip("\n").encode()
+            if not clave:
+                sys.exit("sin clave en la entrada estándar")
+
+            pid, fd = pty.fork()
+            if pid == 0:
+                os.execv("/usr/bin/nxdbmgr", ["nxdbmgr", "set-user-password", usuario])
+
+            salida = b""
+            enviadas = 0
+            final = time.time() + 60
+            # El plazo agotado es un fallo, no una espera sin tope. Sin esta bandera,
+            # el `waitpid(pid, 0)` de más abajo bloquearía a `apply` si nxdbmgr no
+            # contesta (AGENTS.md §3.5).
+            agotado = True
+            while time.time() < final:
+                listos, _, _ = select.select([fd], [], [], 0.5)
+                if fd not in listos:
+                    continue
+                try:
+                    trozo = os.read(fd, 4096)
+                except OSError:
+                    agotado = False
+                    break
+                if not trozo:
+                    agotado = False
+                    break
+                salida += trozo
+                texto = salida.lower()
+                if enviadas == 0 and b"new password" in texto:
+                    os.write(fd, clave + b"\n")
+                    enviadas = 1
+                    time.sleep(0.3)
+                elif enviadas == 1 and b"confirm password" in texto:
+                    os.write(fd, clave + b"\n")
+                    enviadas = 2
+                    time.sleep(0.3)
+            # Al vencer el plazo se termina el hijo y se recoge su salida con una
+            # espera ACOTADA: agotar el tope es un fallo, y el que llama lo dice en
+            # vez de quedarse colgado esperando a un hijo que no muere solo.
+            if agotado:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            estado = None
+            tope = time.time() + 5
+            while estado is None and time.time() < tope:
+                recogido, valor = os.waitpid(pid, os.WNOHANG)
+                if recogido != 0:
+                    estado = valor
+                    break
+                time.sleep(0.05)
+            sys.stdout.write(salida.decode("utf-8", "replace"))
+            bien = (not agotado) and b"changed successfully" in salida
+            sys.exit(0 if bien and estado is not None
+                     and os.WIFEXITED(estado) and os.WEXITSTATUS(estado) == 0 else 1)
+      # Una base de datos recién creada no tiene esquema y el servidor sale con
+      # NOTIMPLEMENTED. `nxdbmgr init` lo crea una sola vez; la marca que deja
+      # (`creates`) es lo que hace que el segundo apply no lo repita. El WAR se
+      # descarga igual: una vez, y la marca es el propio fichero.
+      commands:
+        # La base se inicializa con el servidor parado y se vuelve a arrancar pase lo
+        # que pase: si `nxdbmgr init` falla, dejar el servidor apagado convierte un
+        # fallo con nombre —«no se pudo inicializar la base»— en un servicio que ya no
+        # está y no dice por qué. La marca sólo se escribe si la inicialización salió
+        # bien, así que el intento fallido se repite en la pasada siguiente.
+        - run: >-
+            systemctl stop netxms-server || true;
+            /usr/bin/nxdbmgr init;
+            rc=$?;
+            systemctl start netxms-server || true;
+            [ $rc -eq 0 ] && touch /var/lib/netxms/netlabs-schema
+          creates: /var/lib/netxms/netlabs-schema
+        # El WAR se descarga a un temporal, se comprueba su huella y sólo entonces se
+        # mueve a su sitio. La marca es el propio fichero: si el `curl` se cortara a
+        # medias, escribir directamente dejaría un WAR truncado en su destino y el
+        # motor lo daría por desplegado para siempre, sin reintentar nunca. La huella
+        # es la del `nxmc-7.0.4.war` publicado (53 745 387 bytes).
+        - run: >-
+            curl -fsSL -o /tmp/nxmc.war.parte
+            https://netxms.com/download/releases/7.0/nxmc-7.0.4.war &&
+            echo "5f0641d40746dc383328ce015d1d0ec74de06495d358a37599a296ed97f8b4e5  /tmp/nxmc.war.parte" |
+            sha256sum -c - &&
+            mv /tmp/nxmc.war.parte /var/lib/tomcat11/webapps/nxmc.war
+          creates: /var/lib/tomcat11/webapps/nxmc.war
+        # La clave del administrador no se escribe aquí: se declara por su
+        # nombre (`netxms`) y el motor la lee de secrets.yml. La marca guarda su
+        # huella: si cambia la clave en secrets.yml, el siguiente apply la
+        # aplica; si no, no escribe nada. El servidor tiene que estar parado
+        # porque la base de datos queda bloqueada mientras corre.
+        # El script termina con un test, no con `exit`: el motor encadena la
+        # escritura de la marca con `&&`, y un `exit` la dejaría sin ejecutar.
+        - run: "systemctl stop netxms-server; sleep 1; /usr/local/sbin/netlabs-netxms-password admin; rc=$?; systemctl start netxms-server; [ $rc -eq 0 ]"
+          stamp: /var/lib/netxms/netlabs-admin-password
+          secret: netxms
+      services:
+        netxms-server: true
+        tomcat11: true

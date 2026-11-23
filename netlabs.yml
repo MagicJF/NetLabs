@@ -23,7 +23,10 @@ management:
   bridge: vmbr30
   address_space: 10.30.0.0/16
   gateway: 10.30.0.1
-  pool: netlabs-site
+  # El invitado de gestión vive en el pool del laboratorio de control que lo
+  # declara (`a_bootstrap`), y ese pool se llama como el laboratorio: la letra por
+  # la que empieza el nombre es lo que la API de Proxmox exige de un pool.
+  pool: a_bootstrap
   guest: netxms
   cores: 2
   memory: 4096
@@ -35,17 +38,18 @@ management:
     local_ssh_port: 2210
     local_web_port: 8443
     key: ~/.ssh/netlabs_tunnel   # la clave con la que el servicio vuelve a casa
+  # El API del servicio de gestión, tal y como se ve **desde dentro de su invitado**:
+  # ahí aterriza el túnel y por ahí entra el motor para registrar cada equipo del
+  # laboratorio con su credencial (la quinta vía, docs/diseno.md §2.8). El usuario y la
+  # clave salen de `secrets.yml` (`credenciales.netxms`), nunca de aquí.
+  api: http://127.0.0.1:8000/v1
 
 # Rangos de identificadores: el más bajo libre del clúster, nunca uno ya usado.
 vmids:
   min: 100
   max: 9999
 
-# Un invitado de laboratorio se nombra `<tipo>-<rol>`; el tipo sale de la
-# declaración y este mapa es la única traducción.
-type_codes:
-  router: rt
-  switch: sw
-  server: srv
-  workstation: ws
-  firewall: fw
+# Un invitado de laboratorio se nombra como su equipo: dos letras de tipo, una de
+# función y el ordinal (`rte1`, `swc2`), y ese mismo nombre es su hostname, su
+# nombre en Proxmox y la punta de sus cables. El código de cada tipo vive en
+# `TYPES` (deployment_engine/tools/identity.py), que es la única traducción.
