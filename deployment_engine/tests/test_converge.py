@@ -1015,5 +1015,58 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertEqual(json.loads(converge.netxms_fichas_cuerpo(ids)), {"ids": [5, 7]})
 
 
+class ElMapaAtaCadaCableASuInterfaz(unittest.TestCase):
+    """El otro extremo del cable: la interfaz por la que sale cada punta.
+
+    El censo de la vista no dice de quién es cada interfaz —no trae el padre—, pero la ficha
+    de un equipo trae la lista de sus hijos, que son justo sus interfaces, y el censo de
+    interfaces dice el nombre de cada número. Cruzando las dos lecturas que ya se hacían, el
+    puerto `p3` del plano queda atado a la `ether3` del equipo y no a un cable anónimo.
+    """
+
+    NODOS = [
+        {"role": "rta1", "name": "rta1", "mgmt_address": "10.30.0.101"},
+        {"role": "swc1", "name": "swc1", "mgmt_address": "10.30.0.102"},
+        {"role": "rta9", "name": "rta9", "mgmt_address": "10.30.0.109"},  # no está en la vista
+    ]
+    CENSO = [
+        {"id": 420, "name": "rta1", "ipAddress": {"address": "10.30.0.101"}},
+        {"id": 421, "name": "swc1", "ipAddress": {"address": "10.30.0.102"}},
+    ]
+    FICHAS = [
+        {"id": 420, "class": "Node", "children": [436, 437, 438]},
+        {"id": 421, "class": "Node", "children": [501, 502]},
+    ]
+    INTERFACES = [
+        {"id": 436, "class": "Interface", "name": "lo"},
+        {"id": 437, "class": "Interface", "name": "ether1"},
+        {"id": 438, "class": "Interface", "name": "ether2"},
+        {"id": 501, "class": "Interface", "name": "ether1"},
+        {"id": 502, "class": "Interface", "name": "ether2"},
+        {"id": 999, "class": "Interface", "name": "ether9"},  # de otro laboratorio
+    ]
+
+    def test_cada_equipo_se_queda_con_sus_interfaces_y_no_con_las_de_otro(self):
+        atadas = converge.netxms_interfaces_de(self.NODOS, self.CENSO, self.FICHAS,
+                                               self.INTERFACES)
+        self.assertEqual(atadas, {
+            "rta1": {"ether1": 437, "ether2": 438, "lo": 436},
+            "swc1": {"ether1": 501, "ether2": 502},
+        })
+
+    def test_un_equipo_que_no_esta_en_la_vista_no_ata_nada(self):
+        # Y no se le cuelga la interfaz de otro: `ether9` no es de nadie de este laboratorio.
+        atadas = converge.netxms_interfaces_de(self.NODOS, self.CENSO, self.FICHAS,
+                                               self.INTERFACES)
+        self.assertNotIn("rta9", atadas)
+        self.assertNotIn(999, [n for nombres in atadas.values() for n in nombres.values()])
+
+    def test_sin_las_dos_lecturas_no_se_ata_nada_y_el_mapa_se_dibuja_igual(self):
+        self.assertEqual(converge.netxms_interfaces_de(self.NODOS, self.CENSO, [], []), {})
+        self.assertEqual(json.loads(converge.netxms_interfaces_cuerpo()),
+                         {"class": ["Interface"]})
+        self.assertIn("/objects/search", converge.netxms_interfaces_cmd("http://x/v1")[2])
+
+
 if __name__ == "__main__":
     unittest.main()

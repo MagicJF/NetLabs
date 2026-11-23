@@ -153,7 +153,7 @@ decir, también por la API (§3.8)—. A un Linux, **sólo** por SSH. Al servici
 (NetXMS), **sólo** por su API REST y **desde dentro de su invitado** —ahí aterriza el túnel del
 motor—: por esa puerta registra el motor cada equipo de red con su credencial y le coloca el
 mapa de la red (§3.4), y no toca su base
-por ninguna otra (§3.4; `docs/decisiones/0003` y `0004`). Un equipo se identifica en la vista por su
+por ninguna otra (§3.4; `docs/decisiones/0003`, `0004` y `0005`). Un equipo se identifica en la vista por su
 **nombre**: su dirección de gestión se deriva del vmid y cambia cuando el invitado se rehace, así
 que un nodo con el nombre bueno y la dirección de otra máquina se retira y se vuelve a dar de alta
 —el API no deja corregir la dirección—. Una vía nueva para lo mismo es un defecto, no una
@@ -365,16 +365,20 @@ que la documentación:
   de texto** colocadas donde no pase ningún cable —la vista pega el rótulo de una caja arriba a la
   izquierda, que es justo por donde entra el cable que baja del núcleo, y lo tapa—;
 - cada **equipo de red** del laboratorio donde el plano lo pone —el router en la frontera de
-  las redes que une, el switch del núcleo en el centro—;
-- cada **cable** del laboratorio, entre los dos equipos que une, y los **ajustes** que dicen cómo
-  se dibujan: color propio y trazo fino, porque el gris ancho que pone la vista se pierde en el
-  gris de las cajas.
+  las redes que une, el switch del núcleo en el centro—, con su **ficha** al lado: su papel, sus
+  patas con la interfaz y la dirección de cada una y el rango que reparte si reparte DHCP;
+- cada **cable** del laboratorio, entre los dos equipos que une, **con su nombre** —el del puente
+  que lo tiende el despliegue— y el **puerto y la interfaz de cada punta** (`p1 ether1`), atados a
+  la interfaz de la vista por la que de verdad sale, y los **ajustes** que dicen cómo se dibujan:
+  color propio y trazo fino, porque el gris ancho que pone la vista se pierde en el gris de las
+  cajas.
 
-La geometría **no se recalcula**: se lee del propio plano (`plano.py` escribe la posición de
-cada cosa en atributos `data-*` del SVG), así que el mapa de la vista y el plano de la
-documentación **no pueden discrepar**: son el mismo dibujo. El mapa se nombra como el
-laboratorio, y se escribe **sólo si no es ya el que el plano pide** —escribirlo de más sería
-perder cualquier ajuste hecho a mano, porque el API lo reemplaza entero—.
+El dibujo **no se escribe a mano y lo que dice tampoco**: la geometría se lee del propio plano
+(`plano.py` escribe la posición de cada cosa en atributos `data-*` del SVG) —así el mapa de la
+vista y el plano de la documentación **no pueden discrepar**: son el mismo dibujo—, y los nombres,
+puertos, interfaces y fichas salen del **YML** y viajan con esos mismos atributos. El mapa se
+nombra como el laboratorio, y se escribe **sólo si no es ya el que el plano pide** —escribirlo de
+más sería perder cualquier ajuste hecho a mano, porque el API lo reemplaza entero—.
 
 Dos cosas se dicen en voz alta. Los **puestos de trabajo no salen en el mapa**: la quinta vía
 registra equipos de red (§3.4), y un elemento del mapa sin equipo detrás lo rechaza la vista.

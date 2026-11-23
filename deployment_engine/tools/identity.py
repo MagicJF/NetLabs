@@ -892,7 +892,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     # Los cables: cada uno es un puente tonto entre dos puertos. El nombre lleva la
     # letra del laboratorio y sus dos puntas, así que dos laboratorios con la misma
     # topología no chocan en el mismo hipervisor.
-    cables = _cables(lab) if not control else {"per_port": {}, "links": []}
+    los_cables = cables(lab) if not control else {"per_port": {}, "links": []}
     nodes = []
     effects = []
     steps = []
@@ -900,7 +900,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         if control:
             built = _build_control_node(node, assigned[node["role"]], name, env, mgmt_net)
         else:
-            built = _build_node(node, assigned[node["role"]], name, lab, env, mgmt_net, cables)
+            built = _build_node(node, assigned[node["role"]], name, lab, env, mgmt_net, los_cables)
         nodes.append(built)
         effects.append(
             f"{built['name']:<18} vmid {built['vmid']:<5} "
@@ -933,7 +933,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
 
     # Un puente es un cable: ni dirección, ni puerta, ni MAC. Sólo su nombre y
     # su marca, para que el motor sepa que es suyo y pueda retirarlo.
-    for cable in cables["links"]:
+    for cable in los_cables["links"]:
         bridge = cable["name"]
         comment = f"netlabs lab={name} space={cable['space']} cable={bridge}"
         exists = next((b for b in bridges if b.get("iface") == bridge), None)
@@ -950,7 +950,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     # La otra mitad de la diferencia, también para los cables: un puente que
     # lleva la marca de este laboratorio y ya no se declara es basura suya y se
     # retira. Uno sin marca no se toca: puede ser de otro o del propio hipervisor.
-    declarados = {c["name"] for c in cables["links"]}
+    declarados = {c["name"] for c in los_cables["links"]}
     for bridge in bridges:
         iface = bridge.get("iface")
         if iface in declarados or _lab_from_comment(bridge.get("comments") or "") != name:
@@ -1098,7 +1098,7 @@ def _endpoint(role: str, port: int) -> str:
     return f"{role}p{port}"
 
 
-def _cables(lab: dict) -> dict:
+def cables(lab: dict) -> dict:
     """Los cables del laboratorio, con su nombre y la red que transportan.
 
     El nombre empieza por la letra del laboratorio y sigue con sus dos puntas, así
@@ -1592,8 +1592,8 @@ def render_docs(lab: dict, env: dict) -> str:
             f"{', '.join(f'`{n}`' for n in node['networks'])} | {address} | {res} |"
         )
     lines += ["", "### Cables", "", "| bridge | a | z | network |", "| --- | --- | --- | --- |"]
-    cables = _cables(lab)
-    for cable in cables["links"]:
+    los_cables = cables(lab)
+    for cable in los_cables["links"]:
         lines.append(f"| `{cable['name']}` | `{cable['a']}` | `{cable['z']}` | `{cable['space']}` |")
     areas = sorted({area for node in lab["nodes"] for area in (node.get("configure") or {})})
     if areas:

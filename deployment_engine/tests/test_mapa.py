@@ -16,6 +16,7 @@ import yaml
 RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ / "deployment_engine" / "tools"))
 
+import identity  # noqa: E402
 import mapa  # noqa: E402
 import plano  # noqa: E402
 
@@ -66,7 +67,11 @@ class ElMapaDelLaboratorio(unittest.TestCase):
                   if e["type"] == mapa.ELEMENTO_TEXTO]
         areas = mapa.disposicion(svg)["areas"]
         esperados = [texto for area in areas for texto in mapa.renglones(area)]
-        self.assertEqual(leidos, esperados)
+        # Y las fichas de los equipos, que también son cajas de texto: ni una de más ni una de
+        # menos, porque una caja huérfana en el mapa es una caja que nadie sabe de quién es.
+        esperados += [texto for node in lab["nodes"] if node["role"] in con_vista(lab)
+                      for texto in mapa.ficha_de(node, lab, {})]
+        self.assertEqual(sorted(leidos), sorted(esperados))
         # Cada área enseña su nombre y el bloque de direcciones entero, con su prefijo: era
         # lo que no se leía por culpa de los cables.
         for area in areas:
@@ -259,11 +264,18 @@ class ElMapaDelLaboratorio(unittest.TestCase):
             lab = laboratorio(nombre)
             svg = plano.plano(lab, "topologia")
             areas = mapa.disposicion(svg)["areas"]
-            contenido = mapa.contenido(lab, svg, con_vista(lab))
+            objetos = con_vista(lab)
+            contenido = mapa.contenido(lab, svg, objetos)
             cajas = [e for e in contenido["elements"] if e["type"] == mapa.ELEMENTO_TEXTO]
+            # Los rótulos de las áreas se colocan y se escriben después de las fichas, en el
+            # mismo orden en que están las áreas: quitando las fichas de delante, quedan ellos.
+            cuantas_fichas = len([t for node in lab["nodes"] if node["role"] in objetos
+                                  for t in mapa.ficha_de(node, lab, {})])
+            etiquetas = cajas[cuantas_fichas:]
             esperadas = [(area, texto) for area in areas for texto in mapa.renglones(area)]
-            self.assertEqual(len(cajas), len(esperadas), nombre)
-            for caja, (area, texto) in zip(cajas, esperadas):
+            self.assertEqual(len(etiquetas), len(esperadas), nombre)
+            for caja, (area, texto) in zip(etiquetas, esperadas):
+                self.assertEqual(json.loads(mapa.texto_de(caja))["text"], texto, nombre)
                 # El rótulo cae dentro del área o, como mucho, justo encima o justo debajo
                 # —lo que ocupa su grupo entero, que es lo que se coloca—.
                 margen = mapa.rotulos_de(area)[2] + 2 * mapa.ETIQUETA_MARGEN
@@ -271,6 +283,100 @@ class ElMapaDelLaboratorio(unittest.TestCase):
                 self.assertLessEqual(caja["posX"], area["x"] + area["ancho"])
                 self.assertGreaterEqual(caja["posY"], area["y"] - margen)
                 self.assertLessEqual(caja["posY"], area["y"] + area["alto"] + margen)
+
+    def test_cada_cable_se_llama_como_en_el_laboratorio_y_dice_sus_dos_puertos(self):
+        """El nombre de un cable es el de su puente y sus puntas dicen su puerto.
+
+        El nombre no se inventa aquí: lo deriva `identity`, que es quien también nombra los
+        puentes del hipervisor, así que el nombre que se lee en el mapa es el del cable que
+        de verdad existe. Y el plano dibuja exactamente los mismos cables, con los mismos
+        puertos en las mismas puntas, que es de donde el mapa los lee.
+        """
+        for nombre in todos_los_laboratorios():
+            lab = laboratorio(nombre)
+            svg = plano.plano(lab, "topologia")
+            objetos = con_vista(lab)
+            contenido = mapa.contenido(lab, svg, objetos)
+            nombres = identity.cables(lab)["per_port"]
+            # Sólo los cables que unen dos equipos que la vista conoce: uno que salga de un
+            # equipo sin objeto detrás no se puede dibujar, y el mapa lo deja fuera.
+            en_la_vista = [c for c in lab["links"]
+                           if c["a"]["node"] in objetos and c["z"]["node"] in objetos]
+            self.assertEqual(len(contenido["links"]), len(en_la_vista), nombre)
+            for enlace, cable in zip(contenido["links"], en_la_vista):
+                una, punta_a = cable["a"]["node"], int(cable["a"]["port"])
+                otra, punta_z = cable["z"]["node"], int(cable["z"]["port"])
+                self.assertEqual(enlace["name"], nombres[una][punta_a], nombre)
+                self.assertEqual(enlace["name"], nombres[otra][punta_z], nombre)
+                self.assertEqual(enlace["connectorName1"], f"p{punta_a}", nombre)
+                self.assertEqual(enlace["connectorName2"], f"p{punta_z}", nombre)
+
+    def test_el_cable_queda_atado_a_la_interfaz_de_la_que_sale(self):
+        """Sin esto el cable sólo une dos iconos: no dice por dónde sale ni se puede medir."""
+        lab = laboratorio()
+        svg = plano.plano(lab, "topologia")
+        objetos = con_vista(lab)
+        interfaces = {rol: {f"ether{n}": 900 + n for n in range(1, 9)} for rol in objetos}
+        contenido = mapa.contenido(lab, svg, objetos, interfaces)
+        for enlace, cable in zip(contenido["links"], lab["links"]):
+            self.assertEqual(enlace["interface1"], 900 + int(cable["a"]["port"]))
+            self.assertEqual(enlace["interface2"], 900 + int(cable["z"]["port"]))
+        # Y sin interfaces descubiertas el mapa se dibuja igual, pero sin atar.
+        sin = mapa.contenido(lab, svg, objetos)
+        self.assertTrue(all(e["interface1"] == 0 for e in sin["links"]))
+
+    def test_cambiar_el_nombre_o_la_interfaz_de_un_cable_hace_reescribir_el_mapa(self):
+        """Lo que se lee en el mapa cuenta: si no, el nombre no llegaría nunca a la vista."""
+        lab = laboratorio()
+        svg = plano.plano(lab, "topologia")
+        objetos = con_vista(lab)
+        interfaces = {rol: {f"ether{n}": 900 + n for n in range(1, 9)} for rol in objetos}
+        contenido = mapa.contenido(lab, svg, objetos, interfaces)
+        self.assertTrue(mapa.esta_al_dia(contenido, contenido))
+        for clave, valor in (("name", "e_otro_cable"), ("interface1", 0), ("connectorName2", "p9")):
+            otro = json.loads(json.dumps(contenido))
+            otro["links"][0][clave] = valor
+            self.assertFalse(mapa.esta_al_dia(otro, contenido), clave)
+        # Y la vista puede devolver el cable con las puntas cambiadas: es el mismo cable.
+        vuelta = json.loads(json.dumps(contenido))
+        for enlace in vuelta["links"]:
+            enlace["element1"], enlace["element2"] = enlace["element2"], enlace["element1"]
+            enlace["interface1"], enlace["interface2"] = enlace["interface2"], enlace["interface1"]
+            enlace["connectorName1"], enlace["connectorName2"] = (enlace["connectorName2"],
+                                                                  enlace["connectorName1"])
+        self.assertTrue(mapa.esta_al_dia(vuelta, contenido))
+
+    def test_cada_equipo_lleva_su_ficha_con_sus_patas_su_interfaz_y_su_red(self):
+        """Lo que el YML declara de un equipo va al mapa: sus patas, sus redes y sus direcciones."""
+        lab = laboratorio()
+        svg = plano.plano(lab, "topologia")
+        objetos = con_vista(lab)
+        interfaces = {rol: {f"ether{n}": 900 + n for n in range(1, 9)} for rol in objetos}
+        contenido = mapa.contenido(lab, svg, objetos, interfaces)
+        textos = [json.loads(mapa.texto_de(c))["text"] for c in contenido["elements"]
+                  if c["type"] == mapa.ELEMENTO_TEXTO]
+        for node in lab["nodes"]:
+            if node["role"] not in objetos:
+                continue
+            cuantas = len(node["networks"])
+            patas = " · ".join(f"p{n} ether{n}" for n in range(1, cuantas + 1))
+            self.assertIn(f"{node['role']} · {cuantas} pata{'' if cuantas == 1 else 's'}: {patas}",
+                          textos, node["role"])
+            for dicha in (node.get("configure") or {}).get("addresses") or []:
+                self.assertIn(dicha["address"], " · ".join(textos), node["role"])
+            for srv in (node.get("configure") or {}).get("dhcp_server") or []:
+                self.assertTrue(any(t.startswith("reparte dhcp ") for t in textos), node["role"])
+
+    def test_la_punta_del_cable_dice_la_interfaz_por_la_que_sale(self):
+        """El nombre de la interfaz viaja en la punta: la ficha no lo repite, y ahí se lee."""
+        lab = laboratorio()
+        svg = plano.plano(lab, "topologia")
+        objetos = con_vista(lab)
+        interfaces = {rol: {f"ether{n}": 900 + n for n in range(1, 9)} for rol in objetos}
+        contenido = mapa.contenido(lab, svg, objetos, interfaces)
+        for enlace, cable in zip(contenido["links"], lab["links"]):
+            self.assertEqual(enlace["connectorName1"], f"p{cable['a']['port']} ether{cable['a']['port']}")
+            self.assertEqual(enlace["connectorName2"], f"p{cable['z']['port']} ether{cable['z']['port']}")
 
     def test_la_vista_devuelve_el_rotulo_con_otro_nombre_y_no_por_eso_reescribe(self):
         """Al escribirla viaja en `TextBox`; al leerla vuelve en `config`, como un texto."""

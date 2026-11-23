@@ -1233,6 +1233,21 @@ def netxms_fichas_cuerpo(ids: list) -> str:
     return json.dumps({"ids": [int(i) for i in ids or []]})
 
 
+def netxms_interfaces_cmd(api: str) -> list:
+    """Las interfaces que la vista conoce, todas de una vez.
+
+    La vista las cuelga de su equipo —son sus hijos—, pero el censo no dice de quién es
+    cada una: por eso se leen aparte, y se cruzan con la ficha de cada equipo, que sí trae
+    la lista de sus hijos. Son dos lecturas que ya se hacen, no una nueva.
+    """
+    return netxms_cmd(api, NETXMS_RUTA_CENSO)
+
+
+def netxms_interfaces_cuerpo() -> str:
+    """Sólo las interfaces: los cables del mapa se atan a ellas."""
+    return json.dumps({"class": [NETXMS_CLASE_INTERFAZ]})
+
+
 def netxms_crear_cmd(api: str) -> list:
     """Dar de alta un equipo con sus credenciales."""
     return netxms_cmd(api, NETXMS_RUTA_CREAR)
@@ -1393,6 +1408,7 @@ def netxms_ids(nodes: list[dict], encontrados: list | None) -> list:
 NETXMS_RUTA_RAICES = "/objects"
 NETXMS_CLASE_RAICES_DE_MAPA = "NetworkMapRoot"
 NETXMS_CLASE_MAPA = "NetworkMap"
+NETXMS_CLASE_INTERFAZ = "Interface"
 
 
 def netxms_raices_cmd(api: str) -> list:
@@ -1463,30 +1479,81 @@ def netxms_objetos_de(nodes: list[dict], censo: list | None) -> tuple[dict, list
     return objetos, sorted(faltan)
 
 
+def netxms_interfaces_de(nodes: list[dict], censo: list | None, fichas: list | None,
+                         interfaces: list | None) -> dict:
+    """Qué número tiene en la vista cada interfaz de cada equipo del laboratorio.
+
+    En la vista una interfaz se llama como la llama su equipo —`ether1`, `ether2`…—, que es
+    el mismo nombre con el que el motor conecta cada pata: el puerto `p3` del plano es la
+    `ether3` del equipo. El número hace falta para que el cable del mapa quede atado a la
+    interfaz por la que sale, en vez de unir dos iconos sin decir por dónde va.
+
+    Se cruzan dos lecturas que ya se hacían: el censo de interfaces dice el nombre de cada
+    número, y la ficha de cada equipo dice cuáles son sus hijos —sus interfaces—. El censo
+    por sí solo no basta: no dice de quién es cada interfaz.
+    """
+    objetos, _ = netxms_objetos_de(nodes, censo)
+    nombre_de = {int(o["id"]): str(o.get("name") or "")
+                 for o in interfaces or [] if o.get("id") is not None}
+    hijos_de = {}
+    for ficha in fichas or []:
+        if ficha.get("id") is None:
+            continue
+        hijos = []
+        for hijo in ficha.get("children") or []:
+            if isinstance(hijo, dict) and hijo.get("id") is not None:
+                hijos.append(int(hijo["id"]))
+            elif isinstance(hijo, int):
+                hijos.append(hijo)
+        hijos_de[int(ficha["id"])] = hijos
+    salida = {}
+    for node in nodes or []:
+        rol = str(node.get("role") or node.get("name") or "")
+        suyo = objetos.get(rol)
+        if not suyo:
+            continue
+        suyas = {nombre_de[i]: i for i in hijos_de.get(int(suyo), [])
+                 if nombre_de.get(i)}
+        if suyas:
+            salida[rol] = dict(sorted(suyas.items()))
+    return salida
+
+
 def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: dict | None,
-                    api: str, id_mapa, svg: str | None = None) -> dict:
+                    api: str, id_mapa, fichas: list | None = None,
+                    interfaces: list | None = None, svg: str | None = None) -> dict:
     """Lo que hay que escribir para que el mapa de la vista sea el plano del laboratorio.
 
     Sólo se escribe si el mapa que hay no es ya el que el plano pide: la segunda pasada no
     toca nada. Los equipos del plano que la vista no conoce no se dibujan (y sus cables
     tampoco) y salen en `pendientes`, que es lo que se dice en voz alta.
+
+    `fichas` e `interfaces` son las dos lecturas con las que cada cable queda atado a la
+    interfaz por la que sale (`netxms_interfaces_de`); sin ellas el mapa se dibuja igual,
+    pero sus cables unen dos iconos y no dicen por dónde van.
     """
     objetos, faltan = netxms_objetos_de(nodes, censo)
     if svg is None:
         svg = plano.plano(lab, "topologia")
-    deseado = mapa.contenido(lab, svg, objetos)
+    atadas = netxms_interfaces_de(nodes, censo, fichas, interfaces)
+    deseado = mapa.contenido(lab, svg, objetos, atadas)
+    cuantas = sum(len(nombres) for nombres in atadas.values())
+    # Las áreas son las cajas del plano y los rótulos, las cajas de texto: la ficha de cada
+    # equipo y el nombre y el bloque de cada zona. Contar por todo lo que no es un equipo y
+    # llamarlo «áreas» es contar mal lo que se está mirando.
+    cajas = sum(1 for e in deseado["elements"] if int(e.get("type") or 0) == mapa.ELEMENTO_ADORNO)
+    rotulos = sum(1 for e in deseado["elements"] if int(e.get("type") or 0) == mapa.ELEMENTO_TEXTO)
+    cuenta = {"equipos": len(objetos), "interfaces": cuantas, "cables": len(deseado["links"]),
+              "areas": cajas, "rotulos": rotulos}
     if mapa.esta_al_dia(actual, deseado):
-        return {"ops": [], "pendientes": faltan, "equipos": len(objetos),
-                "cables": len(deseado["links"]), "areas": len(deseado["elements"]) - len(objetos)}
+        return {"ops": [], "pendientes": faltan, **cuenta}
     return {
         "ops": [{
             "cmd": netxms_mapa_escribir_cmd(api, id_mapa),
             "cuerpo": mapa.cuerpo(deseado),
             "effect": (f"colocar el mapa {lab.get('lab')} como el plano: "
                        f"{len(objetos)} equipos, {len(deseado['links'])} cables y "
-                       f"{len(deseado['elements']) - len(objetos)} áreas"),
+                       f"{cajas} áreas"),
         }],
-        "pendientes": faltan, "equipos": len(objetos),
-        "cables": len(deseado["links"]),
-        "areas": len(deseado["elements"]) - len(objetos),
+        "pendientes": faltan, **cuenta,
     }

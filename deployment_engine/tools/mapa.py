@@ -18,11 +18,21 @@
 #              área por el que no pase ningún cable ni se apoye ningún equipo. La
 #              colocación es de este módulo, y por eso se puede comprobar por programa
 #              (test_mapa) en vez de a ojo.
+#              Cada equipo lleva además su **ficha** —sus patas con la interfaz que la vista
+#              le ha descubierto y la red que sirve, sus direcciones y el rango que reparte—
+#              y cada cable su **nombre y sus dos puertos**, tal y como se llaman en el
+#              laboratorio: lo que el YML declara viaja al mapa en vez de quedarse en el
+#              fichero, y el cable queda atado a la interfaz de la que de verdad sale.
 # VER:         docs/diseno.md §3.4 (el mapa a medida);
-#              docs/decisiones/0004-el-mapa-de-la-vista-lo-coloca-el-plano.md
+#              docs/decisiones/0004-el-mapa-de-la-vista-lo-coloca-el-plano.md y
+#              docs/decisiones/0005-el-mapa-dice-lo-que-dice-el-yaml.md
 
 import json
+import math
 import re
+
+import plano                    # el mismo plano del que sale la geometría, y sus rangos
+from identity import cables     # el nombre de un cable se deriva en un solo sitio
 
 # Cómo nombra la vista a las cosas del mapa. Son los números que viajan en el JSON del
 # API: el tipo de elemento y, dentro de los adornos, la caja de grupo.
@@ -65,6 +75,9 @@ ETIQUETA_MARGEN = 10           # aire entre el rótulo y el borde de su área
 ETIQUETA_GUARDA = 6            # de sobra, al comprobar si un cable lo pisa
 ETIQUETA_APOYO = 2             # aire entre el nombre de un área y su bloque, debajo
 CUADRICULA = 5                 # rincones que se prueban por cada lado, si los de fuera fallan
+AIRE_FICHA = 16                # aire entre un equipo y el cartel que lo describe
+RADIOS_FICHA = 10              # anillos alrededor de un equipo, si sus cuatro lados están tomados
+VUELTAS_FICHA = 16             # sitios que se prueban en cada anillo
 
 
 def disposicion(svg: str) -> dict:
@@ -92,8 +105,13 @@ def disposicion(svg: str) -> dict:
     equipos = {}
     for etiqueta in re.finditer(r'<g data-rol="([^"]+)" data-x="([\d.]+)" data-y="([\d.]+)"', svg):
         equipos[etiqueta.group(1)] = (float(etiqueta.group(2)), float(etiqueta.group(3)))
+    cables_del_plano = []
+    for etiqueta in re.finditer(r'<g class="cable" data-a="([^"]*)" data-pa="(\d+)" '
+                                r'data-z="([^"]*)" data-pz="(\d+)"', svg):
+        cables_del_plano.append({"a": etiqueta.group(1), "pa": int(etiqueta.group(2)),
+                                 "z": etiqueta.group(3), "pz": int(etiqueta.group(4))})
     return {"ancho": float(lienzo.group(1)), "alto": float(lienzo.group(2)),
-            "areas": areas, "equipos": equipos}
+            "areas": areas, "equipos": equipos, "cables": cables_del_plano}
 
 
 def renglones(area: dict) -> list:
@@ -122,9 +140,8 @@ def rotulos_de(area: dict) -> tuple:
     esquivar: si el grupo cabe en un hueco, cada renglón cabe dentro del grupo.
     """
     textos = renglones(area)
-    anchos = [tamano_de_rotulo(texto)[0] for texto in textos]
-    altos = [tamano_de_rotulo(texto)[1] for texto in textos]
-    return textos, max(anchos), sum(altos) + ETIQUETA_APOYO * (len(textos) - 1)
+    ancho, alto = tamano_del_grupo(textos)
+    return textos, ancho, alto
 
 
 def tamano_de_rotulo(texto: str) -> tuple:
@@ -185,6 +202,137 @@ def sitio_libre(area: dict, ancho: float, alto: float, cables: list, ocupado: li
     return candidatos(area, ancho, alto)[0]
 
 
+def ficha_de(node: dict, lab: dict, interfaces: dict) -> list:
+    """El cartel de un equipo: sus patas con su interfaz y su red, sus direcciones y su reparto.
+
+    Todo sale de la declaración —cuántas patas tiene, qué red lleva cada una, qué dirección
+    y qué rango reparte— y de los nombres de interfaz que la vista le ha descubierto al
+    equipo, que es lo único que no se puede deducir del YML. El equipo del plano y el equipo
+    de la vista son el mismo si sus patas y sus interfaces coinciden; esto es lo que lo deja
+    ver en el mapa.
+    """
+    redes = {red["name"]: red for red in lab.get("networks") or []}
+    config = node.get("configure") or {}
+    direcciones = {d["network"]: d["address"] for d in config.get("addresses") or []}
+    suyas = interfaces.get(node["role"]) or {}
+
+    cuantas = len(node["networks"])
+    # Las patas en un solo renglón: el puerto del plano y la interfaz del equipo, que son lo
+    # mismo visto desde cada lado. La red de cada pata ya la dicen el plano y el cable que
+    # sale de ella; repetirla aquí haría un cartel que no cabe en las sedes pequeñas, que son
+    # justo donde más falta hace poder leerlo.
+    patas = " · ".join(f"p{puerto} ether{puerto}" if f"ether{puerto}" in suyas else f"p{puerto}"
+                       for puerto in range(1, cuantas + 1))
+    cabecera = f"{node['role']} · {cuantas} pata{'' if cuantas == 1 else 's'}"
+    lineas = [f"{cabecera}: {patas}" if patas else cabecera]
+
+    # La dirección de cada pata, si se declara; si el equipo la pide por DHCP se dice, como
+    # lo dice el plano, y no se le inventa ninguna.
+    dichas = " · ".join(direcciones[red] for red in node["networks"] if red in direcciones)
+    if dichas:
+        lineas.append(dichas)
+    elif node.get("address") == "dhcp":
+        lineas.append("dhcp")
+
+    for srv in config.get("dhcp_server") or []:
+        cidr = str((redes.get(srv.get("network")) or {}).get("address") or "")
+        corto = plano.rango_corto(srv.get("pool") or "", cidr) if cidr else ""
+        # «reparte» y no «dhcp» a secas: el rango ya lo dice el rótulo de su área, y lo que
+        # aquí se enseña es qué router lo reparte.
+        lineas.append(f"reparte dhcp {corto or srv.get('pool') or ''}".rstrip())
+    return lineas
+
+
+def _interfaz(interfaces: dict, rol: str, puerto: int) -> int:
+    """El número con el que la vista conoce la interfaz de ese puerto, o 0 si no la tiene.
+
+    La vista llama a las interfaces de un equipo como las llama el equipo —`ether1`,
+    `ether2`…— y el puerto `p3` del plano es su `ether3`: es la misma convención con la que
+    el motor conecta cada tarjeta, así que no hay nada que adivinar. Una interfaz que la
+    vista no haya descubierto —el equipo acaba de registrarse— llega como 0 y el cable se
+    dibuja igual, sin atar.
+    """
+    return int((interfaces.get(rol) or {}).get(f"ether{puerto}") or 0)
+
+
+def _puerto(interfaces: dict, rol: str, puerto: int) -> str:
+    """Cómo se rotula una punta del cable: su puerto y, si se sabe, la interfaz del equipo.
+
+    Es el mismo saber que usa el cable para atarse —el puerto `p3` del plano es la `ether3`
+    del equipo— puesto en la punta, que es donde se lee: así el nombre de la interfaz viaja
+    con el cable aunque la ficha del equipo no lo repita.
+    """
+    suya = f"ether{puerto}"
+    return f"p{puerto} {suya}" if suya in (interfaces.get(rol) or {}) else f"p{puerto}"
+
+
+def tamano_del_grupo(textos: list) -> tuple:
+    """Lo que ocupa un grupo de renglones: manda el más ancho y el alto es su suma."""
+    return (max(tamano_de_rotulo(texto)[0] for texto in textos),
+            sum(tamano_de_rotulo(texto)[1] for texto in textos) + ETIQUETA_APOYO * (len(textos) - 1))
+
+
+def sitio_junto_a(punto: tuple, ancho: float, alto: float, cables: list, ocupado: list,
+                  lienzo: tuple) -> tuple:
+    """El primer sitio alrededor de un equipo donde su ficha no queda tapada por nada.
+
+    Primero los cuatro lados —a la derecha antes que a la izquierda, que es por donde baja
+    el cable de la red troncal— y después las diagonales y un anillo más ancho, por si el
+    equipo está en un rincón muy cableado. La ficha tiene que caber en el lienzo: un cartel
+    que se sale del mapa no se ve. Si no hay ningún sitio, se devuelve el de su derecha,
+    que es el que menos estorba —una ficha tapada se lee mal, pero una sin sitio no dice nada.
+    """
+    cx, cy = punto
+    ancho_lienzo, alto_lienzo = lienzo
+    medio = TAMANO_EQUIPO / 2
+
+    def cabe(x: float, y: float) -> bool:
+        if x < 0 or y < 0 or x + ancho > ancho_lienzo or y + alto > alto_lienzo:
+            return False
+        rectangulo = (x - ETIQUETA_GUARDA, y - ETIQUETA_GUARDA,
+                      ancho + 2 * ETIQUETA_GUARDA, alto + 2 * ETIQUETA_GUARDA)
+        if any(solapan(rectangulo, otro) for otro in ocupado):
+            return False
+        return not any(corta(rectangulo, uno, otro) for uno, otro in cables)
+
+    derecho, izquierdo = cx + medio + AIRE_FICHA, cx - medio - AIRE_FICHA - ancho
+    abajo, arriba = cy + medio + AIRE_FICHA, cy - medio - AIRE_FICHA - alto
+    # Los cuatro lados —a la derecha antes que a la izquierda—, luego las diagonales y
+    # después un anillo tras otro alrededor del equipo: en una sede apretada, con el router
+    # pegado al switch y los puestos alrededor, los cuatro lados se agotan.
+    orden = [(derecho, cy - alto / 2), (izquierdo, cy - alto / 2),
+             (cx - ancho / 2, abajo), (cx - ancho / 2, arriba),
+             (derecho, abajo), (izquierdo, abajo), (derecho, arriba), (izquierdo, arriba)]
+    for radio in range(1, RADIOS_FICHA + 1):
+        salto = medio + AIRE_FICHA * (radio + 1)
+        for paso in range(VUELTAS_FICHA):
+            giro = 2 * math.pi * paso / VUELTAS_FICHA
+            orden.append((cx + salto * math.cos(giro) - ancho / 2,
+                          cy + salto * math.sin(giro) - alto / 2))
+    for x, y in orden:
+        if cabe(round(x), round(y)):
+            return round(x), round(y)
+    return round(orden[0][0]), round(orden[0][1])
+
+
+def cajas_de_texto(textos: list, x: float, y: float, primero: int) -> list:
+    """Las cajas de texto de un grupo de renglones, desde el número de elemento `primero`.
+
+    Enteros: la vista lee la posición con `json_object_get_int32` y un decimal —«70.0»— le
+    llega como cero. La caja se queda en la esquina y vuelve a estar debajo de un cable,
+    que es justo lo que se viene a arreglar.
+    """
+    cajas, renglon = [], 0
+    for salto, texto in enumerate(textos):
+        _, alto_texto = tamano_de_rotulo(texto)
+        cajas.append({
+            "id": primero + salto, "type": ELEMENTO_TEXTO, "flags": 0,
+            "posX": round(x), "posY": round(y + renglon), "TextBox": config_de_rotulo(texto),
+        })
+        renglon += alto_texto + ETIQUETA_APOYO
+    return cajas
+
+
 def solapan(uno: tuple, otro: tuple) -> bool:
     """¿Se pisan dos rectángulos? (`(x, y, ancho, alto)`)."""
     return not (uno[0] + uno[2] <= otro[0] or otro[0] + otro[2] <= uno[0]
@@ -233,14 +381,19 @@ def config_de_rotulo(texto: str) -> str:
     }, ensure_ascii=False)
 
 
-def contenido(lab: dict, svg: str, objetos: dict) -> dict:
-    """El contenido del mapa: las áreas, los equipos y los cables, donde los pone el plano.
+def contenido(lab: dict, svg: str, objetos: dict, interfaces: dict | None = None) -> dict:
+    """El contenido del mapa: las áreas, los equipos, sus fichas y los cables, donde los pone el plano.
 
-    `objetos` traduce el rol de cada equipo al número con el que la vista lo conoce. Un
-    equipo del plano que no esté en la vista no se dibuja —y los cables que salen de él
-    tampoco—, porque un elemento del mapa sin objeto detrás no lo acepta la vista.
+    `objetos` traduce el rol de cada equipo al número con el que la vista lo conoce, e
+    `interfaces` trae, por equipo, el nombre de cada una de sus interfaces con el número de
+    objeto que la vista le ha dado. Un equipo del plano que no esté en la vista no se dibuja
+    —y los cables que salen de él tampoco—, porque un elemento del mapa sin objeto detrás no
+    lo acepta la vista. Sin `interfaces` el mapa se dibuja igual, pero sus cables no quedan
+    atados a la interfaz de la que salen ni la ficha puede nombrarlas.
     """
     donde = disposicion(svg)
+    nombres = cables(lab)["per_port"]
+    interfaces = interfaces or {}
     elementos, numero, elemento_de = [], 0, {}
     for area in donde["areas"]:
         numero += 1
@@ -262,49 +415,67 @@ def contenido(lab: dict, svg: str, objetos: dict) -> dict:
             "width": TAMANO_EQUIPO, "height": TAMANO_EQUIPO,
         })
 
-    enlaces = []
-    cables = []
+    enlaces, trazos = [], []
     for cable in lab.get("links") or []:
-        una, otra = cable["a"]["node"], cable["z"]["node"]
+        una, punta_a = cable["a"]["node"], int(cable["a"]["port"])
+        otra, punta_z = cable["z"]["node"], int(cable["z"]["port"])
         if una not in elemento_de or otra not in elemento_de:
             continue
-        cables.append((en_donde[una], en_donde[otra]))
+        trazos.append((en_donde[una], en_donde[otra]))
+        # El cable se llama como en el laboratorio —`e_swc1p1_rta1p1`, que es el nombre de su
+        # puente— y cada punta dice su puerto; la interfaz es la que la vista le ha
+        # descubierto al equipo con ese número. Sin ella el cable se dibuja igual, pero no
+        # queda atado a algo que se pueda medir.
         enlaces.append({
             "element1": elemento_de[una], "element2": elemento_de[otra],
-            "interface1": 0, "interface2": 0, "type": 0, "flags": 0,
-            "name": "", "connectorName1": "", "connectorName2": "",
+            "interface1": _interfaz(interfaces, una, punta_a),
+            "interface2": _interfaz(interfaces, otra, punta_z),
+            "type": 0, "flags": 0,
+            "name": str(nombres.get(una, {}).get(punta_a) or ""),
+            "connectorName1": _puerto(interfaces, una, punta_a),
+            "connectorName2": _puerto(interfaces, otra, punta_z),
             "colorSource": 0, "color": 0, "colorProvider": "", "config": "",
         })
 
-    # Los equipos ocupan su hueco: un rótulo encima de uno se leería mal aunque no pasara
+    # Los equipos ocupan su hueco: una ficha encima de uno se leería mal aunque no pasara
     # ningún cable por ahí.
     ocupado = [(round(cx - TAMANO_EQUIPO / 2), round(cy - TAMANO_EQUIPO / 2),
                 TAMANO_EQUIPO, TAMANO_EQUIPO) for cx, cy in en_donde.values()]
+
+    # Las fichas van primero, y pegadas a su equipo: son suyas y no se pueden ir lejos —un
+    # cartel que no está junto al equipo que describe no dice de quién es—. El rótulo de un
+    # área, en cambio, puede buscarse otro rincón dentro de ella: es él quien las esquiva.
+    fichas = {node["role"]: node for node in lab["nodes"] if node["role"] in en_donde}
+    for rol, (cx, cy) in sorted(en_donde.items()):
+        node = fichas.get(rol)
+        if node is None:
+            # Un equipo que está en la vista y en el plano pero no se declara en el fichero
+            # —el nodo de control, que vive en la red de gestión— no tiene ficha que enseñar.
+            continue
+        textos = ficha_de(node, lab, interfaces)
+        ancho, alto = tamano_del_grupo(textos)
+        x, y = sitio_junto_a((cx, cy), ancho, alto, trazos, ocupado, (donde["ancho"], donde["alto"]))
+        ocupado.append((x, y, ancho, alto))
+        cajas = cajas_de_texto(textos, x, y, numero + 1)
+        elementos += cajas
+        numero += len(cajas)
+
     # Los rótulos se colocan de la zona más pequeña a la más grande: la pequeña —una sede
-    # con su router y su switch, que es casi todo equipo y cable— no tiene dónde elegir, y
-    # la grande que la envuelve sí. Al revés, el rótulo del laboratorio se ponía en el
-    # primer hueco que encontraba —dentro de una sede— y dejaba a la sede sin sitio.
+    # con su router y su switch, que es casi todo equipo, ficha y cable— no tiene dónde
+    # elegir, y la grande que la envuelve sí. Al revés, el rótulo del laboratorio se ponía en
+    # el primer hueco que encontraba —dentro de una sede— y dejaba a la sede sin sitio.
     puestos = {}
     for indice, area in sorted(enumerate(donde["areas"]), key=lambda par: par[1]["ancho"] * par[1]["alto"]):
         textos, ancho, alto = rotulos_de(area)
-        x, y = sitio_libre(area, ancho, alto, cables, ocupado)
+        x, y = sitio_libre(area, ancho, alto, trazos, ocupado)
         ocupado.append((x, y, ancho, alto))
         puestos[indice] = (textos, x, y)
 
-    for indice, area in enumerate(donde["areas"]):
+    for indice in range(len(donde["areas"])):
         textos, x, y = puestos[indice]
-        renglon = 0
-        for texto in textos:
-            _, alto_texto = tamano_de_rotulo(texto)
-            numero += 1
-            elementos.append({
-                "id": numero, "type": ELEMENTO_TEXTO, "flags": 0,
-                # Enteros: la vista lee la posición con `json_object_get_int32` y un decimal
-                # —«70.0»— le llega como cero. La caja se queda en la esquina y vuelve a
-                # estar debajo de un cable, que es justo lo que se viene a arreglar.
-                "posX": round(x), "posY": round(y + renglon), "TextBox": config_de_rotulo(texto),
-            })
-            renglon += alto_texto + ETIQUETA_APOYO
+        cajas = cajas_de_texto(textos, x, y, numero + 1)
+        elementos += cajas
+        numero += len(cajas)
 
     return {
         **AJUSTES_DEL_MAPA,
@@ -378,7 +549,12 @@ def _resumen_elemento_de(mapa: dict) -> list:
 
 
 def _resumen_cableado(mapa: dict) -> list:
-    """Los cables por los equipos que unen: `(objeto_a, objeto_b)`, sin repetir ni ordenar."""
+    """Los cables por lo que dicen: qué equipos unen, por qué interfaz y cómo se llaman.
+
+    El número de enlace no entra —lo reparte la vista— pero sí todo lo que se lee en el
+    mapa: sin esto, un mapa con los cables anónimos y con las puntas sueltas se daría por
+    bueno y no habría forma de que el nombre del cable llegara a la vista nunca.
+    """
     elementos = mapa.get("elements") or []
     nombre = {}
     for elemento in elementos:
@@ -392,7 +568,16 @@ def _resumen_cableado(mapa: dict) -> list:
         otra = nombre.get(int(enlace.get("element2") or 0))
         if una is None or otra is None:
             continue
-        lazos.add(tuple(sorted((str(una), str(otra)))))
+        # Cada punta viaja con su interfaz y su puerto, así que las dos puntas se ordenan
+        # juntas —la vista puede devolver el cable con las puntas cambiadas— pero la
+        # interfaz no se despega del equipo del que es: si se ordenaran por separado, un
+        # cable con las puntas al revés parecería otro distinto y el mapa se reescribiría
+        # en cada pasada.
+        puntas = sorted(((str(una), int(enlace.get("interface1") or 0),
+                          str(enlace.get("connectorName1") or "")),
+                         (str(otra), int(enlace.get("interface2") or 0),
+                          str(enlace.get("connectorName2") or ""))))
+        lazos.add((tuple(puntas), str(enlace.get("name") or "")))
     return sorted(lazos)
 
 
