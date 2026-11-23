@@ -747,6 +747,33 @@ class LasRutasEstaticasDelRouter(unittest.TestCase):
         with self.assertRaises(converge.LabError):
             converge._route_ops(self.RUTAS, actual)
 
+    def test_un_destino_ajeno_encendido_se_dice_aunque_la_propia_este_puesta(self):
+        """La ajena encendida compite con la declarada aunque la del motor ya esté puesta.
+
+        Demuestra que tener la propia en su sitio no esconde el conflicto: la de fuera va
+        al mismo destino por otro salto, se lleva el tráfico si tiene menos distancia y el
+        motor no puede retirarla, así que se dice en vez de dar por convergido un camino
+        que puede estar saliendo por donde el laboratorio no declara.
+        """
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "netlabs-ruta", ".id": "*1"},
+                  {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.9",
+                   "comment": "puesta a mano", ".id": "*9"}]
+        with self.assertRaises(converge.LabError):
+            converge._route_ops(self.RUTAS, actual)
+
+    def test_una_ruta_ajena_encendida_con_el_mismo_salto_no_estorba(self):
+        """La ajena que sale por el salto declarado no compite: no hay nada que decir.
+
+        Demuestra la frontera de la comprobación anterior —sólo se dice la ajena que
+        ofrece otro camino— y que la propia se sigue conservando cuando las dos coinciden.
+        """
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "netlabs-ruta", ".id": "*1"},
+                  {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "puesta a mano", ".id": "*9"}]
+        self.assertEqual(converge._route_ops(self.RUTAS, actual), [])
+
 
 class LasRutasDelLaboratorio(unittest.TestCase):
     """La diferencia entre las rutas declaradas y las que tiene el invitado de gestión.
