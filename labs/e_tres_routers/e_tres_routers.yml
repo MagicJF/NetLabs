@@ -1,0 +1,243 @@
+# Tres routers y su núcleo: el laboratorio más pequeño que tiene varios RouterOS
+# enrutando de verdad. Existe para eso —para tener con qué mirar un mapa de la red
+# sin desplegar la red entera de ACME—:
+#
+#        10.48.11.0/24        10.48.12.0/24        10.48.13.0/24
+#        (Ventas)             (Almacén)            (Taller)
+#         swa1                  swa2                 swa3
+#        /   \                 /   \                /   \
+#     wsp1  wsp4            wsp2  wsp5           wsp3  wsp6
+#        |                     |                    |
+#       rta1                  rta2                 rta3     <- un router por departamento
+#        \                     |                    /
+#         +--------------------+--------------------+
+#                        swc1  (núcleo, 10.48.0.0/16)
+#
+# Los tres routers de departamento se asoman al mismo núcleo y cada uno tiene la suya
+# de usuarios. Como el núcleo es una red y no un cable, lleva su switch (`swc1`): a un
+# segmento con más de dos equipos no se le cuelga un cable por equipo. Y cada
+# departamento tiene el suyo (`swa1`, `swa2`, `swa3`) porque de él cuelga más de un
+# puesto.
+#
+# El núcleo se declara como el área que es (`10.48.0.0/16`) pero las interfaces de ese
+# segmento van con máscara /28 (`10.48.0.11`, `.12`, `.13`): con el /16 en la interfaz,
+# cada router creería que las redes de los otros cuelgan de su mismo cable y no
+# enrutaría nada. El área dice cuánto espacio hay; la máscara, qué hay en el cable.
+#
+# Entre los tres hay rutas estáticas —cada uno sabe por dónde se va a las redes de los
+# otros dos, por el router que las tiene—: sin protocolo de enrutado, a mano. Los
+# puestos toman su dirección por DHCP del router de su departamento.
+#
+# Cada equipo se llama igual en todas partes: `rta2` es el rol declarado, el hostname de
+# su RouterOS, su nombre en Proxmox y la punta de sus cables. El nombre de cada cable
+# lleva la letra del laboratorio y sus dos puntas, así que este laboratorio no choca con
+# ningún otro en el mismo hipervisor. Ningún número derivado se declara: ni vmid, ni
+# MAC, ni dirección de gestión.
+
+lab: e_tres_routers
+
+# Espacio disjunto del resto: el plan lo comprueba contra lo que ya vive en el nodo.
+address_spaces:
+  - 10.48.0.0/16
+
+networks:
+  # El núcleo: donde se juntan los tres routers y su switch. Es un área, no un segmento
+  # suelto, y contiene a los tres departamentos por dirección —10.48.11.0/24 está dentro
+  # de 10.48.0.0/20, como el cajón dentro del armario—. Se declara como bloque grande
+  # (un /20) a propósito: el área dice cuánto espacio hay, no cuánto ocupa el cable.
+  - {name: nucleo, address: 10.48.0.0/20, title: Núcleo}
+  - {name: ventas, address: 10.48.11.0/24, title: Ventas}
+  - {name: almacen, address: 10.48.12.0/24, title: Almacén}
+  - {name: taller, address: 10.48.13.0/24, title: Taller}
+
+nodes:
+  # El switch del núcleo: tres patas, una por router. No declara dirección de
+  # laboratorio —su gestión es la pata OOB derivada del vmid— y todas sus patas son de
+  # la misma red, porque un switch no une redes: eso lo hace el router.
+  - role: swc1
+    type: switch
+    stage: 1
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [nucleo, nucleo, nucleo]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  # Cada router de departamento: una pata en el núcleo y otra en su red. Dos patas en
+  # dos redes distintas es lo que lo hace router; con una sola estaría conmutando.
+  - role: rta1
+    type: router
+    stage: 2
+    after: [swc1]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [nucleo, ventas]
+    address: 10.48.0.11/28
+    configure:
+      addresses:
+        - {network: nucleo, address: 10.48.0.11/28}
+        - {network: ventas, address: 10.48.11.1/24}
+      routes:
+        - {destination: 10.48.12.0/24, gateway: 10.48.0.12}
+        - {destination: 10.48.13.0/24, gateway: 10.48.0.13}
+      dhcp_server:
+        - {network: ventas, pool: 10.48.11.100-10.48.11.199, gateway: 10.48.11.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: rta2
+    type: router
+    stage: 2
+    after: [swc1]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [nucleo, almacen]
+    address: 10.48.0.12/28
+    configure:
+      addresses:
+        - {network: nucleo, address: 10.48.0.12/28}
+        - {network: almacen, address: 10.48.12.1/24}
+      routes:
+        - {destination: 10.48.11.0/24, gateway: 10.48.0.11}
+        - {destination: 10.48.13.0/24, gateway: 10.48.0.13}
+      dhcp_server:
+        - {network: almacen, pool: 10.48.12.100-10.48.12.199, gateway: 10.48.12.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: rta3
+    type: router
+    stage: 2
+    after: [swc1]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [nucleo, taller]
+    address: 10.48.0.13/28
+    configure:
+      addresses:
+        - {network: nucleo, address: 10.48.0.13/28}
+        - {network: taller, address: 10.48.13.1/24}
+      routes:
+        - {destination: 10.48.11.0/24, gateway: 10.48.0.11}
+        - {destination: 10.48.12.0/24, gateway: 10.48.0.12}
+      dhcp_server:
+        - {network: taller, pool: 10.48.13.100-10.48.13.199, gateway: 10.48.13.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  # El switch de cada departamento: conmuta entre el router y sus puestos. Todas sus
+  # patas son de su red; la de gestión va fuera del puente y no se declara.
+  - role: swa1
+    type: switch
+    stage: 3
+    after: [rta1]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [ventas, ventas, ventas]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: swa2
+    type: switch
+    stage: 3
+    after: [rta2]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [almacen, almacen, almacen]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: swa3
+    type: switch
+    stage: 3
+    after: [rta3]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [taller, taller, taller]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  # Dos puestos por departamento, para tener a quien pedirle la dirección por DHCP y
+  # desde donde probar que se llega a los otros dos departamentos.
+  - role: wsp1
+    type: workstation
+    stage: 4
+    after: [swa1]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [ventas]
+    address: dhcp
+
+  - role: wsp4
+    type: workstation
+    stage: 4
+    after: [swa1]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [ventas]
+    address: dhcp
+
+  - role: wsp2
+    type: workstation
+    stage: 4
+    after: [swa2]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [almacen]
+    address: dhcp
+
+  - role: wsp5
+    type: workstation
+    stage: 4
+    after: [swa2]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [almacen]
+    address: dhcp
+
+  - role: wsp3
+    type: workstation
+    stage: 4
+    after: [swa3]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [taller]
+    address: dhcp
+
+  - role: wsp6
+    type: workstation
+    stage: 4
+    after: [swa3]
+    resources: {cores: 1, memory: 256, disk: 2}
+    networks: [taller]
+    address: dhcp
+
+# Doce cables: el núcleo con los tres routers, cada router con el switch de su
+# departamento y cada switch con sus dos puestos.
+links:
+  - a: {node: swc1, port: 1}
+    z: {node: rta1, port: 1}
+  - a: {node: swc1, port: 2}
+    z: {node: rta2, port: 1}
+  - a: {node: swc1, port: 3}
+    z: {node: rta3, port: 1}
+  - a: {node: rta1, port: 2}
+    z: {node: swa1, port: 1}
+  - a: {node: rta2, port: 2}
+    z: {node: swa2, port: 1}
+  - a: {node: rta3, port: 2}
+    z: {node: swa3, port: 1}
+  - a: {node: swa1, port: 2}
+    z: {node: wsp1, port: 1}
+  - a: {node: swa1, port: 3}
+    z: {node: wsp4, port: 1}
+  - a: {node: swa2, port: 2}
+    z: {node: wsp2, port: 1}
+  - a: {node: swa2, port: 3}
+    z: {node: wsp5, port: 1}
+  - a: {node: swa3, port: 2}
+    z: {node: wsp3, port: 1}
+  - a: {node: swa3, port: 3}
+    z: {node: wsp6, port: 1}
