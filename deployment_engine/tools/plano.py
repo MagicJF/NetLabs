@@ -421,6 +421,16 @@ def _arbol(lab: dict) -> Region:
         # `shape: cloud` es una decisión de dibujo: la red se pinta como nube porque no
         # es un segmento del cliente, no porque el despliegue sea distinto.
         region.nube = net.get("shape") == "cloud"
+        # Dos redes con la misma dirección se toman la una a la otra como padre y
+        # ninguna queda como raíz: el árbol se construye recurriendo y el plano se cae
+        # con un error interno. La validación del laboratorio ya lo rechaza; aquí se
+        # repite porque el plano se dibuja también desde las pruebas con un laboratorio
+        # sin validar, y un IndexError no dice qué red está mal.
+        if any(r.cidr == region.cidr for r in regiones):
+            raise identity.LabError(
+                f"la red {net['name']!r} repite el CIDR {region.cidr}: dos áreas con la "
+                "misma dirección no se pueden anidar"
+            )
         regiones.append(region)
         por_red[net["name"]] = region
     for espacio in lab.get("address_spaces") or []:
@@ -895,14 +905,30 @@ def _plano_anidado(lab: dict) -> str:
             # El orden es el de la red que hay debajo de cada uno: izquierda y derecha
             # salen donde uno espera encontrarlas.
             hermanos = sorted(hermanos, key=lambda r: _centro_de_lo_suyo(r, patas, por_red))
+            # El símbolo más ancho manda: dos centros más cerca que eso se tapan, y el
+            # plano deja de enseñar un equipo por símbolo (§2.10).
+            minimo = max(max(SIMBOLO[por_nodo[r]["type"]]) for r in hermanos) + 2
+
+            def reparto(inicio: float, fin: float, indice: int) -> float:
+                """Separa los hermanos a lo largo de un tramo, sin que se tapen.
+
+                Si el tramo común de las dos áreas no da para un diámetro por equipo, se
+                usa el mínimo imprescindible y el reparto se centra en ese tramo: los
+                símbolos pueden sobresalir del borde compartido, pero se ven todos. Un
+                símbolo tapado es peor que uno apoyado un poco más allá de la frontera.
+                """
+                paso = (fin - inicio) / (len(hermanos) + 1)
+                if paso < minimo:
+                    centro = (inicio + fin) / 2
+                    return centro + minimo * (indice - (len(hermanos) - 1) / 2)
+                return inicio + paso * (indice + 1)
+
             comun = (max(una.x, otra.x), min(una.x + una.ancho, otra.x + otra.ancho))
             if comun[1] > comun[0]:
-                paso = (comun[1] - comun[0]) / (len(hermanos) + 1)
-                x = comun[0] + paso * (hermanos.index(rol) + 1)
+                x = reparto(comun[0], comun[1], hermanos.index(rol))
             else:
                 comun = (max(una.y, otra.y), min(una.y + una.alto, otra.y + otra.alto))
-                paso = (comun[1] - comun[0]) / (len(hermanos) + 1)
-                y = comun[0] + paso * (hermanos.index(rol) + 1)
+                y = reparto(comun[0], comun[1], hermanos.index(rol))
         casa_de[rol].dentro[rol] = (x, y)
 
     def punto_de(rol: str) -> tuple[float, float]:
@@ -973,10 +999,14 @@ def _plano_anidado(lab: dict) -> str:
                         ])
                     # horizontal: se aparta por debajo, que el techo lo ocupa la cabecera
                     py = min(pa[1] + 40, casa.y + casa.alto - 26)
+                    # Cada rótulo va hacia el otro extremo del tramo y por debajo de la
+                    # línea: con el equipo `a` a la derecha, el desplazamiento fijo lo
+                    # sacaba del cable, y encima de la línea caía sobre su propio nombre.
+                    hacia = 12 if pz[0] > pa[0] else -12
                     return "".join([
                         _codo([(pa[0], pa[1]), (pa[0], py), (pz[0], py), (pz[0], pz[1])]),
-                        _puerto(pa[0] + 12, py, puerto_a, arriba=False),
-                        _puerto(pz[0] - 12, py, puerto_z, arriba=False),
+                        _puerto(pa[0] + hacia, py, puerto_a, arriba=True),
+                        _puerto(pz[0] - hacia, py, puerto_z, arriba=False),
                     ])
             # Dos equipos de la misma área pero en plantas distintas —el switch de
             # núcleo arriba y un router en el borde de un departamento— se unen por el
@@ -1025,10 +1055,41 @@ def _plano_anidado(lab: dict) -> str:
         suyos = sorted(salidas.get(rol_a) or [puerto_a])
         centro = (len(suyos) - 1) / 2
         desvio = (suyos.index(puerto_a) - centro) * 26
+        # El cable nace EN el contorno del símbolo y se separa un poco más abajo: con el
+        # desplazamiento aplicado ya en la salida, el primero y el último arrancaban a 26
+        # unidades del centro, fuera del círculo de 16,5, y el puerto quedaba en el aire.
+        arranque = salida + (10 if abajo else -10)
+
+        def dentro(region: Region, punto: tuple[float, float]) -> bool:
+            return (region.x <= punto[0] <= region.x + region.ancho
+                    and region.y <= punto[1] <= region.y + region.alto)
+
+        # ¿Hay un área intermedia en la vertical que baja hasta el pasillo? Bajar desde
+        # un router con una pata en cada una de tres LAN atraviesa la segunda, y el plano
+        # diría que ese cable pasa por dentro de una red que no es la suya. Se detecta y
+        # se rodea por un pasillo lateral.
+        x_via = pa[0] + desvio
+        mediadoras = [r for r in regiones
+                      if not dentro(r, pa) and not dentro(r, pz)
+                      and r.x - 2 <= x_via <= r.x + r.ancho + 2
+                      and min(salida, y) < r.y + r.alto and max(salida, y) > r.y]
+        if mediadoras:
+            izquierda = min(r.x for r in mediadoras) - 16
+            derecha = max(r.x + r.ancho for r in mediadoras) + 16
+            # Por el lado que quede dentro del lienzo y más cerca.
+            borde = (izquierda if (izquierda - raiz.x) < (raiz.x + raiz.ancho - derecha)
+                     else derecha)
+            borde = min(max(borde, raiz.x + 8), raiz.x + raiz.ancho - 8)
+            return "".join([
+                _codo([(pa[0], salida), (pa[0], arranque), (borde, arranque),
+                       (borde, y), (pz[0], y), (pz[0], entrada)]),
+                _puerto(pa[0], salida, puerto_a, arriba=not abajo),
+                _puerto(pz[0], entrada, puerto_z, arriba=abajo),
+            ])
         return "".join([
-            _codo([(pa[0] + desvio, salida), (pa[0] + desvio, y),
-                   (pz[0], y), (pz[0], entrada)]),
-            _puerto(pa[0] + desvio, salida, puerto_a, arriba=not abajo),
+            _codo([(pa[0], salida), (pa[0], arranque), (pa[0] + desvio, arranque),
+                   (pa[0] + desvio, y), (pz[0], y), (pz[0], entrada)]),
+            _puerto(pa[0], salida, puerto_a, arriba=not abajo),
             _puerto(pz[0], entrada, puerto_z, arriba=abajo),
         ])
 
