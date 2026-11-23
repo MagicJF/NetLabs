@@ -386,9 +386,12 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
 
     es_dinamica = lambda r: str(r.get("dynamic", "false")).lower() in ("true", "yes")
     estaticas = [r for r in actuales or [] if not es_dinamica(r)]
-    nuestras = {clave(r): r for r in estaticas
-                if str(r.get("comment", "")).startswith(PREFIX)}
+    propias = [r for r in estaticas
+               if str(r.get("comment", "")).startswith(PREFIX)]
     ajenas = {clave(r) for r in estaticas if not str(r.get("comment", "")).startswith(PREFIX)}
+
+    def apagada(ruta: dict) -> bool:
+        return str(ruta.get("disabled", "false")).lower() in ("true", "yes")
 
     deseadas = []
     for item in declaradas or []:
@@ -397,9 +400,11 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
         deseadas.append((red, via))
 
     ops: list[dict] = []
+    # Cada entrada declarada se lleva UNA entrada propia, y ninguna se comparte: dos
+    # rutas al mismo destino con saltos distintos son dos rutas, y si las dos reclamaran
+    # la misma entrada cada pasada le cambiaría el salto a la otra y no convergería.
+    sin_reclamar = list(propias)
     for red, via in deseadas:
-        if (red, via) in nuestras or any(k[0] == red and k[1] == via for k in nuestras):
-            continue
         if (red, via) in ajenas:
             continue
         if any(destino == red for destino, _ in ajenas):
@@ -408,25 +413,39 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
                 "puede poner la que declara el laboratorio. Se retira a mano o se cambia "
                 "el destino declarado"
             )
-        propia = next((r for (otra_red, _), r in nuestras.items() if otra_red == red), None)
-        if propia is not None:
-            # Mismo destino, otro salto: el salto viejo es justo lo que hay que
-            # corregir —es un router que ya no está—, y `PUT` respondería que la
-            # ruta ya existe.
-            ops.append({"method": "PATCH", "path": f"/rest/ip/route/{propia['.id']}",
-                        "body": {"gateway": via},
-                        "effect": f"ruta {red} -> {via} (antes {propia.get('gateway')})"})
+        igual = next((r for r in sin_reclamar if clave(r) == (red, via)), None)
+        if igual is not None:
+            sin_reclamar.remove(igual)
+            # Una ruta propia apagada no lleva tráfico: declararla es quererla en uso, y
+            # una que alguien apagó a mano no puede quedarse así para siempre mientras el
+            # laboratorio siga declarándola —las sedes se quedarían sin comunicación y
+            # nada lo diría—.
+            if apagada(igual):
+                ops.append({"method": "PATCH", "path": f"/rest/ip/route/{igual['.id']}",
+                            "body": {"disabled": "no"},
+                            "effect": f"encender la ruta {red} -> {via}"})
+            continue
+        # Mismo destino, otro salto: el salto viejo es justo lo que hay que corregir —es
+        # un router que ya no está—, y `PUT` respondería que la ruta ya existe.
+        otra = next((r for r in sin_reclamar if clave(r)[0] == red), None)
+        if otra is not None:
+            sin_reclamar.remove(otra)
+            cuerpo = {"gateway": via}
+            if apagada(otra):
+                cuerpo["disabled"] = "no"
+            ops.append({"method": "PATCH", "path": f"/rest/ip/route/{otra['.id']}",
+                        "body": cuerpo,
+                        "effect": f"ruta {red} -> {via} (antes {otra.get('gateway')})"})
             continue
         ops.append({"method": "PUT", "path": "/rest/ip/route",
                     "body": {"dst-address": red, "gateway": via,
                              "comment": f"{PREFIX}ruta"},
                     "effect": f"ruta {red} -> {via}"})
 
-    for (red, via), ruta in nuestras.items():
-        if (red, via) in deseadas:
-            continue
-        if any(destino == red for destino, _ in deseadas):
-            continue  # ya se corrigió arriba, o se corrige en este mismo plan
+    # Lo propio que ninguna entrada declarada reclamó sobra. No hay excepción por
+    # compartir destino: lo declarado ya tiene su entrada, así que ésta es un resto.
+    for ruta in sin_reclamar:
+        red, via = clave(ruta)
         ops.append({"method": "DELETE", "path": f"/rest/ip/route/{ruta['.id']}",
                     "effect": f"sobra la ruta {red} -> {via}"})
     return ops
@@ -1238,8 +1257,13 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
     `vivas` son las direcciones que hoy tiene algún invitado del clúster, y `propias` las
     de los invitados de **este** laboratorio. Un equipo con el mismo nombre y una
     dirección viva que no es de este laboratorio es de **otro** laboratorio en marcha, y
-    no se toca; uno que apunta a una dirección de este laboratorio que no es la suya, o a
-    una que ya no tiene nadie, es un resto, y se borra.
+    no se toca; uno que apunta a una dirección de este laboratorio que no es la suya es
+    un resto de este y se borra. Uno que apunta a una dirección que hoy no tiene nadie
+    **no se borra**: compartir nombre y que la dirección esté libre no demuestra a quién
+    pertenece —el homónimo de un laboratorio ya destruido deja exactamente eso— y su
+    histórico no se retira por si acaso; sale como pendiente y lo retira una persona.
+    Lo que va en `propias` son las direcciones de los invitados del laboratorio, no las
+    de sus equipos: así se distingue «suya y con otra máquina» de «de nadie».
 
     Un equipo que ya está como debe no produce ninguna llamada —eso es lo que hace que
     el segundo `apply` no escriba— y uno que ya está con otras credenciales sale como
@@ -1282,21 +1306,31 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
             (o for o in candidatos
              if str((o.get("ipAddress") or {}).get("address")) == str(direccion)), None)
 
-        # Los que llevan el mismo nombre y no son este equipo: o son de este laboratorio
-        # apuntando a la máquina de otro equipo suyo, o son restos de despliegues
-        # anteriores. Si su dirección es de otro laboratorio vivo, no se tocan.
+        # Los que llevan el mismo nombre y no son este equipo: o son restos de este
+        # laboratorio —una máquina suya que ya no es la que dicen—, o son de otro
+        # laboratorio. Compartir nombre no basta para saberlo: sólo se retira lo que se
+        # puede demostrar de aquí, es decir, un objeto que apunta a una dirección que hoy
+        # tiene un invitado de este laboratorio. Un objeto que apunta a una dirección que
+        # ya no tiene nadie puede ser el histórico de un laboratorio destruido, y eso no
+        # se borra (AGENTS.md §3.6): se dice y lo retira una persona si es un resto.
         for sobrante in candidatos:
             if sobrante is objeto:
                 continue
             suya = str((sobrante.get("ipAddress") or {}).get("address") or "")
-            if suya in vivas_set and suya not in direcciones_del_lab:
-                continue
-            borrados.append({
-                "cmd": netxms_borrar_cmd(api, sobrante["id"]),
-                "cuerpo": "",
-                "effect": (f"retirar {nombre}, que apuntaba a {suya or 'ninguna dirección'} "
-                           f"y ya no es esa máquina"),
-            })
+            if suya in direcciones_del_lab:
+                borrados.append({
+                    "cmd": netxms_borrar_cmd(api, sobrante["id"]),
+                    "cuerpo": "",
+                    "effect": (f"retirar {nombre}, que apuntaba a {suya} "
+                               f"y ya no es esa máquina"),
+                })
+            elif suya not in vivas_set:
+                pendientes.append(
+                    f"{nombre}: hay un equipo con ese nombre apuntando a {suya or 'ninguna dirección'}, "
+                    "y ningún invitado de este laboratorio tiene esa dirección: no consta que sea "
+                    "suyo, así que no se retira para no borrar el histórico de otro laboratorio. "
+                    "Si es un resto de este, retíralo a mano en la consola"
+                )
 
         if objeto is None:
             cuerpo = {

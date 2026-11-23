@@ -608,6 +608,75 @@ class LasRutasEstaticasDelRouter(unittest.TestCase):
         self.assertEqual([(o["method"], o["path"]) for o in ops], [("PATCH", "/rest/ip/route/*7")])
         self.assertEqual(ops[0]["body"], {"gateway": "10.99.0.2"})
 
+    def test_una_ruta_propia_apagada_se_vuelve_a_encender(self):
+        """Declarar una ruta es quererla en uso: una apagada a mano no lleva tráfico.
+
+        Demuestra que una ruta del motor con el destino y el salto buenos no cuenta como
+        puesta si está en `disabled=true`: se enciende, en vez de dejarla apagada para
+        siempre mientras el laboratorio la siga declarando.
+        """
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "netlabs-ruta", "disabled": "true", ".id": "*3"}]
+        ops = converge._route_ops(self.RUTAS, actual)
+        self.assertEqual([(o["method"], o["path"], o["body"]) for o in ops],
+                         [("PATCH", "/rest/ip/route/*3", {"disabled": "no"})])
+
+    def test_una_ruta_corregida_que_estaba_apagada_se_enciende_tambien(self):
+        """Cambiar el salto no basta si la entrada sigue apagada."""
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.9",
+                   "comment": "netlabs-ruta", "disabled": "true", ".id": "*4"}]
+        ops = converge._route_ops(self.RUTAS, actual)
+        self.assertEqual(ops[0]["body"], {"gateway": "10.99.0.2", "disabled": "no"})
+
+    def test_dos_destinos_iguales_con_saltos_distintos_convergen(self):
+        """Dos rutas al mismo destino son dos rutas, no una.
+
+        Demuestra que cada entrada declarada reclama una entrada propia distinta: si las
+        dos se llevaran la misma, cada pasada le cambiaría el salto a la otra y la tabla
+        no tendría nunca las dos rutas que el laboratorio pide.
+        """
+        rutas = [{"destination": "10.40.0.0/16", "gateway": "10.99.0.2"},
+                 {"destination": "10.40.0.0/16", "gateway": "10.99.0.9"}]
+        ops = converge._route_ops(rutas, [])
+        self.assertEqual([(o["method"], o["body"]) for o in ops], [
+            ("PUT", {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                     "comment": "netlabs-ruta"}),
+            ("PUT", {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.9",
+                     "comment": "netlabs-ruta"}),
+        ])
+        # La segunda pasada no escribe nada: las dos están ya en la tabla.
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": via,
+                   "comment": "netlabs-ruta", ".id": f"*{i}"}
+                  for i, via in enumerate(("10.99.0.2", "10.99.0.9"), 1)]
+        self.assertEqual(converge._route_ops(rutas, actual), [])
+
+    def test_una_entrada_corregida_no_se_lleva_el_salto_de_la_otra(self):
+        """Con una sola entrada propia, la segunda ruta declarada se crea aparte.
+
+        Demuestra que la entrada que ya se corrigió para una entrada declarada no vuelve
+        a reclamarse para la siguiente del mismo destino: ésa se crea, y no se reescribe
+        el salto de la anterior.
+        """
+        rutas = [{"destination": "10.40.0.0/16", "gateway": "10.99.0.2"},
+                 {"destination": "10.40.0.0/16", "gateway": "10.99.0.9"}]
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.7",
+                   "comment": "netlabs-ruta", ".id": "*5"}]
+        ops = converge._route_ops(rutas, actual)
+        self.assertEqual([(o["method"], o["body"]) for o in ops], [
+            ("PATCH", {"gateway": "10.99.0.2"}),
+            ("PUT", {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.9",
+                     "comment": "netlabs-ruta"}),
+        ])
+
+    def test_una_ruta_propia_del_mismo_destino_que_no_se_declara_se_retira(self):
+        """Lo declarado ya tiene su entrada: la otra del mismo destino es un resto."""
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "netlabs-ruta", ".id": "*1"},
+                  {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.7",
+                   "comment": "netlabs-ruta", ".id": "*2"}]
+        ops = converge._route_ops(self.RUTAS, actual)
+        self.assertEqual([(o["method"], o["path"]) for o in ops], [("DELETE", "/rest/ip/route/*2")])
+
     def test_lo_que_sobra_marcado_se_retira(self):
         actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
                    "comment": "netlabs-ruta", ".id": "*1"},
@@ -914,6 +983,23 @@ class ElRegistroEnLaVista(unittest.TestCase):
         efectos = [op["effect"].split()[0] for op in plan["ops"]]
         self.assertEqual(efectos, ["retirar", "registrar", "registrar"])
         self.assertIn("/objects/234", plan["ops"][0]["cmd"][2])
+
+    def test_un_resto_que_no_consta_de_este_laboratorio_no_se_borra(self):
+        """Compartir nombre y que la dirección no sea de nadie no demuestra propiedad.
+
+        Demuestra que el histórico de otro laboratorio —un `rte1` homónimo cuyo invitado
+        ya se destruyó, así que su dirección no la tiene hoy nadie— no se retira al
+        aplicar éste: se dice, y lo retira una persona si resulta ser un resto.
+        """
+        resto = {"id": 300, "name": "rte1", "ipAddress": {"address": "10.30.0.140"}}
+        plan = converge.netxms_ops([self.equipo()], [resto], [], self.API, self.SECRETS,
+                                   vivas=[])
+        self.assertEqual(len(plan["ops"]), 1)
+        self.assertIn("/objects", plan["ops"][0]["cmd"][2])
+        self.assertNotIn("DELETE", plan["ops"][0]["cmd"][2])
+        self.assertEqual(len(plan["pendientes"]), 1)
+        self.assertIn("10.30.0.140", plan["pendientes"][0])
+        self.assertIn("no se retira", plan["pendientes"][0])
 
     def test_las_fichas_se_piden_solo_por_los_equipos_de_este_laboratorio(self):
         # La búsqueda devuelve resúmenes sin credenciales: la ficha hay que pedirla, y se

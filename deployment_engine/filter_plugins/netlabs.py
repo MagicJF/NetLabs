@@ -16,34 +16,40 @@ import converge  # noqa: E402
 import identity  # noqa: E402
 
 
-def netlabs_con_config(world: dict, configs: dict) -> dict:
+def netlabs_con_config(mundo: dict, configuraciones: dict) -> dict:
     """Pega a cada invitado los recursos ESCRITOS en su config.
 
-    `configs` viene de `tasks/guest_config.yml`: {vmid: {cores, memory(MB)}}. Un
+    `configuraciones` viene de `tasks/guest_config.yml`: {vmid: {cores, memory(MB)}}. Un
     invitado sin config leído se queda con lo que dice el clúster, que para uno parado
     es lo mismo y para uno en marcha puede no serlo: por eso el plan prefiere
     `config_*` cuando está.
     """
-    salida = dict(world)
+    salida = dict(mundo)
     salida["guests"] = []
-    for guest in world.get("guests") or []:
-        dato = (configs or {}).get(str(guest.get("vmid"))) or {}
-        nuevo = dict(guest)
+    for invitado in mundo.get("guests") or []:
+        dato = (configuraciones or {}).get(str(invitado.get("vmid"))) or {}
+        nuevo = dict(invitado)
         if dato:
-            nuevo["config_cores"] = int(dato.get("cores") or guest.get("cores") or 1)
+            nuevo["config_cores"] = int(dato.get("cores") or invitado.get("cores") or 1)
             nuevo["config_memory"] = int(dato.get("memory") or 0)
         salida["guests"].append(nuevo)
     return salida
 
 
-def netlabs_direcciones_vivas(guests, espacio: str) -> list:
+def netlabs_direcciones_vivas(invitados, espacio: str) -> list:
     """Las direcciones de gestión que hoy tienen los invitados del clúster.
 
     Sirve para distinguir un resto de un despliegue anterior —su dirección ya no la tiene
     nadie— de un equipo de otro laboratorio en marcha, que se llama igual y no se toca.
+
+    Sólo se derivan las de los invitados que pueden tener dirección en este plano: el
+    clúster puede tener máquinas que no son del motor (un `vmid` por encima de los que
+    caben en el /16), y preguntarles la suya lanzaría y dejaría el laboratorio sin
+    registrar por un invitado que no tiene nada que ver.
     """
     return [str(identity.derive_management(int(g["vmid"]), espacio))
-            for g in guests or [] if g.get("vmid")]
+            for g in invitados or []
+            if g.get("vmid") and identity.cabe_management(int(g["vmid"]), espacio)]
 
 
 def _world(resources, networks, pools):

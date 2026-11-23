@@ -64,6 +64,21 @@ class Identidad(unittest.TestCase):
         with self.assertRaisesRegex(identity.LabError, "/16"):
             identity.derive_management(100, "10.30.0.0/24")
 
+    def test_un_vmid_que_no_cabe_en_el_plano_no_tiene_direccion(self):
+        """Un invitado ajeno al motor no puede tumbar la lectura de las direcciones.
+
+        Demuestra que se sabe de antemano qué vmids caben en el /16 antes de derivar: un
+        invitado con `vmid` 70000 no tiene dirección de gestión del motor, y preguntársela
+        lanzaba y dejaba el laboratorio sin registrar en la vista.
+        """
+        self.assertTrue(identity.cabe_management(identity.VMID_MAXIMO_MANAGEMENT, "10.30.0.0/16"))
+        self.assertFalse(identity.cabe_management(70000, "10.30.0.0/16"))
+        self.assertFalse(identity.cabe_management(0, "10.30.0.0/16"))
+
+    def test_un_plano_mal_declarado_se_sigue_diciendo(self):
+        with self.assertRaisesRegex(identity.LabError, "/16"):
+            identity.cabe_management(100, "10.30.0.0/24")
+
 
 class ElPlan(unittest.TestCase):
     def test_plan_reparte_los_vmids_libres_mas_bajos(self):
@@ -566,6 +581,17 @@ class Documentacion(unittest.TestCase):
         self.assertNotIn("```mermaid", texto)
         self.assertNotIn("```", texto)
         self.assertNotIn("mermaid", texto)
+
+    def test_sin_png_la_pagina_enlaza_el_svg(self):
+        """Sin rasterizador no hay PNG: la página no puede prometer una imagen que no está.
+
+        Demuestra que, cuando `docs` no pudo generar el PNG, la página enlaza el SVG como
+        imagen en vez de dejar un hueco roto en un laboratorio nuevo.
+        """
+        lab = laboratorio()
+        texto = identity.render_docs(lab, entorno(), con_png=False)
+        self.assertIn(f"![Plano de topología de {lab['lab']}]({lab['lab']}-topologia.svg)", texto)
+        self.assertNotIn(f"{lab['lab']}-topologia.png", texto)
 
     def test_los_planos_salen_enteros_de_la_declaracion(self):
         """Ni un equipo inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""

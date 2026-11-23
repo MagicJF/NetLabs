@@ -103,63 +103,61 @@ class TestPlanoAnidado(unittest.TestCase):
     def test_cada_area_cabe_dentro_de_la_suya(self):
         """Un área que se sale de su madre convierte el plano en un amasijo de cajas."""
         for lab in todos_los_laboratorios():
-         with self.subTest(laboratorio=lab):
-          raiz, _, _, _, _ = montar(laboratorio(lab))
-        for region in plano._todas(raiz):
-            for hija in region.hijas:
-                with self.subTest(hija=hija.nombre, madre=region.nombre):
-                    self.assertTrue(cabe(hija, region),
-                                    f"{hija.nombre} se sale de {region.nombre}")
+            raiz, _, _, _, _ = montar(laboratorio(lab))
+            for region in plano._todas(raiz):
+                for hija in region.hijas:
+                    with self.subTest(laboratorio=lab, hija=hija.nombre, madre=region.nombre):
+                        self.assertTrue(cabe(hija, region),
+                                        f"{hija.nombre} se sale de {region.nombre}")
 
     def test_cada_equipo_cabe_dentro_de_su_area(self):
         """Un equipo dibujado fuera de su área dice que pertenece a otra red."""
         for lab in todos_los_laboratorios():
-         with self.subTest(laboratorio=lab):
-          raiz, casa_de, cruces, _, _ = montar(laboratorio(lab))
-        for region in plano._todas(raiz):
-            for rol, (x, y) in region.dentro.items():
-                if rol in cruces:
-                    continue  # los routers van a caballo: se salen a propósito
-                # No basta con el centro: el símbolo tiene su tamaño y, si se sale, el
-                # plano dice que ese equipo está fuera de su red.
-                ancho, alto = plano.SIMBOLO.get(
-                    next(n["type"] for n in laboratorio(lab)["nodes"] if n["role"] == rol),
-                    (40, 40))
-                with self.subTest(equipo=rol, area=region.nombre):
-                    self.assertGreaterEqual(x - ancho / 2, region.x - 0.5)
-                    self.assertLessEqual(x + ancho / 2, region.x + region.ancho + 0.5)
-                    self.assertGreaterEqual(y - alto / 2, region.y - 0.5)
-                    self.assertLessEqual(y + alto / 2, region.y + region.alto + 0.5)
+            declaracion = laboratorio(lab)
+            raiz, casa_de, cruces, _, _ = montar(declaracion)
+            for region in plano._todas(raiz):
+                for rol, (x, y) in region.dentro.items():
+                    if rol in cruces:
+                        continue  # los routers van a caballo: se salen a propósito
+                    # No basta con el centro: el símbolo tiene su tamaño y, si se sale, el
+                    # plano dice que ese equipo está fuera de su red.
+                    ancho, alto = plano.SIMBOLO.get(
+                        next(n["type"] for n in declaracion["nodes"] if n["role"] == rol),
+                        (40, 40))
+                    with self.subTest(laboratorio=lab, equipo=rol, area=region.nombre):
+                        self.assertGreaterEqual(x - ancho / 2, region.x - 0.5)
+                        self.assertLessEqual(x + ancho / 2, region.x + region.ancho + 0.5)
+                        self.assertGreaterEqual(y - alto / 2, region.y - 0.5)
+                        self.assertLessEqual(y + alto / 2, region.y + region.alto + 0.5)
 
     def test_la_nube_queda_fuera_de_la_empresa(self):
         """Internet es el exterior: dentro de la caja de ACME no puede estar."""
         for lab in todos_los_laboratorios():
-         with self.subTest(laboratorio=lab):
-          raiz, _, _, _, _ = montar(laboratorio(lab))
-        nubes = [r for r in plano._todas(raiz) if r.nube]
-        self.assertTrue(nubes, "el laboratorio no declara ninguna nube")
-        for nube in nubes:
-            for area in plano._todas(raiz):
-                if area is nube or area.sintetica or not area.hijas:
-                    continue
-                solapan = (nube.x < area.x + area.ancho and area.x < nube.x + nube.ancho
-                           and nube.y < area.y + area.alto and area.y < nube.y + nube.alto)
-                with self.subTest(nube=nube.nombre, area=area.nombre):
-                    self.assertFalse(solapan, f"la nube pisa el área {area.nombre}")
+            raiz, _, _, _, _ = montar(laboratorio(lab))
+            nubes = [r for r in plano._todas(raiz) if r.nube]
+            if not nubes:
+                continue  # un laboratorio sin exterior no tiene nube que comprobar
+            for nube in nubes:
+                for area in plano._todas(raiz):
+                    if area is nube or area.sintetica or not area.hijas:
+                        continue
+                    solapan = (nube.x < area.x + area.ancho and area.x < nube.x + nube.ancho
+                               and nube.y < area.y + area.alto and area.y < nube.y + nube.alto)
+                    with self.subTest(laboratorio=lab, nube=nube.nombre, area=area.nombre):
+                        self.assertFalse(solapan, f"la nube pisa el área {area.nombre}")
 
     def test_ninguna_etiqueta_se_monta_sobre_otra(self):
         """Dos nombres encima del mismo punto no se leen: es lo que hace ilegible un plano."""
         for lab in todos_los_laboratorios():
-         with self.subTest(laboratorio=lab):
-          svg = plano.plano(laboratorio(lab), "topologia")
-        cajas = texto_del_svg(svg)
-        choques = []
-        for i, uno in enumerate(cajas):
-            for otro in cajas[i + 1:]:
-                if uno[0] < otro[2] and otro[0] < uno[2] and \
-                        uno[1] < otro[3] and otro[1] < uno[3]:
-                    choques.append(f"{uno[4]} / {otro[4]}")
-        self.assertEqual(choques, [], f"etiquetas montadas: {choques}")
+            cajas = texto_del_svg(plano.plano(laboratorio(lab), "topologia"))
+            choques = []
+            for i, uno in enumerate(cajas):
+                for otro in cajas[i + 1:]:
+                    if uno[0] < otro[2] and otro[0] < uno[2] and \
+                            uno[1] < otro[3] and otro[1] < uno[3]:
+                        choques.append(f"{uno[4]} / {otro[4]}")
+            with self.subTest(laboratorio=lab):
+                self.assertEqual(choques, [], f"etiquetas montadas: {choques}")
 
     def test_cada_sede_tiene_su_salida_a_internet(self):
         """Con dos sedes y una sola nube, los dos routers no pueden acabar apilados."""

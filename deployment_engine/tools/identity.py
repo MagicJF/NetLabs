@@ -116,6 +116,34 @@ def derive_mac(vmid: int, iface: int = 0) -> str:
     )
 
 
+# El tope de vmids que caben en el plano de gestión: un /16 da 255 bloques de 254
+# direcciones. Por encima no hay dirección derivada que dar.
+VMID_MAXIMO_MANAGEMENT = 254 * 255 - 1
+
+
+def _red_de_gestion(address_space: str) -> ipaddress.IPv4Network:
+    """El plano de gestión, comprobado: es un /16 y por eso cada vmid cae en su sitio."""
+    red = ipaddress.ip_network(address_space, strict=False)
+    if not isinstance(red, ipaddress.IPv4Network) or red.prefixlen != 16:
+        raise LabError(
+            f"la red de gestión tiene que ser un /16 y es {address_space!r}; "
+            "es lo que hace que la dirección de cada equipo salga de su vmid sin reparto"
+        )
+    return red
+
+
+def cabe_management(vmid: int, address_space: str) -> bool:
+    """¿Cabe una dirección de gestión para ese vmid en el plano declarado?
+
+    El clúster puede tener invitados que no son del motor —fuera de su rango, o de un
+    hipervisor que admite vmids por encima de los que caben en el /16—. Preguntarles su
+    dirección derivada no puede tumbar la lectura del clúster: se saltan. El plano mal
+    declarado no se salta: es un error del sitio y se dice.
+    """
+    _red_de_gestion(address_space)
+    return 0 < int(vmid) <= VMID_MAXIMO_MANAGEMENT
+
+
 def derive_management(vmid: int, address_space: str) -> ipaddress.IPv4Address:
     """La dirección de gestión es función pura del vmid dentro del plano compartido.
 
@@ -125,16 +153,11 @@ def derive_management(vmid: int, address_space: str) -> ipaddress.IPv4Address:
     en vez de inventar una dirección.
     """
     _check_vmid(vmid)
-    red = ipaddress.ip_network(address_space, strict=False)
-    if red.version != 4 or red.prefixlen != 16:
-        raise LabError(
-            f"la red de gestión tiene que ser un /16 y es {address_space!r}; "
-            "es lo que hace que la dirección de cada equipo salga de su vmid sin reparto"
-        )
-    if vmid > 254 * 255 - 1:
+    red = _red_de_gestion(address_space)
+    if vmid > VMID_MAXIMO_MANAGEMENT:
         raise LabError(
             f"no cabe una dirección de gestión para el vmid {vmid} en {address_space}: "
-            "un /16 admite vmids hasta 64769"
+            f"un /16 admite vmids hasta {VMID_MAXIMO_MANAGEMENT}"
         )
     base = int(red.network_address)
     return ipaddress.ip_address(base + (vmid // 254) * 256 + (vmid % 254 + 1))
@@ -1515,11 +1538,16 @@ def _pie_plano(topologia: bool) -> str:
             "los une tal y como se declara.*")
 
 
-def render_docs(lab: dict, env: dict) -> str:
+def render_docs(lab: dict, env: dict, con_png: bool = True) -> str:
     """La región generada de la página del laboratorio, desde la declaración.
 
     No lleva vmid, MAC ni dirección de gestión: esos se derivan del hipervisor y
     un documento que los clavara mentiría en el siguiente despliegue.
+
+    `con_png` lo decide quien llama, mirando el disco: sin rasterizador no hay PNG y
+    la página no puede prometer una imagen que no existe —se quedaría rota—, así que
+    enlaza el SVG como imagen. Es un dato de entrada y no una lectura: esta capa no
+    toca ficheros, y por eso la misma declaración da el mismo texto.
     """
     validate(lab, env)
     if lab.get("kind", "topology") == "control":
@@ -1542,11 +1570,18 @@ def render_docs(lab: dict, env: dict) -> str:
         # se lee en blanco en cuanto el visor no pinta SVG en línea —y hay muchos que
         # no—, y el que lo abre cree que el dibujo no existe. Como fichero de imagen lo
         # enseña cualquiera; el vector sigue siendo vector.
+        # El PNG lo enseña también el visor que no pinta SVG, pero sólo si existe: sin
+        # rasterizador la página enlaza el SVG, que al menos está.
         nombre = lab["lab"]
-        lines += ["", "### Topología", "",
-                  f"![Plano de topología de {nombre}]({nombre}-topologia.png)", "",
-                  f"También en vector: [`{nombre}-topologia.svg`]({nombre}-topologia.svg).",
-                  "", _pie_plano(True)]
+        if con_png:
+            lines += ["", "### Topología", "",
+                      f"![Plano de topología de {nombre}]({nombre}-topologia.png)", "",
+                      f"También en vector: [`{nombre}-topologia.svg`]({nombre}-topologia.svg).",
+                      "", _pie_plano(True)]
+        else:
+            lines += ["", "### Topología", "",
+                      f"![Plano de topología de {nombre}]({nombre}-topologia.svg)", "",
+                      _pie_plano(True)]
     lines += ["", "### Networks", "", "| network | address |", "| --- | --- |"]
     for net in lab["networks"]:
         lines.append(f"| `{net['name']}` | `{net['address']}` |")

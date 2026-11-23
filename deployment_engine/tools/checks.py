@@ -21,6 +21,8 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 import identity  # noqa: E402
+import plano  # noqa: E402
+from raster import comprobar_png  # noqa: E402
 
 RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 MOTOR = RAIZ / "deployment_engine"
@@ -213,6 +215,12 @@ def comprobar_letras(env) -> list[str]:
 
 
 def comprobar_documentacion(env) -> list[str]:
+    """La página, el plano y su PNG: los tres ficheros generados tienen que contar lo mismo.
+
+    Mirar sólo el texto de la región generada no bastaba: el texto nombra el PNG, así
+    que un SVG viejo —o un PNG que ya no es el del SVG— pasaba la comprobación y
+    publicaba una topología que la declaración ya no dice.
+    """
     errores = []
     for nombre, (ruta, lab) in laboratorios().items():
         pagina = ruta.parent / f"{nombre}.md"
@@ -223,12 +231,30 @@ def comprobar_documentacion(env) -> list[str]:
         if identity.DOC_BEGIN not in texto or identity.DOC_END not in texto:
             errores.append(f"{pagina.relative_to(RAIZ)}: faltan las marcas de la región generada")
             continue
-        generado = identity.render_docs(lab, env)
+        png = ruta.parent / f"{nombre}-topologia.png"
+        # La página enlaza el PNG sólo si existe: es lo mismo que decide `docs` al
+        # escribirla, y por eso se le pasa el dato en vez de que lo lea la capa pura.
+        generado = identity.render_docs(lab, env, con_png=png.exists())
         dentro = texto.split(identity.DOC_BEGIN, 1)[1].split(identity.DOC_END, 1)[0]
         esperado = generado.split(identity.DOC_BEGIN, 1)[1].split(identity.DOC_END, 1)[0]
         if dentro.strip() != esperado.strip():
             errores.append(f"{pagina.relative_to(RAIZ)}: la tabla generada no coincide con la "
                            "declaración (ejecuta `./netlabs docs`)")
+        if not lab.get("networks"):
+            continue
+        svg = ruta.parent / f"{nombre}-topologia.svg"
+        dibujo = plano.plano(lab, "topologia")
+        if not svg.exists():
+            errores.append(f"{svg.relative_to(RAIZ)}: falta el plano (ejecuta `./netlabs docs`)")
+        elif svg.read_text() != dibujo:
+            errores.append(f"{svg.relative_to(RAIZ)}: el plano no coincide con la declaración "
+                           "(ejecuta `./netlabs docs`)")
+        else:
+            # El PNG lleva dentro la huella del SVG del que salió: es la única forma de
+            # saber, sin rasterizador, que los dos dibujos son el mismo.
+            aviso = comprobar_png(dibujo, png)
+            if aviso:
+                errores.append(aviso)
     return errores
 
 

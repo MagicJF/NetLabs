@@ -1,9 +1,14 @@
-# PROPÓSITO:   escribir la región generada de la página de cada laboratorio. La tabla
-#              sale de la declaración, nunca del hipervisor: un documento que clavara
-#              vmids o direcciones de gestión mentiría en el siguiente despliegue.
+# PROPÓSITO:   escribir la región generada de la página de cada laboratorio y, a su lado,
+#              el plano y su PNG. La tabla sale de la declaración, nunca del hipervisor: un
+#              documento que clavara vmids o direcciones de gestión mentiría en el siguiente
+#              despliegue.
 # INVARIANTES: sólo toca lo que está entre las marcas; la prosa de alrededor es del
-#              humano y no se pisa.
-# VER:         deployment_engine/tools/identity.py (render_docs)
+#              humano y no se pisa. La página enlaza el PNG sólo si existe: sin
+#              rasterizador se queda con el SVG, que es lo que hay, en vez de prometer
+#              una imagen que ningún visor va a encontrar.
+# LÍMITES:     no dibuja el plano (eso es `tools/plano.py`) ni comprueba que el PNG sea
+#              el del SVG (eso es `comprobar_png`, y lo llama `./netlabs check`).
+# VER:         deployment_engine/tools/identity.py (render_docs), tools/raster.py
 
 from __future__ import annotations
 
@@ -34,19 +39,18 @@ def escribir(nombre: str, env: dict, comprobar: bool = False) -> int:
         print(f"no existe el laboratorio {nombre!r}: {ruta}")
         return 2
     lab = yaml.safe_load(ruta.read_text())
-    generado = identity.render_docs(lab, env)
     pagina = ruta.with_suffix(".md")
     plano = ruta.with_name(f"{nombre}-topologia.svg")
     dibujo_png = ruta.with_name(f"{nombre}-topologia.png")
     codigo = 0
 
-    # El plano se escribe tambien como fichero suelto, y ademas en PNG: hay visores que
+    # El plano se escribe también como fichero suelto, y además en PNG: hay visores que
     # no pintan un SVG como imagen y lo dejan en el texto alternativo, o sea, en blanco.
     dibujo = plano_mod.plano(lab, "topologia") if lab.get("networks") else None
     if dibujo is not None:
         if comprobar:
             if not plano.exists() or plano.read_text() != dibujo:
-                print(f"{plano.relative_to(RAIZ)}: el plano no coincide con la declaracion")
+                print(f"{plano.relative_to(RAIZ)}: el plano no coincide con la declaración")
                 codigo = 1
         elif not plano.exists() or plano.read_text() != dibujo:
             plano.write_text(dibujo)
@@ -56,6 +60,11 @@ def escribir(nombre: str, env: dict, comprobar: bool = False) -> int:
             if aviso:
                 print(aviso)
                 codigo |= 1 if comprobar else 0
+
+    # La imagen de la página es la que existe: si el rasterizado no dejó un PNG, el
+    # SVG es el que se enlaza. Una página que enlaza un PNG inexistente se ve rota en
+    # un laboratorio nuevo, y nadie sabría que es el rasterizador y no el plano.
+    generado = identity.render_docs(lab, env, con_png=dibujo_png.exists())
 
     if not pagina.exists():
         if comprobar:
