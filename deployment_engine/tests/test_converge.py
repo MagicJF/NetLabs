@@ -698,6 +698,47 @@ class LasRutasEstaticasDelRouter(unittest.TestCase):
                    "comment": "puesta a mano", ".id": "*1"}]
         self.assertEqual(converge._route_ops(self.RUTAS, actual), [])
 
+    def test_una_ruta_ajena_apagada_no_sustituye_a_la_propia(self):
+        """Una ruta ajena apagada no lleva tráfico: no puede hacer de la declarada.
+
+        Demuestra que una ruta del motor activa se conserva cuando fuera hay otra al mismo
+        destino y salto pero apagada: dada por puesta con la apagada, el barrido final
+        borraba la propia y dejaba el camino cortado. La ajena no se toca.
+        """
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "netlabs-ruta", ".id": "*1"},
+                  {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "puesta a mano", "disabled": "true", ".id": "*9"}]
+        self.assertEqual(converge._route_ops(self.RUTAS, actual), [])
+
+    def test_una_ruta_propia_apagada_junto_a_una_ajena_apagada_se_enciende(self):
+        """La propia apagada se enciende aunque fuera haya otra igual, también apagada.
+
+        Demuestra que el motor reclama su ruta y la pone en uso, en vez de darla por
+        puesta con la de fuera —que no lleva tráfico— y dejar la suya sin encender.
+        """
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "netlabs-ruta", "disabled": "true", ".id": "*1"},
+                  {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "puesta a mano", "disabled": "true", ".id": "*9"}]
+        ops = converge._route_ops(self.RUTAS, actual)
+        self.assertEqual([(o["method"], o["path"], o["body"]) for o in ops],
+                         [("PATCH", "/rest/ip/route/*1", {"disabled": "no"})])
+
+    def test_una_ruta_ajena_apagada_con_otro_salto_no_bloquea(self):
+        """Una ruta ajena apagada no ocupa el destino: no impide poner la declarada.
+
+        Demuestra que el motor no se para ante una ruta de fuera apagada con el mismo
+        destino y otro salto: no está en uso, así que la ruta del laboratorio se pone.
+        """
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.9",
+                   "comment": "puesta a mano", "disabled": "true", ".id": "*9"}]
+        ops = converge._route_ops(self.RUTAS, actual)
+        self.assertEqual([(o["method"], o["body"]) for o in ops], [
+            ("PUT", {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                     "comment": "netlabs-ruta"}),
+        ])
+
     def test_un_destino_ajeno_con_otro_salto_se_dice(self):
         # El motor no puede cumplir lo declarado sin tocar lo que no es suyo: se para
         # con el destino delante en vez de dejar una ruta que no es la declarada.

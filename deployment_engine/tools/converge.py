@@ -376,7 +376,9 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
     de lo marcado, lo que sobra se retira, igual que en las demás áreas.
 
     Un destino ya ocupado por una ruta ajena con otro salto no se pisa: se dice,
-    porque el motor no puede cumplir lo declarado sin tocar lo que no es suyo.
+    porque el motor no puede cumplir lo declarado sin tocar lo que no es suyo. Una
+    ruta ajena apagada no cuenta: no lleva tráfico, así que ni hace de declarada ni
+    impide poner la del laboratorio.
     """
     def clave(ruta: dict) -> tuple[str, str]:
         # El salto puede venir con la pata pegada (`10.99.0.2%ether1`): la
@@ -388,10 +390,15 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
     estaticas = [r for r in actuales or [] if not es_dinamica(r)]
     propias = [r for r in estaticas
                if str(r.get("comment", "")).startswith(PREFIX)]
-    ajenas = {clave(r) for r in estaticas if not str(r.get("comment", "")).startswith(PREFIX)}
 
     def apagada(ruta: dict) -> bool:
         return str(ruta.get("disabled", "false")).lower() in ("true", "yes")
+
+    # Una ruta ajena apagada no lleva tráfico: no puede hacer de la declarada —el motor
+    # se apoyaría en un camino cortado— ni ocupar el destino para impedir la suya. Sólo
+    # cuenta la ajena que de verdad está en uso.
+    ajenas = {clave(r) for r in estaticas
+              if not str(r.get("comment", "")).startswith(PREFIX) and not apagada(r)}
 
     deseadas = []
     for item in declaradas or []:
@@ -405,14 +412,10 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
     # la misma entrada cada pasada le cambiaría el salto a la otra y no convergería.
     sin_reclamar = list(propias)
     for red, via in deseadas:
-        if (red, via) in ajenas:
-            continue
-        if any(destino == red for destino, _ in ajenas):
-            raise LabError(
-                f"ya hay una ruta a {red} que no es del motor: el motor no la toca y no "
-                "puede poner la que declara el laboratorio. Se retira a mano o se cambia "
-                "el destino declarado"
-            )
+        # La propia se reclama ANTES de mirar las ajenas: aunque fuera haya una ruta al
+        # mismo destino y salto, la del motor es la que el laboratorio sostiene, y darla
+        # por puesta con la ajena dejaría que el barrido final borrara la propia —una que
+        # alguien apagó fuera no puede llevarse por delante la que el motor mantiene—.
         igual = next((r for r in sin_reclamar if clave(r) == (red, via)), None)
         if igual is not None:
             sin_reclamar.remove(igual)
@@ -425,6 +428,14 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
                             "body": {"disabled": "no"},
                             "effect": f"encender la ruta {red} -> {via}"})
             continue
+        if (red, via) in ajenas:
+            continue
+        if any(destino == red for destino, _ in ajenas):
+            raise LabError(
+                f"ya hay una ruta a {red} que no es del motor: el motor no la toca y no "
+                "puede poner la que declara el laboratorio. Se retira a mano o se cambia "
+                "el destino declarado"
+            )
         # Mismo destino, otro salto: el salto viejo es justo lo que hay que corregir —es
         # un router que ya no está—, y `PUT` respondería que la ruta ya existe.
         otra = next((r for r in sin_reclamar if clave(r)[0] == red), None)
