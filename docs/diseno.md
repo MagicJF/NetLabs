@@ -361,10 +361,14 @@ nada de lo que dibuja el plano**: ni las áreas, ni dónde cae cada router, ni q
 a un lado y a otro. Así que el motor **le manda un mapa hecho a medida**, con el mismo dibujo
 que la documentación:
 
-- las **áreas** del plano, como cajas de grupo rotuladas con su bloque de direcciones;
+- las **áreas** del plano, como cajas de grupo; su nombre y su bloque de direcciones van en **cajas
+  de texto** colocadas donde no pase ningún cable —la vista pega el rótulo de una caja arriba a la
+  izquierda, que es justo por donde entra el cable que baja del núcleo, y lo tapa—;
 - cada **equipo de red** del laboratorio donde el plano lo pone —el router en la frontera de
   las redes que une, el switch del núcleo en el centro—;
-- cada **cable** del laboratorio, entre los dos equipos que une.
+- cada **cable** del laboratorio, entre los dos equipos que une, y los **ajustes** que dicen cómo
+  se dibujan: color propio y trazo fino, porque el gris ancho que pone la vista se pierde en el
+  gris de las cajas.
 
 La geometría **no se recalcula**: se lee del propio plano (`plano.py` escribe la posición de
 cada cosa en atributos `data-*` del SVG), así que el mapa de la vista y el plano de la
