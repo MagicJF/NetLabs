@@ -1415,21 +1415,24 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
         usuario = _declared_user(node) or "admin"
         clave = ros_clave(node, secrets or {})
         if objeto is None:
-            # El API contesta 409 si la dirección ya es de otro equipo, y el play se
-            # pararía después de haber creado el invitado. Se mira antes: si la ocupa un
-            # objeto que este plan no retira, se informa con su nombre y su id y no se
-            # intenta el alta —un reintento encontraría el mismo objeto y el mismo 409—.
+            # El API contesta 409 si la dirección ya es de otro equipo. Se mira antes,
+            # para decirlo con su nombre y su id en vez de dejar que el play se pare a
+            # mitad con un cuerpo de error; y se para igual, porque un alta obligatoria
+            # que no se hace no puede pasar por un laboratorio desplegado.
             ocupantes = [o for o in por_ip.get(str(direccion), [])
                          if o.get("id") is None or int(o["id"]) not in retirados]
             if ocupantes:
                 otro = ocupantes[0]
-                pendientes.append(
+                # No es un aviso: sin el alta, el equipo no está en la vista y el
+                # laboratorio no está desplegado. Un `pendientes` aquí dejaba que
+                # `netxms.yml` anunciara el laboratorio como desplegado sin haberlo
+                # registrado, y el 409 que antes paraba el play ya no llegaba a verse.
+                raise LabError(
                     f"{nombre}: la dirección {direccion} ya la ocupa el equipo "
                     f"{otro.get('name') or '(sin nombre)'} (id {otro.get('id')}), que no "
-                    "consta como retirada en este plan: el API rechazaría el alta con 409. "
-                    "Retíralo a mano si es un resto"
+                    "consta como retirada en este plan: el API rechazaría el alta con 409 "
+                    "y no hay manera de registrar el equipo. Retíralo a mano si es un resto"
                 )
-                continue
             cuerpo = {
                 "class": "Node",
                 "name": nombre,

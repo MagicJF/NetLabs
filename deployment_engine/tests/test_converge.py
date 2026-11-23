@@ -15,6 +15,7 @@ RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ / "deployment_engine" / "tools"))
 
 import converge  # noqa: E402
+from identity import LabError  # noqa: E402
 
 
 def entorno():
@@ -1185,21 +1186,19 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertEqual(len(plan["pendientes"]), 1)
         self.assertIn("no lleva la marca", plan["pendientes"][0])
 
-    def test_la_direccion_que_ocupa_otro_equipo_se_dice_y_no_se_da_de_alta(self):
-        """El API contesta 409 si la dirección ya es de otro: se mira antes de intentarlo.
+    def test_la_direccion_que_ocupa_otro_equipo_para_el_alta(self):
+        """El API contesta 409 si la dirección ya es de otro: el alta no se finge.
 
-        Demuestra que un objeto con otra máquina en la dirección del alta se informa con
-        su nombre y su identificador —un reintento encontraría el mismo y el mismo 409— y
-        no se manda la creación. La retirada del plan sí libera la dirección (ver
+        Demuestra que un objeto con otra máquina en la dirección del alta se dice con
+        su nombre y su identificador y el plan termina en error, no en una nota: sin el
+        alta, el equipo no queda en la vista y `apply` no puede anunciar el laboratorio
+        como desplegado. La retirada del plan sí libera la dirección (ver
         `test_las_retiradas_van_antes_que_las_altas`).
         """
         ocupante = {"id": 77, "name": "maquina-suelta", "ipAddress": {"address": "10.30.0.101"}}
-        plan = converge.netxms_ops([self.equipo()], [ocupante], [], self.API, self.SECRETS,
-                                   vivas=["10.30.0.101"])
-        self.assertEqual(plan["ops"], [])
-        self.assertEqual(len(plan["pendientes"]), 1)
-        self.assertIn("409", plan["pendientes"][0])
-        self.assertIn("maquina-suelta", plan["pendientes"][0])
+        with self.assertRaisesRegex(LabError, "409"):
+            converge.netxms_ops([self.equipo()], [ocupante], [], self.API, self.SECRETS,
+                                vivas=["10.30.0.101"])
 
     def test_las_fichas_se_piden_por_los_equipos_y_por_sus_homonimos(self):
         # La búsqueda devuelve resúmenes sin credenciales: la ficha hay que pedirla, y se
