@@ -558,22 +558,21 @@ class Documentacion(unittest.TestCase):
         self.assertEqual(identity.render_docs(laboratorio(), entorno()),
                          identity.render_docs(laboratorio(), entorno()))
 
-    def test_la_pagina_lleva_el_plano_como_imagen_aparte(self):
-        """El plano va en su `.svg`, al lado, y la página lo menciona.
+    def test_la_pagina_lleva_el_plano_dentro(self):
+        """El plano va dentro de la página, como SVG en texto, y no al lado.
 
-        Incrustado en el `.md` se lee en blanco en los visores que no pintan SVG en
-        línea, y hay muchos: quien abre el documento cree que el dibujo no existe.
-        Como fichero lo enseña cualquiera, y sigue siendo vector.
+        Es código generado: entra en el mismo diff que la declaración y no deja ficheros
+        de imagen que se puedan quedar viejos junto al `.md` (la carpeta de un
+        laboratorio sólo declara su `.yml` y su `.md`).
         """
         lab = laboratorio()
         texto = identity.render_docs(lab, entorno())
-        # El plano va como imagen aparte: dentro del `.md` se lee en blanco en los
-        # visores que no pintan SVG en línea, y hay muchos.
-        self.assertEqual(texto.count("<svg"), 0)
-        # La imagen es PNG: hay visores que no pintan un SVG como imagen y lo dejan en
-        # el texto alternativo, o sea, en blanco. El vector sigue al lado, enlazado.
-        self.assertIn(f"![Plano de topología de {lab['lab']}]({lab['lab']}-topologia.png)", texto)
-        self.assertIn(f"]({lab['lab']}-topologia.svg)", texto)
+        # El dibujo está en la página, entero y sacado de la declaración.
+        self.assertIn(plano.plano(lab, "topologia"), texto)
+        self.assertGreaterEqual(texto.count("<svg"), 1)
+        # Y no hay ningún fichero de imagen al que apuntar.
+        self.assertNotIn("-topologia.svg", texto)
+        self.assertNotIn("-topologia.png", texto)
         self.assertIn(">Topología<", texto.replace("### Topología", ">Topología<"))
         # Un solo dibujo: dos planos del mismo dato acababan discrepando entre sí.
         self.assertNotIn("Cableado (L2)", texto)
@@ -581,17 +580,6 @@ class Documentacion(unittest.TestCase):
         self.assertNotIn("```mermaid", texto)
         self.assertNotIn("```", texto)
         self.assertNotIn("mermaid", texto)
-
-    def test_sin_png_la_pagina_enlaza_el_svg(self):
-        """Sin rasterizador no hay PNG: la página no puede prometer una imagen que no está.
-
-        Demuestra que, cuando `docs` no pudo generar el PNG, la página enlaza el SVG como
-        imagen en vez de dejar un hueco roto en un laboratorio nuevo.
-        """
-        lab = laboratorio()
-        texto = identity.render_docs(lab, entorno(), con_png=False)
-        self.assertIn(f"![Plano de topología de {lab['lab']}]({lab['lab']}-topologia.svg)", texto)
-        self.assertNotIn(f"{lab['lab']}-topologia.png", texto)
 
     def test_los_planos_salen_enteros_de_la_declaracion(self):
         """Ni un equipo inventado ni uno olvidado: lo que no está en el YAML no se dibuja."""

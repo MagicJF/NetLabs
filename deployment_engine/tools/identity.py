@@ -1538,16 +1538,11 @@ def _pie_plano(topologia: bool) -> str:
             "los une tal y como se declara.*")
 
 
-def render_docs(lab: dict, env: dict, con_png: bool = True) -> str:
+def render_docs(lab: dict, env: dict) -> str:
     """La región generada de la página del laboratorio, desde la declaración.
 
     No lleva vmid, MAC ni dirección de gestión: esos se derivan del hipervisor y
     un documento que los clavara mentiría en el siguiente despliegue.
-
-    `con_png` lo decide quien llama, mirando el disco: sin rasterizador no hay PNG y
-    la página no puede prometer una imagen que no existe —se quedaría rota—, así que
-    enlaza el SVG como imagen. Es un dato de entrada y no una lectura: esta capa no
-    toca ficheros, y por eso la misma declaración da el mismo texto.
     """
     validate(lab, env)
     if lab.get("kind", "topology") == "control":
@@ -1559,29 +1554,17 @@ def render_docs(lab: dict, env: dict, con_png: bool = True) -> str:
         # leer y comparar como cualquier otra línea del documento.
         # El plano va escrito aquí dentro, como SVG en texto: no hay fichero que se
         # pueda quedar viejo ni que haya que regenerar aparte, y el diff del commit
-        # enseña exactamente qué cambió en el dibujo cuando cambia la declaración.
+        # enseña exactamente qué cambió en el dibujo cuando cambia la declaración. Es lo
+        # que declara el README: la carpeta de un laboratorio sólo tiene su `.yml` y su
+        # `.md`, y el dibujo es una parte más de la página.
         import plano  # noqa: PLC0415  (los módulos viven en tools/)
         # Un solo plano. Hubo dos —topología y cableado— y el de cableado lo dibujaba
         # otro motor, plano y antiguo: enseñaba los mismos equipos, los mismos puertos
         # y las mismas direcciones, pero con otra colocación, y quien abría el
         # documento veía dos dibujos que no coincidían. El bueno es este, que ya dibuja
         # un símbolo por equipo y una línea por cable con el puerto de cada punta.
-        # El plano va como imagen aparte, no incrustado: un `.md` con un `<svg>` dentro
-        # se lee en blanco en cuanto el visor no pinta SVG en línea —y hay muchos que
-        # no—, y el que lo abre cree que el dibujo no existe. Como fichero de imagen lo
-        # enseña cualquiera; el vector sigue siendo vector.
-        # El PNG lo enseña también el visor que no pinta SVG, pero sólo si existe: sin
-        # rasterizador la página enlaza el SVG, que al menos está.
-        nombre = lab["lab"]
-        if con_png:
-            lines += ["", "### Topología", "",
-                      f"![Plano de topología de {nombre}]({nombre}-topologia.png)", "",
-                      f"También en vector: [`{nombre}-topologia.svg`]({nombre}-topologia.svg).",
-                      "", _pie_plano(True)]
-        else:
-            lines += ["", "### Topología", "",
-                      f"![Plano de topología de {nombre}]({nombre}-topologia.svg)", "",
-                      _pie_plano(True)]
+        lines += ["", "### Topología", "", plano.plano(lab, "topologia"), "",
+                  _pie_plano(True)]
     lines += ["", "### Networks", "", "| network | address |", "| --- | --- |"]
     for net in lab["networks"]:
         lines.append(f"| `{net['name']}` | `{net['address']}` |")

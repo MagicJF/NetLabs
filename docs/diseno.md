@@ -181,18 +181,14 @@ La región generada lleva además un **plano**, también sacado de la declaraci�
 puerta, y dentro quién cuelga de ella), con un símbolo por equipo y una línea por cable, cada
 una con el puerto de sus dos puntas. Un solo plano: hubo también un dibujo de cableado, hecho
 por un segundo motor plano, que enseñaba los mismos equipos y los mismos puertos con otra
-colocación —dos retratos del mismo dato que no coincidían y hacían dudar de los dos—. Lo dibuja `tools/plano.py` y va en **su propio fichero**, `<lab>-topologia.svg`, con un
-`<lab>-topologia.png` al lado, y la página menciona el PNG. Incrustado en el `.md` se leía en
-blanco en los visores que no pintan SVG en línea; y como fichero, en blanco también en los que
-no pintan un SVG como imagen —enseñan el texto alternativo y el que abre el documento ve un
-hueco—. El PNG lo enseña cualquiera; el SVG sigue al lado, enlazado, para quien quiera el
-vector. Los dos se generan con el mismo comando y `./netlabs docs --check` compara el SVG con lo
-que la declaración produce hoy y exige que el PNG esté: no se pueden quedar viejos sin que la
-comprobación lo diga. El PNG lo hace un rasterizador del sistema (`resvg`, `rsvg-convert` o
-`inkscape`) con una fuente de verdadera; sin uno de ellos el plano es cajas y cables sin una sola
-letra, así que sin rasterizador o sin fuentes se avisa y **no** se escribe un PNG a medias. Mermaid no sirve para
-esto: no sabe dibujar los símbolos de una red (router, switch, cortafuegos, servidor) y sus áreas
-no pueden tocarse, así que un router con pata en dos redes no se puede poner entre ellas.
+colocación —dos retratos del mismo dato que no coincidían y hacían dudar de los dos—. Lo dibuja
+`tools/plano.py` y va **dentro del `.md`**, como SVG en texto: es código generado, entra en el
+mismo diff que la declaración y no deja ficheros de imagen al lado que se puedan quedar viejos
+(la carpeta de un laboratorio sólo declara su `.yml` y su `.md`). `./netlabs docs --check` vuelve
+a dibujarlo y compara el texto con el del fichero, así que un plano viejo es un fallo. Mermaid no
+sirve para esto: no sabe dibujar los símbolos de una red (router, switch, cortafuegos, servidor)
+y sus áreas no pueden tocarse, así que un router con pata en dos redes no se puede poner entre
+ellas.
 
 El plano se dibuja como un plano de red, no como un organigrama. **El eje lo marca el router**:
 un equipo con pata en varias redes se sienta donde se tocan, **encima del cruce** —el borde de
