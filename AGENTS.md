@@ -19,8 +19,9 @@ Tres consecuencias que ordenan todo lo demás:
 - **Lo que no se demuestra, no se ha hecho.** Cada «ya funciona» va con el comando y su salida.
 
 Y una frontera de carpetas que no se cruza: **cada carpeta de primer nivel tiene un solo dueño.**
-`deployment_engine/` es el motor y no lee `labs/`; `labs/<lab>/` sólo declara `<lab>.yml` y su
-`<lab>.md`, que lleva dentro su plano como SVG en texto; los informes de ejecución van a `logs/`, nunca dentro del motor ni de un laboratorio;
+`deployment_engine/` es el motor y no lee `labs/`; `labs/<lab>/` sólo declara `<lab>.yml`, su
+`<lab>.md` —que lleva dentro su plano como SVG en texto— y su `<lab>-topologia.svg`, el mismo
+plano suelto, para abrirlo y compartirlo; los informes de ejecución van a `logs/`, nunca dentro del motor ni de un laboratorio;
 `netlabs.yml` en la raíz es configuración del **sitio** (nodo, almacenes, gestión), no de un
 laboratorio concreto. La raíz no guarda código. `./netlabs check` comprueba esta estructura: un
 fichero fuera de su sitio es un fallo, no una convención.

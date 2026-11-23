@@ -108,12 +108,16 @@ def comprobar_estructura() -> list[str]:
         if not carpeta.is_dir():
             errores.append(f"labs/{carpeta.name}: no es una carpeta de laboratorio")
             continue
-        # La declaración y su página, que ya lleva dentro los planos: nada más.
-        permitidos = {f"{carpeta.name}.yml", f"{carpeta.name}.md"}
+        # La declaración, su página y su plano suelto: nada más. El plano va en los dos
+        # sitios a propósito —en la página se lee y se ve en el diff; el `.svg` se abre y
+        # se comparte por sí solo, y es el fondo que usa el mapa de la vista—.
+        permitidos = {f"{carpeta.name}.yml", f"{carpeta.name}.md",
+                      f"{carpeta.name}-topologia.svg"}
         for dentro in sorted(carpeta.iterdir()):
             if dentro.name not in permitidos:
                 errores.append(f"labs/{carpeta.name}/{dentro.name}: un laboratorio sólo "
-                               f"declara {carpeta.name}.yml y su {carpeta.name}.md")
+                               f"declara {carpeta.name}.yml, su {carpeta.name}.md y su "
+                               f"{carpeta.name}-topologia.svg")
         if not (carpeta / f"{carpeta.name}.yml").exists():
             errores.append(f"labs/{carpeta.name}: falta {carpeta.name}.yml")
 

@@ -151,8 +151,9 @@ Al hipervisor se le habla **sólo** por su API REST, desde un fichero del motor.
 **sólo** por su API REST —salvo su primer arranque, que va por el agente del hipervisor, es
 decir, también por la API (§3.8)—. A un Linux, **sólo** por SSH. Al servicio que observa el sitio
 (NetXMS), **sólo** por su API REST y **desde dentro de su invitado** —ahí aterriza el túnel del
-motor—: por esa puerta registra el motor cada equipo de red con su credencial, y no toca su base
-por ninguna otra (§3.4; `docs/decisiones/0003`). Un equipo se identifica en la vista por su
+motor—: por esa puerta registra el motor cada equipo de red con su credencial y le coloca el
+mapa de la red (§3.4), y no toca su base
+por ninguna otra (§3.4; `docs/decisiones/0003` y `0004`). Un equipo se identifica en la vista por su
 **nombre**: su dirección de gestión se deriva del vmid y cambia cuando el invitado se rehace, así
 que un nodo con el nombre bueno y la dirección de otra máquina se retira y se vuelve a dar de alta
 —el API no deja corregir la dirección—. Una vía nueva para lo mismo es un defecto, no una
@@ -182,10 +183,13 @@ puerta, y dentro quién cuelga de ella), con un símbolo por equipo y una línea
 una con el puerto de sus dos puntas. Un solo plano: hubo también un dibujo de cableado, hecho
 por un segundo motor plano, que enseñaba los mismos equipos y los mismos puertos con otra
 colocación —dos retratos del mismo dato que no coincidían y hacían dudar de los dos—. Lo dibuja
-`tools/plano.py` y va **dentro del `.md`**, como SVG en texto: es código generado, entra en el
-mismo diff que la declaración y no deja ficheros de imagen al lado que se puedan quedar viejos
-(la carpeta de un laboratorio sólo declara su `.yml` y su `.md`). `./netlabs docs --check` vuelve
-a dibujarlo y compara el texto con el del fichero, así que un plano viejo es un fallo. Mermaid no
+`tools/plano.py` y va **en los dos sitios**: dentro del `.md`, como SVG en texto —es código
+generado, entra en el mismo diff que la declaración y se lee y se compara como cualquier otra
+línea del documento—, y en su `<lab>-topologia.svg`, el mismo dibujo en un fichero que se abre y
+se comparte por sí solo y que sirve de fondo al mapa de la vista (§3.4). Los dos salen del mismo
+dibujo en la misma pasada, así que no pueden discrepar.
+`./netlabs docs --check` vuelve a dibujarlo y compara el texto con el del fichero —y con el del
+`.svg`—, así que un plano viejo es un fallo. Mermaid no
 sirve para esto: no sabe dibujar los símbolos de una red (router, switch, cortafuegos, servidor)
 y sus áreas no pueden tocarse, así que un router con pata en dos redes no se puede poner entre
 ellas.
@@ -350,6 +354,29 @@ gestión** (la OOB): mismo camino que el resto, sin depender de las rutas del la
 Extenderlo a los nodos finales es posible y no se descarta, pero no es requisito. Lo que hay
 que decir en voz alta: esa shell es **para una persona**, no para el motor — Ansible configura
 por su vía (§6) y no por la terminal de nadie.
+
+**El mapa a medida: lo que la vista enseña es el plano.** La vista sabe dibujar su propia
+topología —descubre por direcciones y la reparte a su manera—, y ese dibujo **no se parece a
+nada de lo que dibuja el plano**: ni las áreas, ni dónde cae cada router, ni qué redes quedan
+a un lado y a otro. Así que el motor **le manda un mapa hecho a medida**, con el mismo dibujo
+que la documentación:
+
+- las **áreas** del plano, como cajas de grupo rotuladas con su bloque de direcciones;
+- cada **equipo de red** del laboratorio donde el plano lo pone —el router en la frontera de
+  las redes que une, el switch del núcleo en el centro—;
+- cada **cable** del laboratorio, entre los dos equipos que une.
+
+La geometría **no se recalcula**: se lee del propio plano (`plano.py` escribe la posición de
+cada cosa en atributos `data-*` del SVG), así que el mapa de la vista y el plano de la
+documentación **no pueden discrepar**: son el mismo dibujo. El mapa se nombra como el
+laboratorio, y se escribe **sólo si no es ya el que el plano pide** —escribirlo de más sería
+perder cualquier ajuste hecho a mano, porque el API lo reemplaza entero—.
+
+Dos cosas se dicen en voz alta. Los **puestos de trabajo no salen en el mapa**: la quinta vía
+registra equipos de red (§3.4), y un elemento del mapa sin equipo detrás lo rechaza la vista.
+Y un equipo de red que la vista no conozca —porque lleva otras credenciales, o porque el
+registro no llegó— tampoco se dibuja: sale en `pendientes`. Un mapa al que le falta un router
+sin decirlo es un mapa que miente.
 
 ### 3.5. Pools: el plano de gestión y los laboratorios no se mezclan
 
