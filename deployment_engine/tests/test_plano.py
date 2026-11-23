@@ -146,6 +146,44 @@ class TestPlanoAnidado(unittest.TestCase):
                     with self.subTest(laboratorio=lab, nube=nube.nombre, area=area.nombre):
                         self.assertFalse(solapan, f"la nube pisa el área {area.nombre}")
 
+    def test_los_puertos_de_un_router_entre_areas_no_se_escriben_uno_sobre_otro(self):
+        """Un router con pata en tres LAN saca sus cables por el mismo punto del símbolo.
+
+        Demuestra que el rótulo del puerto se ancla donde el cable ya va por su carril y
+        no en la salida compartida: anclado en la salida, los tres números caen en la
+        misma coordenada y el plano deja de decir qué puerto va a qué área (Greptile lo
+        vio en un laboratorio de tres LAN apiladas; ninguno del repositorio las tiene, así
+        que el caso se inventa aquí).
+        """
+        lab = {
+            "lab": "tres_lan",
+            "address_spaces": ["10.0.0.0/8"],
+            "networks": [
+                {"name": "lan1", "address": "10.1.0.0/24", "title": "Sede uno"},
+                {"name": "lan2", "address": "10.2.0.0/24", "title": "Sede dos"},
+                {"name": "lan3", "address": "10.3.0.0/24", "title": "Sede tres"},
+            ],
+            "nodes": [
+                {"role": "rte1", "type": "router", "networks": ["lan1", "lan2", "lan3"]},
+                {"role": "pst1", "type": "workstation", "networks": ["lan1"]},
+                {"role": "pst2", "type": "workstation", "networks": ["lan2"]},
+                {"role": "pst3", "type": "workstation", "networks": ["lan3"]},
+            ],
+            "links": [
+                {"a": {"node": "rte1", "port": 2}, "z": {"node": "pst1", "port": 1}},
+                {"a": {"node": "rte1", "port": 3}, "z": {"node": "pst2", "port": 1}},
+                {"a": {"node": "rte1", "port": 4}, "z": {"node": "pst3", "port": 1}},
+            ],
+        }
+        svg = plano.plano(lab, "topologia")
+        puertos = [(float(m.group(1)), float(m.group(2)), m.group(3)) for m in re.finditer(
+            r'<text x="([\d.-]+)" y="([\d.-]+)"[^>]*>(p\d+)</text>', svg)]
+        self.assertGreaterEqual(len(puertos), 4, "faltan rótulos de puerto")
+        choques = [(uno[2], otro[2]) for i, uno in enumerate(puertos)
+                   for otro in puertos[i + 1:]
+                   if abs(uno[0] - otro[0]) < 8 and abs(uno[1] - otro[1]) < 8]
+        self.assertEqual(choques, [], f"puertos escritos uno sobre otro: {choques}")
+
     def test_ninguna_etiqueta_se_monta_sobre_otra(self):
         """Dos nombres encima del mismo punto no se leen: es lo que hace ilegible un plano."""
         for lab in todos_los_laboratorios():

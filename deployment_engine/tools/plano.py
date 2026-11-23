@@ -1083,13 +1083,17 @@ def _plano_anidado(lab: dict) -> str:
             return "".join([
                 _codo([(pa[0], salida), (pa[0], arranque), (borde, arranque),
                        (borde, y), (pz[0], y), (pz[0], entrada)]),
-                _puerto(pa[0], salida, puerto_a, arriba=not abajo),
+                # El punto de salida es el mismo para las tres bajadas de un router entre
+                # áreas, así que el rótulo va donde el cable ya va por su carril: con la
+                # coordenada de salida, tres puertos se escribían uno encima de otro.
+                _puerto(x_via, arranque, puerto_a, arriba=not abajo),
                 _puerto(pz[0], entrada, puerto_z, arriba=abajo),
             ])
         return "".join([
             _codo([(pa[0], salida), (pa[0], arranque), (pa[0] + desvio, arranque),
                    (pa[0] + desvio, y), (pz[0], y), (pz[0], entrada)]),
-            _puerto(pa[0], salida, puerto_a, arriba=not abajo),
+            # Igual que arriba: el rótulo sigue a su carril, no al punto común de salida.
+            _puerto(pa[0] + desvio, arranque, puerto_a, arriba=not abajo),
             _puerto(pz[0], entrada, puerto_z, arriba=abajo),
         ])
 
