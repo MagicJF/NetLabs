@@ -1065,6 +1065,16 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
             "no es la suya: "
             + ", ".join(f"{n['name']} ({n['mgmt_address']})" for n in equipos)
         )
+        # Y el mapa: la vista dibuja su topología sola —cada equipo donde le parece, que
+        # no se parece a nada de lo que dibuja el plano—, así que se le manda uno a
+        # medida, con las áreas del plano y cada equipo donde el plano lo pone. Su paso
+        # es el de al lado y no el mismo: el mapa se escribe después de registrar, porque
+        # un elemento del mapa sin equipo detrás no lo acepta la vista.
+        steps.append({"op": "netxms_mapa"})
+        effects.append(
+            "colocar en lo que observa el sitio el mapa de la red de este laboratorio, "
+            "con cada equipo donde lo pone el plano y las redes del plano entre ellos"
+        )
 
     return {
         "lab": name,
@@ -1552,11 +1562,11 @@ def render_docs(lab: dict, env: dict) -> str:
     if lab.get("networks"):
         # El dibujo es código, no una imagen: se ve en el visor de Markdown y se puede
         # leer y comparar como cualquier otra línea del documento.
-        # El plano va escrito aquí dentro, como SVG en texto: no hay fichero que se
-        # pueda quedar viejo ni que haya que regenerar aparte, y el diff del commit
-        # enseña exactamente qué cambió en el dibujo cuando cambia la declaración. Es lo
-        # que declara el README: la carpeta de un laboratorio sólo tiene su `.yml` y su
-        # `.md`, y el dibujo es una parte más de la página.
+        # El plano va escrito aquí dentro, como SVG en texto: se lee y se compara como
+        # cualquier otra línea del documento, y el diff del commit enseña exactamente qué
+        # cambió en el dibujo cuando cambia la declaración. Va además como fichero suelto
+        # (`docs.escribir_plano`), del mismo dibujo y en la misma pasada, para poder
+        # abrirlo y compartirlo por sí solo y para servir de fondo al mapa de la vista.
         import plano  # noqa: PLC0415  (los módulos viven en tools/)
         # Un solo plano. Hubo dos —topología y cableado— y el de cableado lo dibujaba
         # otro motor, plano y antiguo: enseñaba los mismos equipos, los mismos puertos

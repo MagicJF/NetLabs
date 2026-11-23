@@ -130,13 +130,14 @@ class ElPlan(unittest.TestCase):
         bridges = [{"iface": s["bridge"], "comments": s["comment"]}
                    for s in primero["steps"] if s["op"] == "bridge_ensure"]
         plan = identity.plan(mundo(guests=guests, bridges=bridges, pools=[pool]), lab, env)
-        # Lo único que queda son las dos cosas que viven FUERA del hipervisor —las
-        # rutas, dentro del invitado de gestión, y el registro de los equipos en lo
-        # que observa el sitio—: el plan no puede leerlas sin entrar, así que no puede
-        # callarlas. Decir "nada que hacer" con una ruta sin poner o un equipo sin
-        # registrar sería la mentira que este caso evita.
+        # Lo único que queda son las tres cosas que viven FUERA del hipervisor —las
+        # rutas, dentro del invitado de gestión; el registro de los equipos en lo que
+        # observa el sitio; y el mapa de la red en esa vista—: el plan no puede leerlas
+        # sin entrar, así que no puede callarlas. Decir "nada que hacer" con una ruta sin
+        # poner o un equipo sin registrar sería la mentira que este caso evita.
         self.assertEqual(
-            [s for s in plan["steps"] if s["op"] not in ("rutas_converge", "netxms_registro")], []
+            [s for s in plan["steps"]
+             if s["op"] not in ("rutas_converge", "netxms_registro", "netxms_mapa")], []
         )
         # El paso dice qué equipos son: los de red, con su dirección de gestión.
         registro = next(s for s in plan["steps"] if s["op"] == "netxms_registro")
@@ -729,6 +730,27 @@ class ElRegistroDeLosEquipos(unittest.TestCase):
         # El nodo de control ES el servicio que observa: no se registra a sí mismo.
         plan = identity.plan(mundo(), laboratorio("a_bootstrap"), entorno())
         self.assertEqual([s for s in plan["steps"] if s["op"] == "netxms_registro"], [])
+        self.assertEqual([s for s in plan["steps"] if s["op"] == "netxms_mapa"], [])
+
+
+class ElMapaDeLaRedEnLaVista(unittest.TestCase):
+    """El plan declara el mapa de la red en lo que observa el sitio, tras el registro.
+
+    La vista dibuja su topología sola, y ese dibujo no se parece al plano: el mapa se
+    coloca donde el plano lo pone, y para eso hacen falta los equipos ya registrados —
+    un elemento del mapa se apoya en un equipo de la vista—, así que va después.
+    """
+
+    def test_el_plan_declara_el_mapa_tras_el_registro(self):
+        plan = identity.plan(mundo(), laboratorio(), entorno())
+        ops = [s["op"] for s in plan["steps"]]
+        self.assertIn("netxms_mapa", ops)
+        self.assertLess(ops.index("netxms_registro"), ops.index("netxms_mapa"))
+        self.assertTrue([e for e in plan["effects"] if "el mapa de la red" in e])
+
+    def test_sin_equipos_de_red_no_hay_mapa(self):
+        plan = identity.plan(mundo(), laboratorio("a_bootstrap"), entorno())
+        self.assertEqual([s for s in plan["steps"] if s["op"] == "netxms_mapa"], [])
 
 
 class ElReinicioDeUnFichero(unittest.TestCase):

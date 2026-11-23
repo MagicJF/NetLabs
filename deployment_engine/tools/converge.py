@@ -22,6 +22,9 @@ import shlex
 
 from identity import LabError, ROS_SECRET, TYPES
 
+import mapa
+import plano
+
 # Las áreas de RouterOS que el motor sabe leer por REST. Son las mismas que valida
 # identity.AREAS["routeros"]: una lectura de más es una dependencia de más.
 ROS_READS = (
@@ -1380,3 +1383,110 @@ def netxms_ids(nodes: list[dict], encontrados: list | None) -> list:
         if direccion and clave in claves and objeto.get("id") is not None:
             ids.append(int(objeto["id"]))
     return sorted(ids)
+
+# --- el mapa del laboratorio en la vista ------------------------------------
+# El mapa que la vista dibuja sola —su topología por direcciones— no se parece a nada de
+# lo que dibuja el plano. Aquí se deriva el mapa **a medida**: las áreas del plano como
+# cajas, cada equipo de red en el sitio donde el plano lo pone —a caballo de sus redes— y
+# cada cable del laboratorio entre los dos equipos que une.
+
+NETXMS_RUTA_RAICES = "/objects"
+NETXMS_CLASE_RAICES_DE_MAPA = "NetworkMapRoot"
+NETXMS_CLASE_MAPA = "NetworkMap"
+
+
+def netxms_raices_cmd(api: str) -> list:
+    """Las raíces de la vista: ahí está la de mapas, con su número."""
+    return netxms_cmd(api, NETXMS_RUTA_RAICES, metodo="GET")
+
+
+def netxms_hijos_cmd(api: str, id_objeto) -> list:
+    """Lo que cuelga de un objeto: los mapas cuelgan de la raíz de mapas."""
+    return netxms_cmd(api, f"/objects/{int(id_objeto)}/children", metodo="GET")
+
+
+def netxms_mapa_crear_cmd(api: str) -> list:
+    """Dar de alta el mapa del laboratorio, colgando de la raíz de mapas."""
+    return netxms_cmd(api, NETXMS_RUTA_CREAR)
+
+
+def netxms_mapa_leer_cmd(api: str, id_mapa) -> list:
+    """Lo que el mapa tiene dibujado ahora mismo."""
+    return netxms_cmd(api, f"/objects/{int(id_mapa)}/map", metodo="GET")
+
+
+def netxms_mapa_escribir_cmd(api: str, id_mapa) -> list:
+    """Escribir el contenido del mapa. Es `PUT`: reemplaza el dibujo entero."""
+    return netxms_cmd(api, f"/objects/{int(id_mapa)}/map", metodo="PUT")
+
+
+def netxms_raiz_de_mapas(raices: list | None) -> int | None:
+    """El número de la raíz de mapas, que no se supone: se lee de la vista."""
+    for objeto in raices or []:
+        if str(objeto.get("class") or "") == NETXMS_CLASE_RAICES_DE_MAPA:
+            return int(objeto["id"])
+    return None
+
+
+def netxms_mapa_de(hijos: list | None, nombre: str) -> int | None:
+    """El mapa del laboratorio, si ya está dado de alta."""
+    for objeto in hijos or []:
+        if (str(objeto.get("class") or "") == NETXMS_CLASE_MAPA
+                and str(objeto.get("name") or "") == str(nombre)):
+            return int(objeto["id"])
+    return None
+
+
+def netxms_objetos_de(nodes: list[dict], censo: list | None) -> tuple[dict, list]:
+    """Qué número tiene en la vista cada equipo de red del laboratorio.
+
+    Se empareja por nombre **y** dirección, como el registro: dos laboratorios pueden
+    tener cada uno su equipo de red con el mismo nombre —el nombre es del laboratorio, no
+    de la vista— y el que se dibuja en este mapa es el que apunta a la máquina de este
+    laboratorio. Un equipo que no está en la vista devuelve su nombre en la segunda
+    lista: sin objeto detrás, un elemento del mapa no lo acepta la vista, así que no se
+    dibuja y se dice.
+    """
+    objetos, faltan = {}, []
+    for node in nodes or []:
+        nombre = str(node.get("name") or node.get("role") or "")
+        direccion = str(node.get("mgmt_address") or "")
+        if not nombre or not direccion:
+            continue
+        cual = next((o for o in censo or []
+                     if str(o.get("name") or "") == nombre
+                     and str((o.get("ipAddress") or {}).get("address") or "") == direccion), None)
+        if cual is None:
+            faltan.append(nombre)
+            continue
+        objetos[str(node.get("role") or nombre)] = int(cual["id"])
+    return objetos, sorted(faltan)
+
+
+def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: dict | None,
+                    api: str, id_mapa, svg: str | None = None) -> dict:
+    """Lo que hay que escribir para que el mapa de la vista sea el plano del laboratorio.
+
+    Sólo se escribe si el mapa que hay no es ya el que el plano pide: la segunda pasada no
+    toca nada. Los equipos del plano que la vista no conoce no se dibujan (y sus cables
+    tampoco) y salen en `pendientes`, que es lo que se dice en voz alta.
+    """
+    objetos, faltan = netxms_objetos_de(nodes, censo)
+    if svg is None:
+        svg = plano.plano(lab, "topologia")
+    deseado = mapa.contenido(lab, svg, objetos)
+    if mapa.esta_al_dia(actual, deseado):
+        return {"ops": [], "pendientes": faltan, "equipos": len(objetos),
+                "cables": len(deseado["links"]), "areas": len(deseado["elements"]) - len(objetos)}
+    return {
+        "ops": [{
+            "cmd": netxms_mapa_escribir_cmd(api, id_mapa),
+            "cuerpo": mapa.cuerpo(deseado),
+            "effect": (f"colocar el mapa {lab.get('lab')} como el plano: "
+                       f"{len(objetos)} equipos, {len(deseado['links'])} cables y "
+                       f"{len(deseado['elements']) - len(objetos)} áreas"),
+        }],
+        "pendientes": faltan, "equipos": len(objetos),
+        "cables": len(deseado["links"]),
+        "areas": len(deseado["elements"]) - len(objetos),
+    }
