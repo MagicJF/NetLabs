@@ -292,6 +292,9 @@ class Rechazos(unittest.TestCase):
         # El nombre del laboratorio es una letra y un título; la letra es la cabeza de
         # cada cable, así que no se admite un nombre sin ella.
         (lambda l: l.update(lab="router_dos_puestos"), "una letra y un título"),
+        # Dos áreas con el mismo bloque se anidan la una en la otra y el plano se queda
+        # sin raíz: se rechaza antes de dibujar nada.
+        (lambda l: l["networks"][1].update(address=l["networks"][0]["address"]), "repite el CIDR"),
         # Un puerto de dos cifras no cabe en los 15 caracteres del nombre del cable.
         (lambda l: l["links"][0]["a"].update(port=10), "un entero de 1 a 9"),
     ]
@@ -303,6 +306,18 @@ class Rechazos(unittest.TestCase):
                 cambio(lab)
                 with self.assertRaisesRegex(identity.LabError, motivo):
                     identity.plan(mundo(), lab, entorno())
+
+    def test_rechaza_una_ruta_ipv6_con_el_limite_del_area(self):
+        """El área escribe en la tabla IPv4 y una ruta IPv6 no tiene operación que la ponga.
+
+        Demuestra que el límite se dice al validar, con el área y la ruta delante, en vez
+        de pasar la validación y llegar a `apply` sin camino para instalarla.
+        """
+        lab = copy.deepcopy(laboratorio("d_acme_dos_sedes"))
+        router = next(n for n in lab["nodes"] if "routes" in (n.get("configure") or {}))
+        router["configure"]["routes"][0]["destination"] = "2001:db8:2::/64"
+        with self.assertRaisesRegex(identity.LabError, "no es IPv4"):
+            identity.plan(mundo(), lab, entorno())
 
     def test_rechaza_un_ciclo_en_after(self):
         lab = copy.deepcopy(laboratorio())

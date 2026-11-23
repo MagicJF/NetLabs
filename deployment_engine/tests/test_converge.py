@@ -739,6 +739,41 @@ class LasRutasEstaticasDelRouter(unittest.TestCase):
                      "comment": "netlabs-ruta"}),
         ])
 
+    def test_una_ruta_de_otra_tabla_no_cuenta_ni_bloquea(self):
+        """El área administra `main`: una ruta de otra tabla no la consulta este tráfico.
+
+        Demuestra que una ruta ajena al mismo destino y salto declarado pero en la tabla
+        `backup` no se toma por la puesta —dejaría la declarada sin crear— y una con otro
+        salto no se lee como conflicto: no compite por el camino que este router usa.
+        """
+        rutas = [{"destination": "10.40.0.0/16", "gateway": "10.99.0.2"}]
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "puesta a mano", "routing-table": "backup", ".id": "*1"},
+                  {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.9",
+                   "comment": "puesta a mano", "routing-table": "backup", ".id": "*2"}]
+        ops = converge._route_ops(rutas, actual)
+        self.assertEqual([(o["method"], o["body"]) for o in ops], [
+            ("PUT", {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                     "comment": "netlabs-ruta"}),
+        ])
+
+    def test_la_coincidencia_exacta_se_reserva_antes_de_corregir_otra(self):
+        """Con una entrada propia exacta, la otra declarada se crea: no se reescribe aquélla.
+
+        Demuestra el orden que evita el ida y vuelta: corregir en el orden declarado tomaba
+        la entrada de la segunda ruta para la primera y luego volvía a crear la segunda, con
+        un PATCH y un PUT donde basta un PUT —y si el PUT falla, la segunda pierde su salto.
+        """
+        rutas = [{"destination": "10.40.0.0/16", "gateway": "10.99.0.9"},
+                 {"destination": "10.40.0.0/16", "gateway": "10.99.0.2"}]
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                   "comment": "netlabs-ruta", ".id": "*1"}]
+        ops = converge._route_ops(rutas, actual)
+        self.assertEqual([(o["method"], o["body"]) for o in ops], [
+            ("PUT", {"dst-address": "10.40.0.0/16", "gateway": "10.99.0.9",
+                     "comment": "netlabs-ruta"}),
+        ])
+
     def test_un_destino_ajeno_con_otro_salto_se_dice(self):
         # El motor no puede cumplir lo declarado sin tocar lo que no es suyo: se para
         # con el destino delante en vez de dejar una ruta que no es la declarada.
@@ -1130,6 +1165,41 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertEqual(len(plan["pendientes"]), 1)
         self.assertIn("10.30.0.140", plan["pendientes"][0])
         self.assertIn("no se retira", plan["pendientes"][0])
+
+    def test_un_resto_sin_la_marca_no_se_borra_aunque_la_direccion_sea_de_aqui(self):
+        """La dirección de hoy no demuestra quién creó el registro: manda la marca.
+
+        Demuestra el caso que se lleva el histórico de otro laboratorio: el asignador
+        reutiliza un vmid y su dirección para un puesto de éste, y el `rte1` del otro cae
+        dentro de lo que parece de aquí. Sin la marca en su ficha no se retira; se dice.
+        """
+        resto = {"id": 500, "name": "rte1", "ipAddress": {"address": "10.30.0.150"}}
+        plan = converge.netxms_ops([self.equipo()], [resto],
+                                   [{"id": 500, "comments": "netlabs lab=otro role=rte1"}],
+                                   self.API, self.SECRETS,
+                                   vivas=["10.30.0.101", "10.30.0.150"],
+                                   propias=["10.30.0.150"])
+        efectos = [op["effect"] for op in plan["ops"]]
+        self.assertEqual(len(efectos), 1)
+        self.assertIn("registrar rte1", efectos[0])
+        self.assertEqual(len(plan["pendientes"]), 1)
+        self.assertIn("no lleva la marca", plan["pendientes"][0])
+
+    def test_la_direccion_que_ocupa_otro_equipo_se_dice_y_no_se_da_de_alta(self):
+        """El API contesta 409 si la dirección ya es de otro: se mira antes de intentarlo.
+
+        Demuestra que un objeto con otra máquina en la dirección del alta se informa con
+        su nombre y su identificador —un reintento encontraría el mismo y el mismo 409— y
+        no se manda la creación. La retirada del plan sí libera la dirección (ver
+        `test_las_retiradas_van_antes_que_las_altas`).
+        """
+        ocupante = {"id": 77, "name": "maquina-suelta", "ipAddress": {"address": "10.30.0.101"}}
+        plan = converge.netxms_ops([self.equipo()], [ocupante], [], self.API, self.SECRETS,
+                                   vivas=["10.30.0.101"])
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(len(plan["pendientes"]), 1)
+        self.assertIn("409", plan["pendientes"][0])
+        self.assertIn("maquina-suelta", plan["pendientes"][0])
 
     def test_las_fichas_se_piden_por_los_equipos_y_por_sus_homonimos(self):
         # La búsqueda devuelve resúmenes sin credenciales: la ficha hay que pedirla, y se
