@@ -43,7 +43,7 @@
       El servicio de gestión ({{ netxms_api }}) no declara su raíz de mapas entre sus
       objetos de nivel superior: {{ interior.stdout | default('(sin respuesta)', true) | trim }}.
       Sin ella no hay dónde colgar el mapa del laboratorio.
-  when: netxms_mapa_raiz | length == 0
+  when: netxms_mapa_raiz | int == 0
 
 - name: netxms · leer los mapas que ya tiene la vista
   include_tasks: interior_ssh.yml
@@ -66,7 +66,7 @@
 # encuentra en vez de dejar una copia por cada despliegue.
 - name: netxms · dar de alta el mapa del laboratorio
   include_tasks: interior_ssh.yml
-  when: netxms_mapa_id | length == 0
+  when: netxms_mapa_id | int == 0
   vars:
     interior_descripcion: "netxms · dar de alta el mapa {{ lab.lab }}"
     interior_salto: false
@@ -79,14 +79,14 @@
 - name: netxms · el número del mapa recién dado de alta
   ansible.builtin.set_fact:
     netxms_mapa_id: "{{ (interior.stdout | default('{}', true) | from_json).id | default('', true) }}"
-  when: netxms_mapa_id | length == 0
+  when: netxms_mapa_id | int == 0
 
 - name: netxms · el mapa del laboratorio no llegó a nacer
   ansible.builtin.fail:
     msg: >-
       La vista no devolvió el número del mapa del laboratorio: no se puede escribir el
       mapa que pide el plano.
-  when: netxms_mapa_id | length == 0
+  when: netxms_mapa_id | int == 0
 
 # --- escribir el mapa que pide el plano ------------------------------------
 - name: netxms · leer lo que el mapa tiene dibujado
