@@ -774,6 +774,39 @@ class LasRutasEstaticasDelRouter(unittest.TestCase):
                    "comment": "puesta a mano", ".id": "*9"}]
         self.assertEqual(converge._route_ops(self.RUTAS, actual), [])
 
+    def test_una_ruta_ajena_por_un_salto_declarado_no_estorba_al_otro(self):
+        """Dos rutas al mismo destino, y una ajena por uno de sus saltos declarados.
+
+        Demuestra que la ajena no se toma por un intruso al revisar el otro salto: la
+        declaración ya pide un camino por ése, así que la de fuera no ofrece nada que el
+        laboratorio no declare, y el `apply` no se para con el laboratorio correcto.
+        """
+        rutas = [{"destination": "10.40.0.0/16", "gateway": "10.99.0.2"},
+                 {"destination": "10.40.0.0/16", "gateway": "10.99.0.9"}]
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": via,
+                   "comment": "netlabs-ruta", ".id": f"*{i}"}
+                  for i, via in enumerate(("10.99.0.2", "10.99.0.9"), 1)]
+        actual.append({"dst-address": "10.40.0.0/16", "gateway": "10.99.0.2",
+                       "comment": "puesta a mano", ".id": "*9"})
+        self.assertEqual(converge._route_ops(rutas, actual), [])
+
+    def test_una_ruta_ajena_por_un_salto_no_declarado_se_dice_tambien(self):
+        """La ajena que sale por un camino que nadie declara sí compite, y se dice.
+
+        Demuestra la otra frontera: con dos rutas declaradas al mismo destino, la que va
+        por un tercer salto se lleva el tráfico si tiene menos distancia, y el motor no la
+        puede retirar.
+        """
+        rutas = [{"destination": "10.40.0.0/16", "gateway": "10.99.0.2"},
+                 {"destination": "10.40.0.0/16", "gateway": "10.99.0.9"}]
+        actual = [{"dst-address": "10.40.0.0/16", "gateway": via,
+                   "comment": "netlabs-ruta", ".id": f"*{i}"}
+                  for i, via in enumerate(("10.99.0.2", "10.99.0.9"), 1)]
+        actual.append({"dst-address": "10.40.0.0/16", "gateway": "10.99.0.7",
+                       "comment": "puesta a mano", ".id": "*9"})
+        with self.assertRaises(converge.LabError):
+            converge._route_ops(rutas, actual)
+
 
 class LasRutasDelLaboratorio(unittest.TestCase):
     """La diferencia entre las rutas declaradas y las que tiene el invitado de gestión.

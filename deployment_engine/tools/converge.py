@@ -375,11 +375,11 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
     puesta a mano, que se respeta aunque caiga en una red del laboratorio. Dentro
     de lo marcado, lo que sobra se retira, igual que en las demás áreas.
 
-    Un destino ya ocupado por una ruta ajena con otro salto no se pisa: se dice,
-    porque el motor no puede cumplir lo declarado sin tocar lo que no es suyo. Una
-    ruta ajena apagada no cuenta: no lleva tráfico, así que ni hace de declarada ni
-    impide poner la del laboratorio. Una ajena encendida sí cuenta aunque la del
-    motor ya esté puesta: compite con ella por la distancia, y darla por buena
+    Un destino ya ocupado por una ruta ajena con un salto que el laboratorio no declara
+    no se pisa: se dice, porque el motor no puede cumplir lo declarado sin tocar lo que
+    no es suyo. Una ruta ajena apagada no cuenta: no lleva tráfico, así que ni hace de
+    declarada ni impide poner la del laboratorio. Una ajena encendida sí cuenta aunque
+    la del motor ya esté puesta: compite con ella por la distancia, y darla por buena
     escondería que el tráfico puede salir por donde el laboratorio no declara.
     """
     def clave(ruta: dict) -> tuple[str, str]:
@@ -409,17 +409,29 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
         deseadas.append((red, via))
 
     ops: list[dict] = []
+    # Los saltos que el laboratorio declara para cada destino. Una ruta ajena por uno de
+    # ellos no ofrece un camino que la declaración no pida ya —el motor tiene la suya por
+    # ese salto—, así que no es un conflicto. Dos rutas al mismo destino con saltos
+    # distintos son dos rutas declaradas, y comparar la ajena sólo con el salto que se está
+    # declarando tomaba la del otro salto por un intruso y paraba el `apply` con el
+    # laboratorio correcto.
+    saltos_declarados: dict[str, set[str]] = {}
+    for red, via in deseadas:
+        saltos_declarados.setdefault(red, set()).add(via)
+
     # Cada entrada declarada se lleva UNA entrada propia, y ninguna se comparte: dos
     # rutas al mismo destino con saltos distintos son dos rutas, y si las dos reclamaran
     # la misma entrada cada pasada le cambiaría el salto a la otra y no convergería.
     sin_reclamar = list(propias)
     for red, via in deseadas:
-        # Una ruta ajena ENCENDIDA al mismo destino y con otro salto compite con la
-        # declarada —RouterOS se queda con la de menos distancia y, a distancias iguales,
-        # reparte el tráfico— y el motor no puede retirarla: se dice. Se mira ANTES de dar
-        # la declarada por puesta, porque una propia ya en su sitio también deja el camino
-        # a merced de la de fuera; mirarlo después escondía justo ese caso.
-        if any(destino == red and salto != via for destino, salto in ajenas):
+        # Una ruta ajena ENCENDIDA al mismo destino y por un salto que el laboratorio no
+        # declara compite con la declarada —RouterOS se queda con la de menos distancia y,
+        # a distancias iguales, reparte el tráfico— y el motor no puede retirarla: se dice.
+        # Se mira ANTES de dar la declarada por puesta, porque una propia ya en su sitio
+        # también deja el camino a merced de la de fuera; mirarlo después escondía justo
+        # ese caso.
+        if any(destino == red and salto not in saltos_declarados[red]
+               for destino, salto in ajenas):
             raise LabError(
                 f"ya hay una ruta a {red} que no es del motor: el motor no la toca y no "
                 "puede poner la que declara el laboratorio. Se retira a mano o se cambia "
