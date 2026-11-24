@@ -178,8 +178,9 @@
     interior_salto: false
     objetivo: 127.0.0.1
     interior_escribe: true
-    # El cuerpo lleva lo que se le pide a la vista: entra por la entrada estándar, como
-    # el del alta de un equipo.
+    # El testigo de la sesión viaja por la entrada estándar, nunca en la línea de órdenes:
+    # así no aparece en `ps` ni se cuela en el informe. El cuerpo que se le pide a la vista
+    # entra por el mismo canal, como el del alta de un equipo.
     interior_secreto: "{{ netxms_testigo }}\n{{ netxms_generado_op.cuerpo }}"
     interior_imprime: false
     comando: "{{ netxms_generado_op.cmd }}"
