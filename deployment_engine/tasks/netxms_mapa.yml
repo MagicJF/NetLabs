@@ -15,6 +15,13 @@
 #              Un equipo del plano que la vista no conozca no se dibuja (ni sus cables) y
 #              se dice en voz alta (`pendientes`) en vez de dibujar un mapa a medias en
 #              silencio.
+# LÍMITES:     no registra equipos —eso es `netxms.yml`, y va antes— ni decide dónde va nada:
+#              la colocación y las posiciones son del plano (`tools/mapa.py`), y este fichero
+#              se limita a mandarlas. No dibuja los mapas de comprobación, que son del
+#              servidor. No corrige a mano el mapa que hay: el `PUT` lo reemplaza entero, así
+#              que un ajuste hecho a mano en la vista se pierde cuando el plano cambia. Y no
+#              sabe de nada fuera de este laboratorio: el de direcciones, que sí enseña los
+#              demás, lo dibuja la vista por su cuenta —aquí sólo se le dice de dónde parte—.
 # VER:         docs/diseno.md §2.9 (el mapa a medida), §3.6;
 #              docs/decisiones/0004-el-mapa-de-la-vista-lo-coloca-el-plano.md y
 #              docs/decisiones/0005-el-mapa-dice-lo-que-dice-el-yaml.md

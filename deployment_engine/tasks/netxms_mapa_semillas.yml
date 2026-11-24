@@ -5,6 +5,13 @@
 #              y se acumulan por nombre en `netxms_semillas_guardadas`, que el que llama
 #              recorre con un bucle y por eso no se inicializa aquí. Una lectura no cambia
 #              nada. El testigo de la sesión va por la entrada estándar y no se imprime.
+# LÍMITES:     sólo lee mapas que la vista ya tiene y que son de ESTE laboratorio, por el
+#              nombre con el que se dio de alta cada uno: de un mapa que aún no existe no hay
+#              `/map` que leer —eso lo resuelve el alta—, y el de otro laboratorio no se toca.
+#              No juzga si el mapa está al día: compara `netxms_generados_ops`, que es quien
+#              sabe qué semillas pide el laboratorio de ahora. Y no sirve para leer un mapa
+#              recién creado: la vista compone el dibujo cuando alguien lo mira, y ahí las
+#              semillas llegarían vacías y parecerían un mapa sin equipos.
 # VER:         docs/diseno.md §3.4; docs/decisiones/0006
 
 - name: netxms · leer las semillas guardadas de «{{ netxms_generado_ya.nombre }}»
