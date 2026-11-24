@@ -15,6 +15,7 @@ RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ / "deployment_engine" / "tools"))
 
 import converge  # noqa: E402
+import mapa  # noqa: E402
 
 
 def entorno():
@@ -1066,6 +1067,69 @@ class ElMapaAtaCadaCableASuInterfaz(unittest.TestCase):
         self.assertEqual(json.loads(converge.netxms_interfaces_cuerpo()),
                          {"class": ["Interface"]})
         self.assertIn("/objects/search", converge.netxms_interfaces_cmd("http://x/v1")[2])
+
+
+class LosMapasQueDibujaElServidorSePidenUnaVez(unittest.TestCase):
+    """Las dos comprobaciones independientes del plano, y cuándo hay que rehacerlas.
+
+    El de capa 2 y el de direcciones los dibuja la vista con lo que sus equipos le cuentan, así
+    que lo único que se le manda es de dónde parten. Una segunda pasada no los vuelve a pedir;
+    y si el registro de equipos se ha tocado —el invitado se rehace, y con él el número del
+    objeto— sí, porque un mapa que parte de los equipos de ayer enseña equipos de ayer.
+    """
+
+    NODOS = [
+        {"role": "rta1", "name": "rta1", "mgmt_address": "10.30.0.130"},
+        {"role": "swc1", "name": "swc1", "mgmt_address": "10.30.0.129"},
+        {"role": "rta9", "name": "rta9", "mgmt_address": "10.30.0.139"},  # no está en la vista
+    ]
+    CENSO = [
+        {"id": 421, "name": "rta1", "ipAddress": {"address": "10.30.0.130"}},
+        {"id": 420, "name": "swc1", "ipAddress": {"address": "10.30.0.129"}},
+    ]
+    LAB = {"lab": "e_tres_routers"}
+
+    def plan(self, hijos, rehacer=False):
+        return converge.netxms_generados_ops(self.LAB, self.NODOS, self.CENSO, 6, hijos,
+                                             "http://x/v1", rehacer)
+
+    def test_si_no_estan_se_piden_con_los_equipos_del_laboratorio_como_semilla(self):
+        plan = self.plan([])
+        self.assertEqual(len(plan["ops"]), 2)
+        self.assertEqual(plan["semillas"], [420, 421])
+        self.assertEqual(plan["pendientes"], ["rta9"])
+        for op in plan["ops"]:
+            cuerpo = json.loads(op["cuerpo"])
+            self.assertEqual(cuerpo["class"], "NetworkMap")
+            self.assertEqual(cuerpo["parentId"], 6)
+            self.assertEqual(cuerpo["seedObjects"], [420, 421])
+        self.assertEqual([json.loads(op["cuerpo"])["mapType"] for op in plan["ops"]],
+                         [mapa.MAPA_CAPA_2, mapa.MAPA_DIRECCIONES])
+
+    def test_un_mapa_que_ya_esta_con_los_equipos_de_ahora_no_se_toca(self):
+        hijos = [{"class": "NetworkMap", "name": "e_tres_routers · capa 2", "id": 500},
+                 {"class": "NetworkMap", "name": "e_tres_routers · direcciones", "id": 501},
+                 {"class": "NetworkMap", "name": "d_acme_dos_sedes", "id": 502},
+                 {"class": "Container", "name": "e_tres_routers · capa 2", "id": 503}]
+        plan = self.plan(hijos)
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(plan["al_dia"], ["e_tres_routers · capa 2", "e_tres_routers · direcciones"])
+        self.assertEqual(plan["rehechos"], [])
+
+    def test_si_el_registro_de_equipos_se_ha_tocado_los_mapas_se_rehacen(self):
+        hijos = [{"class": "NetworkMap", "name": "e_tres_routers · capa 2", "id": 500}]
+        plan = self.plan(hijos, rehacer=True)
+        self.assertEqual(len(plan["ops"]), 3)
+        self.assertEqual(plan["rehechos"], ["e_tres_routers · capa 2"])
+        self.assertIn("retirar", plan["ops"][0]["effect"])
+        self.assertIn("/objects/500", " ".join(plan["ops"][0]["cmd"]))
+        self.assertEqual(plan["ops"][0]["cuerpo"], "")
+
+    def test_sin_equipos_en_la_vista_la_semilla_va_vacia_y_se_avisa(self):
+        plan = converge.netxms_generados_ops(self.LAB, self.NODOS, [], 6, [], "http://x/v1")
+        self.assertEqual(plan["semillas"], [])
+        self.assertFalse(plan["con_semilla"])
+        self.assertEqual(plan["pendientes"], ["rta1", "rta9", "swc1"])
 
 
 if __name__ == "__main__":

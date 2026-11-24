@@ -415,5 +415,37 @@ class ElMapaDelLaboratorio(unittest.TestCase):
             self.assertTrue(mapa.esta_al_dia(contenido, contenido), nombre)
 
 
+class LosMapasQueDibujaElServidor(unittest.TestCase):
+    """Lo que se le pide a la vista para que dibuje ella: de dónde parte, y nada más.
+
+    De estos mapas no se escribe ni una coordenada —los dibuja el servidor con lo que sus
+    equipos le cuentan—, así que lo único que se comprueba es que la petición lleva lo justo:
+    el laboratorio, el tipo, los equipos de los que arranca y hasta dónde puede mirar.
+    """
+
+    def test_cada_mapa_de_comprobacion_se_nombra_con_su_laboratorio(self):
+        generados = mapa.generados(laboratorio())
+        self.assertEqual([m["nombre"] for m in generados],
+                         ["e_tres_routers · capa 2", "e_tres_routers · direcciones"])
+        self.assertEqual([m["tipo"] for m in generados],
+                         [mapa.MAPA_CAPA_2, mapa.MAPA_DIRECCIONES])
+
+    def test_el_cuerpo_pide_la_semilla_y_el_radio_y_ni_una_coordenada(self):
+        capa_2 = json.loads(mapa.cuerpo_de_generado(laboratorio(), mapa.MAPA_CAPA_2, [7, 3], 6))
+        self.assertEqual(capa_2["class"], "NetworkMap")
+        self.assertEqual(capa_2["parentId"], 6)
+        self.assertEqual(capa_2["mapType"], mapa.MAPA_CAPA_2)
+        self.assertEqual(capa_2["seedObjects"], [7, 3])
+        self.assertEqual(capa_2["discoveryRadius"], mapa.RADIO_GENERADO[mapa.MAPA_CAPA_2])
+        for prohibida in ("elements", "links", "width", "height", "layout"):
+            self.assertNotIn(prohibida, capa_2)
+
+    def test_el_de_direcciones_mira_un_salto_y_el_de_capa_2_no_se_aleja(self):
+        # Medido sobre `e_tres_routers`: con radio 2 el mapa de direcciones se va por la red de
+        # gestión y trae los equipos de los demás laboratorios.
+        self.assertEqual(mapa.RADIO_GENERADO[mapa.MAPA_DIRECCIONES], 1)
+        self.assertLess(mapa.RADIO_GENERADO[mapa.MAPA_CAPA_2], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

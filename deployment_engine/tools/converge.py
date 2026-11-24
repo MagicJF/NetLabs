@@ -1557,3 +1557,54 @@ def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: di
         }],
         "pendientes": faltan, **cuenta,
     }
+
+
+def netxms_generados_ops(lab: dict, nodes: list[dict], censo: list | None, raiz,
+                         hijos: list | None, api: str, rehacer: bool = False) -> dict:
+    """Lo que hay que escribir para que la vista tenga sus mapas de comprobación.
+
+    El mapa del laboratorio lo dibuja el plano; estos los dibuja el servidor con lo que sus
+    equipos le cuentan. Por eso no se les escribe ni una coordenada: se le dice **de dónde
+    parte** —los equipos del laboratorio, que son la semilla— y hasta dónde puede mirar, y el
+    dibujo es suyo.
+
+    `rehacer` dice si esta pasada ha tocado el registro de equipos: el número de un equipo
+    cambia cuando el invitado se rehace, y un mapa que parte de los equipos de ayer enseña
+    equipos de ayer. Es lo único que no se puede preguntar al mapa sin leerlo entero, y el
+    registro ya lo sabe. Si el equipo no se ha tocado, no se toca el mapa: eso es lo que hace
+    que una segunda pasada no escriba.
+    """
+    equipos, faltan = netxms_objetos_de(nodes, censo)
+    semillas = sorted(int(i) for i in equipos.values())
+    por_nombre = {str(objeto.get("name") or ""): int(objeto["id"]) for objeto in hijos or []
+                  if str(objeto.get("class") or "") == NETXMS_CLASE_MAPA
+                  and objeto.get("id") is not None}
+    ops: list[dict] = []
+    al_dia: list[str] = []
+    rehechos: list[str] = []
+    for generado in mapa.generados(lab):
+        nombre, tipo = str(generado["nombre"]), int(generado["tipo"])
+        alta = {
+            "cmd": netxms_mapa_crear_cmd(api),
+            "cuerpo": mapa.cuerpo_de_generado(lab, tipo, semillas, raiz),
+            "effect": (f"dar de alta el mapa «{nombre}» —"
+                       f"{mapa.DESCRIPCION_GENERADO[tipo]}—"),
+        }
+        if nombre not in por_nombre:
+            ops.append(alta)
+            continue
+        if not rehacer:
+            al_dia.append(nombre)
+            continue
+        ops.append({
+            "cmd": netxms_borrar_cmd(api, por_nombre[nombre]),
+            "cuerpo": "",
+            "effect": (f"retirar el mapa «{nombre}», que parte de los equipos de antes de "
+                       f"tocarlos"),
+        })
+        ops.append(alta)
+        rehechos.append(nombre)
+    return {"ops": ops, "al_dia": al_dia, "rehechos": rehechos,
+            "nombres": [str(g["nombre"]) for g in mapa.generados(lab)],
+            "equipos": len(equipos), "semillas": semillas, "pendientes": faltan,
+            "con_semilla": bool(semillas)}
