@@ -153,7 +153,7 @@ decir, también por la API (§3.8)—. A un Linux, **sólo** por SSH. Al servici
 (NetXMS), **sólo** por su API REST y **desde dentro de su invitado** —ahí aterriza el túnel del
 motor—: por esa puerta registra el motor cada equipo de red con su credencial y le coloca el
 mapa de la red (§3.4), y no toca su base
-por ninguna otra (§3.4; `docs/decisiones/0003`, `0004`, `0005` y `0006`). Un equipo se identifica en la vista por su
+por ninguna otra (§3.4; `docs/decisiones/0003`, `0004` y `0005`). Un equipo se identifica en la vista por su
 **nombre**: su dirección de gestión se deriva del vmid, así que cambia cuando al invitado se le
 asigna **otro** vmid —rehacerlo conservando el vmid conserva la dirección—, y un nodo con el
 nombre bueno y la dirección de otra máquina se retira y se vuelve a dar de alta —el API no deja
@@ -369,11 +369,12 @@ que la documentación:
 - cada **equipo de red** del laboratorio donde el plano lo pone —el router en la frontera de
   las redes que une, el switch del núcleo en el centro—, con su **ficha** al lado: su papel, sus
   patas con la interfaz y la dirección de cada una y el rango que reparte si reparte DHCP;
-- cada **cable** del laboratorio, entre los dos equipos que une, **con su nombre** —el del puente
-  que lo tiende el despliegue— y el **puerto y la interfaz de cada punta** (`p1 ether1`), atados a
-  la interfaz de la vista por la que de verdad sale, y los **ajustes** que dicen cómo se dibujan:
-  color propio y trazo fino, porque el gris ancho que pone la vista se pierde en el gris de las
-  cajas.
+- cada **cable** del laboratorio, entre los dos equipos que une, con el **puerto y la interfaz de
+  cada punta** (`p1 ether1`), atados a la interfaz de la vista por la que de verdad sale, y los
+  **ajustes** que dicen cómo se dibujan: color propio y trazo fino, porque el gris ancho que pone
+  la vista se pierde en el gris de las cajas. El **nombre del cable** —el del puente que lo tiende
+  el despliegue— no se dibuja: la vista lo pone en el centro del enlace y tapa el cable. Viaja en
+  la configuración del enlace, donde queda informado sin estorbar.
 
 El dibujo **no se escribe a mano y lo que dice tampoco**: la geometría se lee del propio plano
 (`plano.py` escribe la posición de cada cosa en atributos `data-*` del SVG) —así el mapa de la
@@ -388,19 +389,11 @@ Y un equipo de red que la vista no conozca —porque lleva otras credenciales, o
 registro no llegó— tampoco se dibuja: sale en `pendientes`. Un mapa al que le falta un router
 sin decirlo es un mapa que miente.
 
-**Los otros mapas los dibuja la vista.** El del laboratorio es fiel al YAML porque sale de él, y
-ese es su límite: si el YAML se equivoca, el mapa se equivoca con él y nada lo delata. Por eso el
-motor da de alta otras dos vistas —`<laboratorio> · capa 2` y `<laboratorio> · direcciones`—
-donde **no escribe ni una coordenada**: sólo le dice de dónde parte —los equipos del laboratorio,
-como semilla— y hasta dónde puede mirar, y el dibujo lo compone el servidor con lo que los propios
-equipos le cuentan. El de capa 2 enseña por qué puerto dice cada equipo que ve a su vecino, y el
-de direcciones, por dónde van las redes. Se dan de alta si faltan y se rehacen sólo si el registro
-de equipos se ha tocado en esa pasada —el número de objeto de un equipo cambia cuando el invitado
-se rehace, y el API no deja corregirle la semilla a un mapa—; una segunda pasada no los toca. El
-de direcciones es un mapa **de la red**, no del laboratorio: como la red de gestión es de todos,
-en él salen también los demás laboratorios, y así se dice en el informe. Los mapas de comunicación
-interna y de OSPF no se dan de alta: describen protocolos que estos laboratorios no usan. Detalle
-y medidas, en `docs/decisiones/0006`.
+**Un solo mapa, el del laboratorio.** El motor no da de alta los mapas de capa 2 ni de
+direcciones que dibuja el servidor con lo que sus equipos le cuentan: añaden ruido y no enseñan
+el plano. El mapa que se mantiene es el que el motor coloca a medida, y es el único que hay que
+mirar. Los mapas de comunicación interna y de OSPF tampoco se dan de alta: describen protocolos
+que estos laboratorios no usan.
 
 ### 3.5. Pools: el plano de gestión y los laboratorios no se mezclan
 
