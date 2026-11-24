@@ -165,6 +165,28 @@
   no_log: true
   when: netxms_plan.ops | length > 0
 
+# El censo se vuelve a leer: lo que se acaba de dar de alta no estaba en la foto de antes,
+# y quien mire el censo después —el mapa de comprobación, que parte de los equipos del
+# laboratorio por su número— tiene que ver lo que hay ahora, no lo de antes. Sin esta
+# relectura, un laboratorio recién desplegado levantaba sus mapas sin las semillas nuevas.
+- name: netxms · releer el censo de equipos tras el registro
+  include_tasks: interior_ssh.yml
+  when: netxms_plan.ops | length > 0
+  vars:
+    interior_descripcion: "netxms · releer el censo de equipos"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_api | netlabs_netxms_censo_cuerpo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_censo_cmd }}"
+
+- name: netxms · el censo tras el registro
+  ansible.builtin.set_fact:
+    netxms_censo: "{{ interior.stdout | default('[]', true) | from_json }}"
+  no_log: true
+  when: netxms_plan.ops | length > 0
+
 # Un equipo que ya está con otras credenciales no se puede corregir por el API: se
 # dice, con su nombre y su dirección, para que se pueda hacer a mano. Un silencio aquí
 # sería la mentira que este fichero evita.

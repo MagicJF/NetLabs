@@ -50,6 +50,61 @@ ELEMENTO_TEXTO = 5         # una caja de texto: un rótulo suelto
 
 TAMANO_EQUIPO = 100        # lado del hueco de un equipo en el mapa, como la vista
 
+# Los mapas que dibuja el servidor. No los dibuja el plano —no se les escribe ni una
+# coordenada—: la vista los compone con lo que sus equipos le cuentan, y por eso no repiten
+# el plano, lo **comprueban**. El de capa 2 enseña por qué puerto dice cada equipo que ve a
+# su vecino; el de direcciones, las redes y las rutas que la vista ha descubierto.
+MAPA_CAPA_2 = 1            # Layer 2 topology (los puertos que los equipos dicen que ven)
+MAPA_DIRECCIONES = 2       # IP topology (las redes y las rutas descubiertas)
+
+DESCRIPCION_GENERADO = {
+    MAPA_CAPA_2: "los puertos por los que cada equipo dice que ve a su vecino",
+    MAPA_DIRECCIONES: "las redes y las rutas que la vista ha descubierto",
+}
+
+# Se nombran colgando del nombre del laboratorio, como su plano, para que una segunda pasada
+# los encuentre en vez de dejar una copia por cada despliegue.
+NOMBRE_GENERADO = {
+    MAPA_CAPA_2: "{lab} · capa 2",
+    MAPA_DIRECCIONES: "{lab} · direcciones",
+}
+
+# Hasta dónde puede mirar cada uno desde los equipos del laboratorio. Medido sobre
+# `e_tres_routers`: el de capa 2 dibuja el laboratorio entero con cualquier radio —el dominio
+# de capa 2 ya lo acota—, y el de direcciones con radio 1 se queda en lo que cuelga de la red
+# de gestión, mientras que con 2 se va a por los demás laboratorios.
+RADIO_GENERADO = {
+    MAPA_CAPA_2: 0,
+    MAPA_DIRECCIONES: 1,
+}
+
+
+def generados(lab: dict) -> list[dict]:
+    """Los mapas de comprobación que le tocan a un laboratorio, en orden."""
+    return [{"tipo": tipo, "nombre": nombre_de_generado(lab, tipo)}
+            for tipo in (MAPA_CAPA_2, MAPA_DIRECCIONES)]
+
+
+def nombre_de_generado(lab: dict, tipo: int) -> str:
+    """Cómo se llama en la vista uno de estos mapas."""
+    return NOMBRE_GENERADO[int(tipo)].format(lab=str(lab.get("lab") or ""))
+
+
+def cuerpo_de_generado(lab: dict, tipo: int, semillas: list, raiz) -> str:
+    """Lo que se le manda a la vista para dar de alta uno de estos mapas.
+
+    Se le dice **de dónde parte** —los equipos del laboratorio, que son la semilla— y hasta
+    dónde puede mirar. El dibujo lo pone él: aquí no viaja ni una coordenada.
+    """
+    return json.dumps({
+        "class": "NetworkMap",
+        "parentId": int(raiz),
+        "name": nombre_de_generado(lab, tipo),
+        "mapType": int(tipo),
+        "seedObjects": [int(s) for s in semillas or []],
+        "discoveryRadius": RADIO_GENERADO[int(tipo)],
+    }, ensure_ascii=False)
+
 # Cómo se ve el mapa. Los colores van en BGR —la vista los guarda así y los lee así— y
 # son de la familia que se lee sobre un fondo claro: la vista pinta el relleno de una caja
 # con el color del adorno muy rebajado y su borde entero, y el borde es lo que se ve.

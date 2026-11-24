@@ -15,6 +15,7 @@ RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ / "deployment_engine" / "tools"))
 
 import converge  # noqa: E402
+import mapa  # noqa: E402
 from identity import LabError  # noqa: E402
 
 
@@ -1270,6 +1271,116 @@ class ElMapaAtaCadaCableASuInterfaz(unittest.TestCase):
         self.assertIn("/objects/search", converge.netxms_interfaces_cmd("http://x/v1")[2])
 
 
+class LosMapasQueDibujaElServidorSePidenUnaVez(unittest.TestCase):
+    """Las dos comprobaciones independientes del plano, y cuándo hay que rehacerlas.
+
+    El de capa 2 y el de direcciones los dibuja la vista con lo que sus equipos le cuentan, así
+    que lo único que se le manda es de dónde parten. Una segunda pasada no los vuelve a pedir;
+    y si el registro de equipos se ha tocado —el invitado se rehace, y con él el número del
+    objeto— sí, porque un mapa que parte de los equipos de ayer enseña equipos de ayer.
+    """
+
+    NODOS = [
+        {"role": "rta1", "name": "rta1", "mgmt_address": "10.30.0.130"},
+        {"role": "swc1", "name": "swc1", "mgmt_address": "10.30.0.129"},
+        {"role": "rta9", "name": "rta9", "mgmt_address": "10.30.0.139"},  # no está en la vista
+    ]
+    CENSO = [
+        {"id": 421, "name": "rta1", "ipAddress": {"address": "10.30.0.130"}},
+        {"id": 420, "name": "swc1", "ipAddress": {"address": "10.30.0.129"}},
+    ]
+    LAB = {"lab": "e_tres_routers"}
+
+    def plan(self, hijos, rehacer=False, guardadas=None):
+        return converge.netxms_generados_ops(self.LAB, self.NODOS, self.CENSO, 6, hijos,
+                                             "http://x/v1", rehacer, guardadas)
+
+    def test_si_no_estan_se_piden_con_los_equipos_del_laboratorio_como_semilla(self):
+        plan = self.plan([])
+        self.assertEqual(len(plan["ops"]), 2)
+        self.assertEqual(plan["semillas"], [420, 421])
+        self.assertEqual(plan["pendientes"], ["rta9"])
+        for op in plan["ops"]:
+            cuerpo = json.loads(op["cuerpo"])
+            self.assertEqual(cuerpo["class"], "NetworkMap")
+            self.assertEqual(cuerpo["parentId"], 6)
+            self.assertEqual(cuerpo["seedObjects"], [420, 421])
+        self.assertEqual([json.loads(op["cuerpo"])["mapType"] for op in plan["ops"]],
+                         [mapa.MAPA_CAPA_2, mapa.MAPA_DIRECCIONES])
+
+    def test_un_mapa_que_ya_esta_con_los_equipos_de_ahora_no_se_toca(self):
+        hijos = [{"class": "NetworkMap", "name": "e_tres_routers · capa 2", "id": 500},
+                 {"class": "NetworkMap", "name": "e_tres_routers · direcciones", "id": 501},
+                 {"class": "NetworkMap", "name": "d_acme_dos_sedes", "id": 502},
+                 {"class": "Container", "name": "e_tres_routers · capa 2", "id": 503}]
+        plan = self.plan(hijos)
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(plan["al_dia"], ["e_tres_routers · capa 2", "e_tres_routers · direcciones"])
+        self.assertEqual(plan["rehechos"], [])
+
+    def test_un_mapa_cuyas_semillas_son_las_de_ahora_no_se_toca(self):
+        # Con las semillas leídas del `/map` del mapa, una segunda pasada sigue sin escribir:
+        # compararlas es lo que hace que el reintento repare, no que rehaga siempre.
+        hijos = [{"class": "NetworkMap", "name": "e_tres_routers · capa 2", "id": 500},
+                 {"class": "NetworkMap", "name": "e_tres_routers · direcciones", "id": 501}]
+        guardadas = {"e_tres_routers · capa 2": [420, 421],
+                     "e_tres_routers · direcciones": [420, 421]}
+        plan = self.plan(hijos, guardadas=guardadas)
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(plan["al_dia"], ["e_tres_routers · capa 2", "e_tres_routers · direcciones"])
+
+    def test_un_mapa_que_parte_de_los_equipos_de_antes_se_rehace_aunque_no_se_toque_el_registro(self):
+        """El reintento de un apply que se quedó antes de llegar aquí ya no escribe equipos.
+
+        La pasada que falló completó el registro, así que el reintento no toca los equipos
+        (`rehacer` queda en falso), pero el mapa sigue partiendo de los números de antes de
+        rehacerlos. Comparar sus semillas —leídas de su `/map`— con las de ahora es lo que
+        hace que ese reintento también lo repare.
+        """
+        hijos = [{"class": "NetworkMap", "name": "e_tres_routers · capa 2", "id": 500}]
+        guardadas = {"e_tres_routers · capa 2": [418, 419]}
+        plan = self.plan(hijos, guardadas=guardadas)
+        self.assertEqual(plan["rehechos"], ["e_tres_routers · capa 2"])
+        self.assertIn("retirar", plan["ops"][0]["effect"])
+        self.assertEqual(plan["ops"][0]["cuerpo"], "")
+        self.assertIn("/objects/500", " ".join(plan["ops"][0]["cmd"]))
+        self.assertEqual(json.loads(plan["ops"][1]["cuerpo"])["seedObjects"], [420, 421])
+
+    def test_un_mapa_sin_semillas_leidas_se_deja_como_estaba(self):
+        # Sin la lectura no se sabe si el mapa parte de los equipos de ayer: no se rehace por
+        # no saber, que eso escribiría en cada pasada. Sólo el registro tocado fuerza el rehacer.
+        hijos = [{"class": "NetworkMap", "name": "e_tres_routers · capa 2", "id": 500},
+                 {"class": "NetworkMap", "name": "e_tres_routers · direcciones", "id": 501}]
+        plan = self.plan(hijos, guardadas={})
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(plan["al_dia"], ["e_tres_routers · capa 2", "e_tres_routers · direcciones"])
+
+    def test_los_mapas_de_comprobacion_que_ya_estan_se_listan_con_su_numero(self):
+        # Sólo los mapas de comprobación de este laboratorio, y sólo los que existen: de un
+        # mapa que aún no está no hay semillas que leer, y el de otro laboratorio no es suyo.
+        hijos = [{"class": "NetworkMap", "name": "e_tres_routers · capa 2", "id": 500},
+                 {"class": "NetworkMap", "name": "e_tres_routers · direcciones", "id": 501},
+                 {"class": "NetworkMap", "name": "d_acme_dos_sedes", "id": 502},
+                 {"class": "Container", "name": "e_tres_routers · capa 2", "id": 503}]
+        ya = converge.netxms_generados_ya(self.LAB, hijos)
+        self.assertEqual([m["nombre"] for m in ya],
+                         ["e_tres_routers · capa 2", "e_tres_routers · direcciones"])
+        self.assertEqual([m["id"] for m in ya], [500, 501])
+
+    def test_si_el_registro_de_equipos_se_ha_tocado_los_mapas_se_rehacen(self):
+        hijos = [{"class": "NetworkMap", "name": "e_tres_routers · capa 2", "id": 500}]
+        plan = self.plan(hijos, rehacer=True)
+        self.assertEqual(len(plan["ops"]), 3)
+        self.assertEqual(plan["rehechos"], ["e_tres_routers · capa 2"])
+        self.assertIn("retirar", plan["ops"][0]["effect"])
+        self.assertIn("/objects/500", " ".join(plan["ops"][0]["cmd"]))
+        self.assertEqual(plan["ops"][0]["cuerpo"], "")
+
+    def test_sin_equipos_en_la_vista_la_semilla_va_vacia_y_se_avisa(self):
+        plan = converge.netxms_generados_ops(self.LAB, self.NODOS, [], 6, [], "http://x/v1")
+        self.assertEqual(plan["semillas"], [])
+        self.assertFalse(plan["con_semilla"])
+        self.assertEqual(plan["pendientes"], ["rta1", "rta9", "swc1"])
 class LaCuentaDelMapa(unittest.TestCase):
     """Lo que el mapa dice de sí mismo al escribirse: cuántas puntas quedaron atadas.
 
