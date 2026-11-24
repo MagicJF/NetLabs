@@ -36,6 +36,11 @@
   # El arranque acaba de mover la dirección de gestión: el REST puede tardar unos
   # segundos en contestar. Se sondea con tope, no se da por caído al primer intento.
   failed_when: false
+  # Agotar los reintentos marca la tarea como fallida aunque `failed_when` sea falso
+  # (medido, y `ignore_errors` sí vale sobre un `uri`): sin esto, el play se pararía aquí
+  # y la aserción de más abajo —la que dice que no hay camino hasta el router— no llegaría
+  # a hablar, que es justo el mensaje que se pagó una tarde por no tener.
+  ignore_errors: true
   until: ros_login.status in [200, 401]
   retries: 20
   delay: 3
@@ -67,9 +72,24 @@
   register: ros_login_ok
   changed_when: false
   failed_when: false
+  # Lo mismo que en el sondeo de arriba: el tope agotado no puede parar el play antes de
+  # las aserciones, que son las que dicen qué pasó y por dónde mirar.
+  ignore_errors: true
   until: ros_login_ok.status in [200, 401]
   retries: 10
   delay: 3
+
+# Un `-1` no es una credencial rechazada: es que no hubo ni conexión. Decirlo con el
+# mensaje de la clave manda a mirar el router cuando el problema estaba en el camino
+# —el reenvío no escuchaba—, que es por donde se perdió una tarde.
+- name: "RouterOS · sin camino hasta {{ router.name }} no se puede ni preguntar"
+  ansible.builtin.assert:
+    that: ros_login_ok.status in [200, 401]
+    fail_msg: >-
+      no hay camino hasta {{ router.name }}: el reenvío
+      {{ router.vmid | netlabs_tunnel_port }} no contesta
+      ({{ ros_login_ok.status | default('sin respuesta') }}). No es la clave: es que
+      no se llegó a preguntar. Mira el reenvío y la dirección de gestión del invitado.
 
 - name: "RouterOS · sin la clave del secreto no se entra: se para"
   ansible.builtin.assert:
@@ -102,7 +122,7 @@
     ros_current: >-
       {{ dict(ros_claves | zip(ros_lecturas.results | map(attribute='json') | list)) }}
   vars:
-    ros_claves: [identity, addresses, pools, dhcp_servers, dhcp_networks, services, users, snmp, snmp_community, bridges, bridge_ports]
+    ros_claves: [identity, addresses, routes, pools, dhcp_servers, dhcp_networks, services, users, snmp, snmp_community, bridges, bridge_ports]
 
 - name: "RouterOS · calcular la diferencia de {{ router.name }}"
   ansible.builtin.set_fact:

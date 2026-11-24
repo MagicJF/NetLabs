@@ -51,7 +51,7 @@ deployment_engine/         # el motor: no conoce ningún laboratorio concreto
   tools/                   #   identidad, convergencia, comprobaciones, documentación
   tests/                   #   pruebas de la capa pura, sin hipervisor
 labs/<lab>/<lab>.yml       # el estado deseado de ESE laboratorio
-labs/<lab>/<lab>.md        # sus dos planos (SVG en texto) + las tablas + lo aprendido
+labs/<lab>/<lab>.md        # su plano (SVG en texto) + las tablas + lo aprendido
 logs/<lab>/                # informes de ejecución; gitignored
 logs/site/                 # informes del plano de gestión; gitignored
 docs/                      # diseño y decisiones (ADR)
@@ -69,9 +69,9 @@ Reglas de la estructura:
   es `greptile.json`, que se queda en la raíz porque es donde su herramienta lo lee.
 - **`deployment_engine/` no conoce ningún laboratorio.** No lee `labs/`: el laboratorio es un
   parámetro. Un valor concreto de un lab aquí es un bug.
-- **`labs/<lab>/` sólo declara `<lab>.yml` y `<lab>.md`.** Los dos planos van dentro del `.md`
-  como SVG en texto: son código generado, entran en el mismo diff que la declaración y no hay
-  ficheros de imagen que regenerar. Nada de configuración global ni de ficheros de estado. Lo
+- **`labs/<lab>/` sólo declara `<lab>.yml` y `<lab>.md`.** El plano va dentro del `.md`
+  como SVG en texto: es código generado, entra en el mismo diff que la declaración y no hay
+  ficheros de imagen que regenerar ni que mantener al día. Nada de configuración global ni de ficheros de estado. Lo
   que se ejecuta no vive aquí.
 - **El nombre de un laboratorio es una letra y un título** (`c_enrutar_y_conmutar`). La letra es la
   cabeza del nombre de cada cable y la que hace que el pool de Proxmox empiece por letra; ese nombre

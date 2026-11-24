@@ -152,7 +152,11 @@ Al hipervisor se le habla **sólo** por su API REST, desde un fichero del motor.
 decir, también por la API (§3.8)—. A un Linux, **sólo** por SSH. Al servicio que observa el sitio
 (NetXMS), **sólo** por su API REST y **desde dentro de su invitado** —ahí aterriza el túnel del
 motor—: por esa puerta registra el motor cada equipo de red con su credencial, y no toca su base
-por ninguna otra (§3.4; `docs/decisiones/0003`). Una vía nueva para lo mismo es un defecto, no una
+por ninguna otra (§3.4; `docs/decisiones/0003`). Un equipo se identifica en la vista por su
+**nombre**: su dirección de gestión se deriva del vmid, así que cambia cuando al invitado se le
+asigna **otro** vmid —rehacerlo conservando el vmid conserva la dirección—, y un nodo con el
+nombre bueno y la dirección de otra máquina se retira y se vuelve a dar de alta —el API no deja
+corregir la dirección—. Una vía nueva para lo mismo es un defecto, no una
 comodidad.
 
 *Evita:* llamadas a la API repartidas por todo el motor, imposibles de seguir y de auditar.
@@ -173,15 +177,20 @@ La página de cada laboratorio tiene dos regiones: una **generada** desde la dec
 así, qué se aprendió). La comprobación re-renderiza la región generada y **falla si difiere**
 de lo que hay en el fichero.
 
-La región generada lleva además dos **planos**, también sacados de la declaración: la
-**topología** (cada red como área translúcida con su nombre, su subred y la dirección de su
-puerta, y dentro quién cuelga de ella) y el **cableado** (un equipo por nodo y una línea por
-cable, con el puerto que ocupa cada punta). Los dibuja `tools/plano.py` y los escribe **dentro
-de la propia página**, como SVG en texto. No hay fichero de imagen: el plano es código generado
-que se revisa en el diff como cualquier otra línea, no se puede quedar viejo por separado y
-`./netlabs docs --check` lo compara con lo que la declaración produce hoy. Mermaid no sirve para
-esto: no sabe dibujar los símbolos de una red (router, switch, cortafuegos, servidor) y sus áreas
-no pueden tocarse, así que un router con pata en dos redes no se puede poner entre ellas.
+La región generada lleva además un **plano**, también sacado de la declaración: la
+**topología** (cada red como área translúcida con su nombre y su subred, y dentro quién cuelga
+de ella —la dirección de la puerta no se repite en la cabecera del área: se lee junto al símbolo
+del router, que es quien la tiene—), con un símbolo por equipo y una línea por cable, cada una
+con el puerto de sus dos puntas. Un solo plano: hubo también un dibujo de cableado, hecho
+por un segundo motor plano, que enseñaba los mismos equipos y los mismos puertos con otra
+colocación —dos retratos del mismo dato que no coincidían y hacían dudar de los dos—. Lo dibuja
+`tools/plano.py` y va **dentro del `.md`**, como SVG en texto: es código generado, entra en el
+mismo diff que la declaración y no deja ficheros de imagen al lado que se puedan quedar viejos
+(la carpeta de un laboratorio sólo declara su `.yml` y su `.md`). `./netlabs docs --check` vuelve
+a dibujarlo y compara el texto con el del fichero, así que un plano viejo es un fallo. Mermaid no
+sirve para esto: no sabe dibujar los símbolos de una red (router, switch, cortafuegos, servidor)
+y sus áreas no pueden tocarse, así que un router con pata en dos redes no se puede poner entre
+ellas.
 
 El plano se dibuja como un plano de red, no como un organigrama. **El eje lo marca el router**:
 un equipo con pata en varias redes se sienta donde se tocan, **encima del cruce** —el borde de
@@ -191,7 +200,10 @@ Internet arriba; con una sola red, el router se sienta sobre el techo del área.
 **Lo que no cambia se escribe**: cada equipo lleva su dirección estática bajo el nombre —una por
 pata si tiene varias, como un router con un pie en cada red— y el que sale por DHCP lo dice con
 esa palabra. Cada área, en su cabecera, lleva su nombre, su subred y **el rango que sirve su
-DHCP**. La puerta no se repite en la cabecera: es la dirección del equipo que toca la red y va
+DHCP**. La red se escribe como el bloque que es —`10.20.55.0 - 10.20.55.255 (/24)`,
+`10.20.0.0 - 10.20.255.255 (/16)`—: la primera y la última dirección se leen de un golpe y el
+prefijo va al final, así dos áreas de tamaños distintos se comparan sin contar octetos. Una
+dirección sola va sin `/32`, que no añade nada a quien ya la ve entera. La puerta no se repite en la cabecera: es la dirección del equipo que toca la red y va
 escrita en él, que es su dueño. Un equipo de una sola red vive
 dentro de la suya, y dentro de cada red la profundidad baja: lo que cuelga de la puerta queda
 pegado a ella. **La clase la dice el símbolo**, plano y de línea, sin volumen ni perspectiva: el router
@@ -504,8 +516,17 @@ laboratorio, y por tanto se puede leer, configurar y destruir como cualquier otr
 
 **Lo que esto implica.** Un puerto declarado sin cable es un error, no una red implícita; un
 cable que une dos redes distintas es un error, porque eso es enrutar, y enrutar es un router.
-Cambiar el cableado de un invitado que ya existe no se hace en caliente: se destruye y se vuelve
-a crear, y el plan lo dice antes de tocar nada.
+Cambiar el cableado de un invitado que ya existe no se hace en caliente: se rehace **ese**
+invitado —se retira y se vuelve a crear— y **ningún otro se toca**; el plan lo dice antes de
+tocar nada. Los recursos no llegan a eso: los cores y la memoria se escriben en el config del
+invitado con él parado un momento, y su disco, sus cables y lo que tenga dentro siguen donde
+estaban. Se comparan contra lo **escrito** en el config, no contra lo que el invitado tiene en
+marcha: a una máquina encendida se le puede cambiar la memoria en el config y seguir con la
+vieja hasta reiniciar, y la lectura del clúster no vería la diferencia justo cuando existe.
+
+Antes cualquier diferencia paraba el plan con un «hace falta destroy», y el `destroy` se lleva el
+laboratorio entero: subir la memoria de ocho conmutadores costaba tirar otros dieciséis equipos
+que estaban bien. Arreglar uno costaba arreglarlos todos, y eso no es converger: es demoler.
 
 ---
 

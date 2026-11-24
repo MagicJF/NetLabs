@@ -16,19 +16,58 @@ import converge  # noqa: E402
 import identity  # noqa: E402
 
 
+def netlabs_con_config(mundo: dict, configuraciones: dict) -> dict:
+    """Pega a cada invitado los recursos ESCRITOS en su config.
+
+    `configuraciones` viene de `tasks/guest_config.yml`: {vmid: {cores, memory(MB)}}. Un
+    invitado sin config leído se queda con lo que dice el clúster, que para uno parado
+    es lo mismo y para uno en marcha puede no serlo: por eso el plan prefiere
+    `config_*` cuando está.
+    """
+    salida = dict(mundo)
+    salida["invitados"] = []
+    for invitado in mundo.get("invitados") or []:
+        dato = (configuraciones or {}).get(str(invitado.get("vmid"))) or {}
+        nuevo = dict(invitado)
+        if dato:
+            nuevo["config_cores"] = int(dato.get("cores") or invitado.get("cores") or 1)
+            nuevo["config_memory"] = int(dato.get("memory") or 0)
+        salida["invitados"].append(nuevo)
+    return salida
+
+
+def netlabs_direcciones_vivas(invitados, espacio: str) -> list:
+    """Las direcciones de gestión que hoy tienen los invitados del clúster.
+
+    Sirve para distinguir un resto de un despliegue anterior —su dirección ya no la tiene
+    nadie— de un equipo de otro laboratorio en marcha, que se llama igual y no se toca.
+
+    Sólo se derivan las de los invitados que pueden tener dirección en este plano: el
+    clúster puede tener máquinas que no son del motor (un `vmid` por encima de los que
+    caben en el /16), y preguntarles la suya lanzaría y dejaría el laboratorio sin
+    registrar por un invitado que no tiene nada que ver.
+    """
+    return [str(identity.derive_management(int(g["vmid"]), espacio))
+            for g in invitados or []
+            if g.get("vmid") and identity.cabe_management(int(g["vmid"]), espacio)]
+
+
 def _world(resources, networks, pools):
-    guests = [
+    invitados = [
         {
             "vmid": int(item["vmid"]),
             "name": item.get("name"),
             "type": "lxc" if item.get("type") == "lxc" else "qemu",
             "pool": item.get("pool") or "",
             "status": item.get("status"),
-            # Los recursos que el invitado tiene de verdad: `/cluster/resources` los trae
-            # (cores y memoria), así que el plan puede decir si la declaración pide otra
-            # cosa sin una llamada más por invitado.
+            # Lo que el invitado tiene EN MARCHA. No es lo que hay escrito en su
+            # config: a una máquina encendida se le cambia la memoria en el config y
+            # sigue con la vieja hasta reiniciar. `netlabs_con_config` añade después los
+            # valores escritos, que son los que compara el plan; esto queda de respaldo
+            # para cuando el config no se pudo leer.
             "cores": item.get("maxcpu"),
             "memory_bytes": item.get("maxmem"),
+            "node": item.get("node"),
         }
         for item in resources
         if item.get("type") in ("qemu", "lxc") and item.get("vmid") is not None
@@ -44,8 +83,8 @@ def _world(resources, networks, pools):
     ]
     return {
         "node": None,
-        "used_vmids": sorted({g["vmid"] for g in guests}),
-        "guests": guests,
+        "used_vmids": sorted({g["vmid"] for g in invitados}),
+        "invitados": invitados,
         "bridges": bridges,
         "pools": sorted(p.get("poolid") for p in pools if p.get("poolid")),
     }
@@ -115,6 +154,8 @@ class FilterModule:
     def filters(self):
         return {
             "netlabs_world": _world,
+            "netlabs_con_config": netlabs_con_config,
+            "netlabs_direcciones_vivas": netlabs_direcciones_vivas,
             "netlabs_plan": lambda world, lab, env: identity.plan(world, lab, env),
             "netlabs_site": lambda world, env: identity.site(world, env),
             "netlabs_docs": lambda lab, env: identity.render_docs(lab, env),
@@ -141,6 +182,9 @@ class FilterModule:
             "netlabs_netxms_fichas_cmd": lambda api: converge.netxms_fichas_cmd(api),
             "netlabs_netxms_fichas_cuerpo": lambda ids=None, api=None: converge.netxms_fichas_cuerpo(ids),
             "netlabs_netxms_ids": lambda nodes, encontrados: converge.netxms_ids(nodes, encontrados),
-            "netlabs_netxms_ops": lambda nodes, encontrados, detalles, api, secrets=None:
-                converge.netxms_ops(nodes, encontrados, detalles, api, secrets),
+            "netlabs_netxms_ops": lambda nodes, encontrados, detalles, api, secrets=None,
+                vivas=None, propias=None: converge.netxms_ops(
+                    nodes, encontrados, detalles, api, secrets, vivas=vivas, propias=propias),
+            "netlabs_netxms_borrar_cmd": lambda api, id_objeto:
+                converge.netxms_borrar_cmd(api, id_objeto),
         }

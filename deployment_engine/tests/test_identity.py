@@ -29,11 +29,11 @@ def laboratorio(nombre="b_router_dos_puestos"):
     return yaml.safe_load((RAIZ / "labs" / nombre / f"{nombre}.yml").read_text())
 
 
-def mundo(guests=None, bridges=None, pools=None, used=None):
+def mundo(invitados=None, bridges=None, pools=None, used=None):
     return {
         "node": "Proxmox",
-        "used_vmids": used if used is not None else [g["vmid"] for g in (guests or [])],
-        "guests": guests or [],
+        "used_vmids": used if used is not None else [g["vmid"] for g in (invitados or [])],
+        "invitados": invitados or [],
         "bridges": bridges or [],
         "pools": pools or [],
     }
@@ -64,6 +64,21 @@ class Identidad(unittest.TestCase):
         with self.assertRaisesRegex(identity.LabError, "/16"):
             identity.derive_management(100, "10.30.0.0/24")
 
+    def test_un_vmid_que_no_cabe_en_el_plano_no_tiene_direccion(self):
+        """Un invitado ajeno al motor no puede tumbar la lectura de las direcciones.
+
+        Demuestra que se sabe de antemano qué vmids caben en el /16 antes de derivar: un
+        invitado con `vmid` 70000 no tiene dirección de gestión del motor, y preguntársela
+        lanzaba y dejaba el laboratorio sin registrar en la vista.
+        """
+        self.assertTrue(identity.cabe_management(identity.VMID_MAXIMO_MANAGEMENT, "10.30.0.0/16"))
+        self.assertFalse(identity.cabe_management(70000, "10.30.0.0/16"))
+        self.assertFalse(identity.cabe_management(0, "10.30.0.0/16"))
+
+    def test_un_plano_mal_declarado_se_sigue_diciendo(self):
+        with self.assertRaisesRegex(identity.LabError, "/16"):
+            identity.cabe_management(100, "10.30.0.0/24")
+
 
 class ElPlan(unittest.TestCase):
     def test_plan_reparte_los_vmids_libres_mas_bajos(self):
@@ -74,7 +89,7 @@ class ElPlan(unittest.TestCase):
     def test_plan_conserva_el_vmid_de_un_rol_que_ya_vive_en_el_pool(self):
         viejos = [{"vmid": 200, "name": "rte1", "type": "qemu", "pool": "b_router_dos_puestos",
                    "description": "netlabs lab=b_router_dos_puestos role=rte1", "status": "running"}]
-        plan = identity.plan(mundo(guests=viejos), laboratorio(), entorno())
+        plan = identity.plan(mundo(invitados=viejos), laboratorio(), entorno())
         self.assertEqual({n["role"]: n["vmid"] for n in plan["nodes"]}["rte1"], 200)
         self.assertEqual(len({n["vmid"] for n in plan["nodes"]}), 3)
 
@@ -86,7 +101,7 @@ class ElPlan(unittest.TestCase):
                    for n in primero["nodes"]]
         puentes = [{"iface": s["bridge"], "type": "bridge", "cidr": None, "comments": s["comment"]}
                    for s in primero["steps"] if s["op"] == "bridge_ensure"]
-        segundo = identity.plan(mundo(guests=creados, bridges=puentes, pools=["b_router_dos_puestos"]),
+        segundo = identity.plan(mundo(invitados=creados, bridges=puentes, pools=["b_router_dos_puestos"]),
                                 laboratorio(), entorno())
         self.assertEqual([s for s in segundo["steps"]
                           if s["op"] in ("guest_create", "pool_ensure", "bridge_ensure", "guest_start")], [])
@@ -96,7 +111,7 @@ class ElPlan(unittest.TestCase):
         # del laboratorio. No hace falta ninguna marca más: el pool ya dice de quién es.
         viejos = [{"vmid": 210, "name": "rte1", "type": "qemu", "pool": "b_router_dos_puestos",
                    "status": "running"}]
-        plan = identity.plan(mundo(guests=viejos), laboratorio(), entorno())
+        plan = identity.plan(mundo(invitados=viejos), laboratorio(), entorno())
         self.assertEqual({n["role"]: n["vmid"] for n in plan["nodes"]}["rte1"], 210)
         # El router que ya vive no se vuelve a crear; los puestos que faltan, sí.
         self.assertEqual([s["guest"]["role"] for s in plan["steps"] if s["op"] == "guest_create"],
@@ -109,12 +124,12 @@ class ElPlan(unittest.TestCase):
         lab, env = laboratorio(), entorno()
         primero = identity.plan(mundo(), lab, env)
         pool = primero["pool"]
-        guests = [{"vmid": n["vmid"], "name": n["name"], "type": n["guest"],
+        invitados = [{"vmid": n["vmid"], "name": n["name"], "type": n["guest"],
                    "pool": pool, "status": "running"}
                   for n in primero["nodes"]]
         bridges = [{"iface": s["bridge"], "comments": s["comment"]}
                    for s in primero["steps"] if s["op"] == "bridge_ensure"]
-        plan = identity.plan(mundo(guests=guests, bridges=bridges, pools=[pool]), lab, env)
+        plan = identity.plan(mundo(invitados=invitados, bridges=bridges, pools=[pool]), lab, env)
         # Lo único que queda son las dos cosas que viven FUERA del hipervisor —las
         # rutas, dentro del invitado de gestión, y el registro de los equipos en lo
         # que observa el sitio—: el plan no puede leerlas sin entrar, así que no puede
@@ -180,18 +195,42 @@ class ElPlan(unittest.TestCase):
                 self.assertIsNone(node["mgmt_address"])
                 self.assertTrue(all(i["network"] is not None for i in node["interfaces"]))
 
-    def test_rechaza_cambiar_los_recursos_de_un_invitado_vivo(self):
-        # Los recursos no se cambian en caliente. Sin esta comprobación, subir los cores en
-        # la declaración dejaría al invitado con los viejos y el plan diría que no hay nada
-        # que hacer: la mentira que este fichero evita.
+    def test_los_recursos_se_ajustan_en_el_sitio_y_no_tirando_el_invitado(self):
+        # Un invitado con otra memoria no se destruye: se le reescribe el config. Tirar
+        # los veinticuatro equipos para cambiar ocho memorias era el precio de antes.
         vivos = [{"vmid": 210, "name": "rte1", "type": "qemu", "pool": "b_router_dos_puestos",
-                  "status": "running", "cores": 1, "memory_bytes": 256 * 1024 * 1024}]
-        with self.assertRaisesRegex(identity.LabError, "core"):
-            identity.plan(mundo(guests=vivos), laboratorio(), entorno())
-        # Y con los cores bien y la memoria corta, lo dice por la memoria.
-        vivos[0]["cores"] = 2
-        with self.assertRaisesRegex(identity.LabError, "256 MB"):
-            identity.plan(mundo(guests=vivos), laboratorio(), entorno())
+                  "status": "running", "cores": 1, "memory_bytes": 128 * 1024 * 1024,
+                  # Lo ESCRITO en su config, que es lo que compara el plan: los valores del
+                  # clúster son los de en marcha y no ven el cambio que aún no se aplicó.
+                  "config_cores": 1, "config_memory": 128}]
+        plan = identity.plan(mundo(invitados=vivos), laboratorio(), entorno())
+        pasos = [s for s in plan["steps"] if s["op"] in ("guest_set", "guest_recreate", "guest_destroy")]
+        self.assertEqual([(s["op"], s["vmid"]) for s in pasos], [("guest_set", 210)])
+        declarado = next(n for n in plan["nodes"] if n["vmid"] == 210)["memory"]
+        self.assertEqual(pasos[0]["memory"], declarado)
+        self.assertEqual(pasos[0]["tenia"]["memory"], 128)
+        # Los demás no aparecen: un plan que toca a todos cuando cambia uno es el que
+        # obligaba a un destroy del laboratorio entero.
+        self.assertFalse([s for s in plan["steps"]
+                          if s["op"] == "guest_create" and s["guest"]["vmid"] == 210])
+        self.assertTrue(any(f"memoria 128 -> {declarado} MB" in e for e in plan["effects"]),
+                        plan["effects"])
+
+        # Con la memoria ya convergida y los cores cortos: el arreglo va por los cores, y
+        # por eso la memoria del config se pone en lo declarado —si el paso saliera por ella,
+        # la prueba no estaría demostrando el caso de los cores.
+        vivos[0]["cores"] = 0
+        vivos[0]["config_cores"] = 0
+        vivos[0]["config_memory"] = declarado
+        plan = identity.plan(mundo(invitados=vivos), laboratorio(), entorno())
+        declarado_cores = next(n for n in plan["nodes"] if n["vmid"] == 210)["cores"]
+        paso = next(s for s in plan["steps"] if s["op"] == "guest_set")
+        self.assertEqual(paso["cores"], declarado_cores)
+        self.assertEqual(paso["tenia"]["cores"], 0)
+        # El paso lleva siempre el estado deseado entero —cores y memoria—, que es lo
+        # que se escribe en el config: mandar sólo la mitad deja la otra a expensas de
+        # lo que hubiera, y el plan dejaría de decir a qué se converge.
+        self.assertEqual(paso["memory"], declarado)
 
     def test_un_equipo_se_llama_igual_en_el_plan_y_en_sus_cables(self):
         # El nombre del equipo es el rol declarado: el mismo en el invitado, en su
@@ -253,6 +292,9 @@ class Rechazos(unittest.TestCase):
         # El nombre del laboratorio es una letra y un título; la letra es la cabeza de
         # cada cable, así que no se admite un nombre sin ella.
         (lambda l: l.update(lab="router_dos_puestos"), "una letra y un título"),
+        # Dos áreas con el mismo bloque se anidan la una en la otra y el plano se queda
+        # sin raíz: se rechaza antes de dibujar nada.
+        (lambda l: l["networks"][1].update(address=l["networks"][0]["address"]), "repite el CIDR"),
         # Un puerto de dos cifras no cabe en los 15 caracteres del nombre del cable.
         (lambda l: l["links"][0]["a"].update(port=10), "un entero de 1 a 9"),
     ]
@@ -264,6 +306,18 @@ class Rechazos(unittest.TestCase):
                 cambio(lab)
                 with self.assertRaisesRegex(identity.LabError, motivo):
                     identity.plan(mundo(), lab, entorno())
+
+    def test_rechaza_una_ruta_ipv6_con_el_limite_del_area(self):
+        """El área escribe en la tabla IPv4 y una ruta IPv6 no tiene operación que la ponga.
+
+        Demuestra que el límite se dice al validar, con el área y la ruta delante, en vez
+        de pasar la validación y llegar a `apply` sin camino para instalarla.
+        """
+        lab = copy.deepcopy(laboratorio("d_acme_dos_sedes"))
+        router = next(n for n in lab["nodes"] if "routes" in (n.get("configure") or {}))
+        router["configure"]["routes"][0]["destination"] = "2001:db8:2::/64"
+        with self.assertRaisesRegex(identity.LabError, "no es IPv4"):
+            identity.plan(mundo(), lab, entorno())
 
     def test_rechaza_un_ciclo_en_after(self):
         lab = copy.deepcopy(laboratorio())
@@ -315,11 +369,28 @@ class Rechazos(unittest.TestCase):
         with self.assertRaisesRegex(identity.LabError, "misma red"):
             identity.plan(mundo(), lab, entorno())
 
-    def test_rechaza_cambiar_de_contenedor_a_maquina(self):
+    def test_manda_lo_escrito_en_el_config_no_lo_que_esta_en_marcha(self):
+        # `/cluster/resources` da la memoria viva: una máquina encendida a la que se le
+        # cambia la memoria en el config sigue con la vieja hasta reiniciar. Si el plan
+        # comparase contra la viva, no vería esa diferencia justo cuando existe.
+        vivos = [{"vmid": 210, "name": "rte1", "type": "qemu", "pool": "b_router_dos_puestos",
+                  "status": "running", "cores": 1, "memory_bytes": 256 * 1024 * 1024,
+                  "config_cores": 1, "config_memory": 200}]
+        plan = identity.plan(mundo(invitados=vivos), laboratorio(), entorno())
+        paso = next(s for s in plan["steps"] if s["op"] == "guest_set")
+        self.assertEqual(paso["tenia"]["memory"], 200)
+        self.assertTrue(any("memoria 200 ->" in e for e in plan["effects"]), plan["effects"])
+
+    def test_cambiar_de_contenedor_a_maquina_rehace_solo_ese_invitado(self):
+        # Lo que no se cambia en caliente se rehace, pero rehacer no es destruir el
+        # laboratorio: el paso lleva el vmid exacto y no arrastra a ningún otro.
         viejos = [{"vmid": 200, "name": "rte1", "type": "lxc", "pool": "b_router_dos_puestos",
                    "description": "netlabs lab=b_router_dos_puestos role=rte1", "status": "running"}]
-        with self.assertRaisesRegex(identity.LabError, "contenedor a máquina"):
-            identity.plan(mundo(guests=viejos), laboratorio(), entorno())
+        plan = identity.plan(mundo(invitados=viejos), laboratorio(), entorno())
+        rehacer = [s for s in plan["steps"] if s["op"] == "guest_recreate"]
+        self.assertEqual([s["vmid"] for s in rehacer], [200])
+        self.assertIn("lxc", rehacer[0]["motivo"])
+        self.assertEqual(rehacer[0]["built"]["vmid"], 200)
 
 
 class ElPlanDeControl(unittest.TestCase):
@@ -328,7 +399,7 @@ class ElPlanDeControl(unittest.TestCase):
     def test_control_adopta_el_invitado_por_su_nombre_y_su_pool(self):
         viejos = [{"vmid": 102, "name": "netxms", "type": "lxc", "pool": "a_bootstrap",
                    "description": "netlabs lab=a_bootstrap role=netxms", "status": "running"}]
-        plan = identity.plan(mundo(guests=viejos, pools=["a_bootstrap"]),
+        plan = identity.plan(mundo(invitados=viejos, pools=["a_bootstrap"]),
                              laboratorio("a_bootstrap"), entorno())
         self.assertEqual(plan["pool"], "a_bootstrap")
         self.assertEqual([n["vmid"] for n in plan["nodes"]], [102])
@@ -345,7 +416,7 @@ class ElPlanDeControl(unittest.TestCase):
                   "description": "netlabs lab=a_bootstrap role=netxms", "status": "running",
                   "cores": env["management"]["cores"],
                   "memory_bytes": env["management"]["memory"] * 1024 * 1024}]
-        plan = identity.plan(mundo(guests=vivos, pools=["a_bootstrap"]),
+        plan = identity.plan(mundo(invitados=vivos, pools=["a_bootstrap"]),
                              laboratorio("a_bootstrap"), entorno())
         self.assertEqual(plan["nodes"][0]["cores"], env["management"]["cores"])
         self.assertEqual(plan["nodes"][0]["memory"], env["management"]["memory"])
@@ -483,7 +554,7 @@ class ElSitio(unittest.TestCase):
         # servicio de observación junto al que ya está en pie.
         viejos = [{"vmid": 102, "name": "netxms", "type": "lxc", "pool": "lab-00_bootstrap",
                    "status": "running"}]
-        sitio = identity.site(mundo(guests=viejos), entorno())
+        sitio = identity.site(mundo(invitados=viejos), entorno())
         self.assertEqual(sitio["vmid"], 102)
         self.assertTrue(sitio["exists"])
         self.assertEqual(sitio["pool"], "a_bootstrap")
@@ -509,19 +580,27 @@ class Documentacion(unittest.TestCase):
         self.assertEqual(identity.render_docs(laboratorio(), entorno()),
                          identity.render_docs(laboratorio(), entorno()))
 
-    def test_la_pagina_lleva_dentro_los_dos_planos(self):
-        """Los dibujos son SVG en texto dentro de la página, no imágenes ni ficheros.
+    def test_la_pagina_lleva_el_plano_dentro(self):
+        """El plano va dentro de la página, como SVG en texto, y no al lado.
 
-        Al ser texto, el plano no se puede quedar viejo por separado: entra en el mismo
-        diff que la declaración que lo produce y no hay que regenerar nada aparte.
+        Es código generado: entra en el mismo diff que la declaración y no deja ficheros
+        de imagen que se puedan quedar viejos junto al `.md` (la carpeta de un
+        laboratorio sólo declara su `.yml` y su `.md`).
         """
-        texto = identity.render_docs(laboratorio(), entorno())
-        self.assertEqual(texto.count("<svg"), 2)
-        self.assertEqual(texto.count("</svg>"), 2)
+        lab = laboratorio()
+        texto = identity.render_docs(lab, entorno())
+        # El dibujo está en la página, entero y sacado de la declaración.
+        self.assertIn(plano.plano(lab, "topologia"), texto)
+        # Uno, y sólo uno: la página lleva su plano y ningún otro dibujo.
+        self.assertEqual(texto.count("<svg"), 1)
+        # Y no hay ningún fichero de imagen al que apuntar.
+        self.assertNotIn("-topologia.svg", texto)
+        self.assertNotIn("-topologia.png", texto)
         self.assertIn(">Topología<", texto.replace("### Topología", ">Topología<"))
-        self.assertIn("### Cableado (L2)", texto)
-        # Ni enlaces a una imagen ni bloques de otro lenguaje de dibujo: una sola verdad.
-        self.assertNotIn(".svg)", texto)
+        # Un solo dibujo: dos planos del mismo dato acababan discrepando entre sí.
+        self.assertNotIn("Cableado (L2)", texto)
+        # Nada de bloques de otro lenguaje de dibujo: una sola verdad, la del motor.
+        self.assertNotIn("```mermaid", texto)
         self.assertNotIn("```", texto)
         self.assertNotIn("mermaid", texto)
 
@@ -535,17 +614,18 @@ class Documentacion(unittest.TestCase):
         for nodo in lab["nodes"]:
             self.assertIn(f">{nodo["role"]}<", topologia + cableado)
         for net in lab["networks"]:
-            self.assertIn(identity._subred(net["address"]), topologia)
+            self.assertIn(plano._bloque(net["address"]), topologia)
             self.assertIn(f">{net["name"]}<", topologia)
 
-        # Las conexiones son las declaradas por cables (`links`), no por `after`: la
-        # topología dibuja una por cable más la salida a Internet; el cableado, una
-        # por cable. `after` sólo ordena el arranque y la colocación, no dibuja líneas.
+        # La topología dibuja la jerarquía: la pata del equipo que cruza de un área a
+        # otra, una por área que toca, más los cables entre equipos de la misma área.
+        # El cableado dibuja los cables declarados, uno por línea. `after` sólo ordena
+        # el arranque y la colocación, no dibuja líneas.
         def conexiones(svg):
             # El gris de línea es el de una conexión: los símbolos no lo usan.
             return svg.count('stroke="#94a3b8"')
 
-        self.assertEqual(conexiones(topologia), len(lab["links"]) + 1)  # +1: Internet
+        self.assertEqual(conexiones(topologia), 2)  # rte1: una pata a lan1 y otra a lan2
         self.assertEqual(conexiones(cableado), len(lab["links"]))
 
         # La clase la dice el símbolo, plano y de línea: el router es el círculo con las
@@ -577,10 +657,10 @@ class Documentacion(unittest.TestCase):
         self.assertIn(">dhcp<", svg)
 
     def test_un_equipo_en_tres_redes_se_rodea_de_ellas(self):
-        """Con tres redes el equipo de varias patas va al cruce, y las áreas no se pisan.
+        """Un espacio de direcciones es una caja, y las redes que contiene van dentro.
 
-        Una red sin equipos sigue tocando al equipo que la declara: su pata se dibuja
-        hasta el borde del área, que es lo único que hay dentro.
+        Las áreas hermanas no se pisan —dos redes solapadas se leen como una—, pero
+        un área SÍ contiene a las suyas: eso es lo que dice la numeración.
         """
         lab = {"lab": "tres_redes", "address_spaces": ["10.70.0.0/16"],
                "networks": [{"name": "lan", "address": "10.70.1.0/24"},
@@ -601,10 +681,21 @@ class Documentacion(unittest.TestCase):
         cajas = [tuple(float(v) for v in c) for c in re.findall(
             r'<rect x="(-?[\d.]+)" y="(-?[\d.]+)" width="([\d.]+)" height="([\d.]+)" rx="14"',
             svg)]
-        self.assertEqual(len(cajas), 3)
-        for i, (x1, y1, w1, h1) in enumerate(cajas):
-            for x2, y2, w2, h2 in cajas[i + 1:]:
-                # Dos redes que se solapan en el dibujo se leen como una sola.
+        # Tres redes declaradas y el espacio que las contiene: 10.70.x.x.
+        self.assertEqual(len(cajas), 4)
+
+        def dentro(pequena, grande):
+            x1, y1, w1, h1 = pequena
+            x2, y2, w2, h2 = grande
+            return (x2 <= x1 and y2 <= y1 and x1 + w1 <= x2 + w2
+                    and y1 + h1 <= y2 + h2)
+
+        madres = [c for c in cajas if all(dentro(o, c) for o in cajas if o is not c)]
+        self.assertEqual(len(madres), 1, "el espacio tiene que envolver a sus tres redes")
+        redes = [c for c in cajas if c is not madres[0]]
+        for i, (x1, y1, w1, h1) in enumerate(redes):
+            for x2, y2, w2, h2 in redes[i + 1:]:
+                # Dos redes hermanas que se solapan en el dibujo se leen como una sola.
                 self.assertFalse(x1 < x2 + w2 and x2 < x1 + w1
                                  and y1 < y2 + h2 and y2 < y1 + h1,
                                  "dos áreas de red se solapan")

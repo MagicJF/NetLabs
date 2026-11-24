@@ -67,7 +67,11 @@ LAB_KEYS = {"lab", "kind", "address_spaces", "networks", "nodes", "links"}
 # observa el resto. Su único nodo vive en la red de gestión y no tiene cables.
 KINDS = {"topology", "control"}
 NODE_KEYS = {"role", "type", "stage", "after", "resources", "image", "networks", "address", "configure"}
-NETWORK_KEYS = {"name", "address", "title"}
+# `shape` sólo dice cómo se dibuja la red, nunca cómo se despliega: un puente es un
+# puente. Hoy hay una forma con nombre —`cloud`—, la del proveedor al que cada sede se
+# asoma por su cuenta; el resto de las redes son áreas del plano.
+NETWORK_KEYS = {"name", "address", "title", "shape"}
+NETWORK_SHAPES = {"cloud"}
 LINK_KEYS = {"a", "z"}
 END_KEYS = {"node", "port"}
 
@@ -112,6 +116,34 @@ def derive_mac(vmid: int, iface: int = 0) -> str:
     )
 
 
+# El tope de vmids que caben en el plano de gestión: un /16 da 255 bloques de 254
+# direcciones. Por encima no hay dirección derivada que dar.
+VMID_MAXIMO_MANAGEMENT = 254 * 255 - 1
+
+
+def _red_de_gestion(address_space: str) -> ipaddress.IPv4Network:
+    """El plano de gestión, comprobado: es un /16 y por eso cada vmid cae en su sitio."""
+    red = ipaddress.ip_network(address_space, strict=False)
+    if not isinstance(red, ipaddress.IPv4Network) or red.prefixlen != 16:
+        raise LabError(
+            f"la red de gestión tiene que ser un /16 y es {address_space!r}; "
+            "es lo que hace que la dirección de cada equipo salga de su vmid sin reparto"
+        )
+    return red
+
+
+def cabe_management(vmid: int, address_space: str) -> bool:
+    """¿Cabe una dirección de gestión para ese vmid en el plano declarado?
+
+    El clúster puede tener invitados que no son del motor —fuera de su rango, o de un
+    hipervisor que admite vmids por encima de los que caben en el /16—. Preguntarles su
+    dirección derivada no puede tumbar la lectura del clúster: se saltan. El plano mal
+    declarado no se salta: es un error del sitio y se dice.
+    """
+    _red_de_gestion(address_space)
+    return 0 < int(vmid) <= VMID_MAXIMO_MANAGEMENT
+
+
 def derive_management(vmid: int, address_space: str) -> ipaddress.IPv4Address:
     """La dirección de gestión es función pura del vmid dentro del plano compartido.
 
@@ -121,16 +153,11 @@ def derive_management(vmid: int, address_space: str) -> ipaddress.IPv4Address:
     en vez de inventar una dirección.
     """
     _check_vmid(vmid)
-    red = ipaddress.ip_network(address_space, strict=False)
-    if red.version != 4 or red.prefixlen != 16:
-        raise LabError(
-            f"la red de gestión tiene que ser un /16 y es {address_space!r}; "
-            "es lo que hace que la dirección de cada equipo salga de su vmid sin reparto"
-        )
-    if vmid > 254 * 255 - 1:
+    red = _red_de_gestion(address_space)
+    if vmid > VMID_MAXIMO_MANAGEMENT:
         raise LabError(
             f"no cabe una dirección de gestión para el vmid {vmid} en {address_space}: "
-            "un /16 admite vmids hasta 64769"
+            f"un /16 admite vmids hasta {VMID_MAXIMO_MANAGEMENT}"
         )
     base = int(red.network_address)
     return ipaddress.ip_address(base + (vmid // 254) * 256 + (vmid % 254 + 1))
@@ -222,6 +249,11 @@ def validate(lab: dict, env: dict) -> None:
             raise LabError(f"la red {net!r} necesita 'name' y 'address'")
         if net["name"] in seen:
             raise LabError(f"la red {net['name']!r} está declarada dos veces")
+        forma = net.get("shape")
+        if forma is not None and forma not in NETWORK_SHAPES:
+            raise LabError(
+                f"la red {net['name']!r} declara shape {forma!r}: las formas son "
+                f"{', '.join(sorted(NETWORK_SHAPES))}")
         seen.add(net["name"])
         try:
             cidr = ipaddress.ip_network(net["address"], strict=False)
@@ -231,6 +263,15 @@ def validate(lab: dict, env: dict) -> None:
             raise LabError(
                 f"la red {net['name']!r} ({cidr}) no cabe en ningún espacio declarado en "
                 f"'address_spaces' ({', '.join(str(s) for s in nets)})"
+            )
+        # Dos redes en el mismo bloque no son dos áreas: el plano reparte jerarquía por
+        # contención y las toma una dentro de otra, así que se queda sin raíz y revienta
+        # con un error interno. Se dice aquí, con las dos redes delante.
+        if cidr in by_name.values():
+            otra = next(n for n, suya in by_name.items() if suya == cidr)
+            raise LabError(
+                f"la red {net['name']!r} repite el CIDR {cidr}, que ya es de {otra!r}: "
+                "dos áreas con la misma dirección no se pueden anidar"
             )
         by_name[net["name"]] = cidr
 
@@ -565,6 +606,18 @@ def _validate_area(role: str, area: str, body, networks: dict) -> None:
                 raise LabError(f"cada ruta de {role!r} es {{destination, gateway}}")
             for key in ("destination", "gateway"):
                 ipaddress.ip_interface(item[key])  # valida forma; el error de ValueError se deja subir
+            # El área escribe en `/rest/ip/route`, que es la tabla IPv4; una ruta IPv6
+            # pasaría la validación y luego no habría operación capaz de instalarla. Se
+            # rechaza aquí y se explica el límite, en vez de llegar a `apply` sin camino.
+            destino = ipaddress.ip_interface(item["destination"]).ip
+            salto = ipaddress.ip_interface(item["gateway"]).ip
+            if not isinstance(destino, ipaddress.IPv4Address) \
+                    or not isinstance(salto, ipaddress.IPv4Address):
+                raise LabError(
+                    f"la ruta {item['destination']!r} -> {item['gateway']!r} de {role!r} "
+                    "no es IPv4: el área 'routes' administra la tabla IPv4 del router "
+                    "(/rest/ip/route) y el motor no escribe la IPv6"
+                )
     elif area == "dhcp_server":
         _require_list(role, area, body)
         for item in body:
@@ -821,10 +874,10 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     if not control:
         _check_foreign_spaces(world, lab, env)
 
-    guests = world.get("guests") or []
+    invitados = world.get("invitados") or []
     bridges = world.get("bridges") or []
     used = set(int(v) for v in (world.get("used_vmids") or []))
-    mine = {g["vmid"]: g for g in guests if g.get("pool") == pool}
+    mine = {g["vmid"]: g for g in invitados if g.get("pool") == pool}
     by_role = {}
     sobra = []
     # El invitado se reconoce por su nombre, que es el del equipo, dentro del pool del
@@ -849,7 +902,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
             used.discard(assigned[node["role"]])
 
     low, high = env["vmids"]["min"], env["vmids"]["max"]
-    taken = set(used) | set(assigned.values()) | _ids_of(world.get("guests") or [])
+    taken = set(used) | set(assigned.values()) | _ids_of(world.get("invitados") or [])
     for node in lab["nodes"]:
         if node["role"] in assigned:
             continue
@@ -958,8 +1011,26 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
                 f"(etapas {built['stage']})"
             )
         else:
-            _check_hot_changes(built, existing)
-            if existing.get("status") != "running":
+            paso = _diferencia_del_invitado(built, existing)
+            if paso is not None:
+                steps.append(paso)
+                if paso["op"] == "guest_set":
+                    piezas = []
+                    tenia = paso["tenia"]
+                    if "memory" in paso and tenia.get("memory") != paso["memory"]:
+                        piezas.append(f"memoria {tenia.get('memory')} -> {paso['memory']} MB")
+                    if "cores" in paso and tenia.get("cores") != paso["cores"]:
+                        piezas.append(f"{tenia.get('cores')} -> {paso['cores']} core(s)")
+                    effects.append(
+                        f"ajustar {paso['name']} ({paso['vmid']}): "
+                        f"{', '.join(piezas) or 'recursos'} — se para un momento y vuelve a "
+                        "arrancar; su disco no se toca"
+                    )
+                else:
+                    effects.append(
+                        f"rehacer {paso['name']} ({paso['vmid']}) y sólo ese: {paso['motivo']}"
+                    )
+            elif existing.get("status") != "running":
                 steps.append({"op": "guest_start", "vmid": built["vmid"]})
                 effects.append(f"arrancar {built['name']} ({built['vmid']})")
         # Un invitado que ya está como debe no genera paso: un plan lleno de
@@ -1011,7 +1082,8 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         })
         effects.append(
             "registrar en lo que observa el sitio los equipos del laboratorio que falten, "
-            "con su usuario y su clave: "
+            "con su usuario y su clave, y retirar los que apunten a una máquina que ya "
+            "no es la suya: "
             + ", ".join(f"{n['name']} ({n['mgmt_address']})" for n in equipos)
         )
 
@@ -1193,34 +1265,68 @@ def _gateway_for(lab: dict, network: str) -> str:
     raise LabError(f"la red {network!r} no está declarada y no tiene puerta")
 
 
-def _check_hot_changes(built: dict, existing: dict) -> None:
-    """Lo que no se cambia en caliente se dice antes de tocar nada."""
+def _diferencia_del_invitado(built: dict, existing: dict) -> dict | None:
+    """Qué hay que hacer con un invitado que ya existe, sin tocar a los demás.
+
+    Antes cualquier diferencia de recursos paraba el plan con un «hace falta
+    destroy», y el destroy se lleva el laboratorio entero: subir la memoria de ocho
+    switches costaba tirar otros dieciséis equipos que estaban bien. Arreglar uno
+    costaba arreglarlos todos.
+
+    Se distinguen dos arreglos, cada uno sobre UN invitado:
+
+    - `guest_set`: cores y memoria. Proxmox los escribe en el config del invitado;
+      como aquí no hay globo de memoria, se para un momento y vuelve a arrancar. Su
+      disco no se toca: no pierde lo que tenía dentro.
+    - `guest_recreate`: lo que no se cambia en caliente de ninguna manera —de máquina
+      virtual a contenedor, o el nombre, que es el del rol—: se retira ese y se
+      vuelve a crear ese, y sólo ese.
+    """
     if int(existing["vmid"]) != built["vmid"]:
-        raise LabError(f"el rol {built['role']!r} cambió de vmid: eso no se hace en caliente")
-    if existing.get("type") != "lxc" and built["guest"] == "lxc":
-        raise LabError(f"el rol {built['role']!r} cambia de máquina virtual a contenedor: hace falta destroy")
-    if existing.get("type") == "lxc" and built["guest"] == "qemu":
-        raise LabError(f"el rol {built['role']!r} cambia de contenedor a máquina virtual: hace falta destroy")
+        raise LabError(
+            f"el rol {built['role']!r} sale con vmid {built['vmid']} y en el mundo está con "
+            f"{existing['vmid']}: un vmid no se reescribe, porque los demás invitados y los "
+            "puentes lo referencian por número"
+        )
+    motivo = ""
     if existing.get("name") and existing["name"] != built["name"]:
-        raise LabError(
-            f"el invitado existente se llama {existing['name']!r} y la declaración pide "
-            f"{built['name']!r}: el nombre no se cambia en caliente"
-        )
-    # Los recursos tampoco. Sin esta comprobación el segundo `apply` diría que no hay nada
-    # que hacer con un equipo al que le faltan cores, que es la mentira que este fichero
-    # evita: si la declaración pide otros, hay que rehacer el invitado y se dice.
-    if existing.get("cores") is not None and int(existing["cores"]) != built["cores"]:
-        raise LabError(
-            f"el invitado {built['name']!r} tiene {existing['cores']} core(s) y la declaración "
-            f"pide {built['cores']}: los recursos no se cambian en caliente, hace falta destroy"
-        )
-    memoria_viva = existing.get("memory_bytes")
-    if memoria_viva and int(memoria_viva) != int(built["memory"]) * 1024 * 1024:
-        raise LabError(
-            f"el invitado {built['name']!r} tiene {int(memoria_viva) // (1024 * 1024)} MB y la "
-            f"declaración pide {built['memory']} MB: los recursos no se cambian en caliente, "
-            "hace falta destroy"
-        )
+        motivo = f"se llamaba {existing['name']!r}"
+    elif {existing.get("type")} != {built["guest"]}:
+        motivo = f"pasa de {existing.get('type')} a {built['guest']}"
+    if motivo:
+        return {"op": "guest_recreate", "vmid": built["vmid"], "name": built["name"],
+                "type": existing.get("type"), "built": built, "motivo": motivo}
+
+    # Los valores ESCRITOS en su config mandan; los del clúster son de en marcha y no
+    # ven el cambio que aún no se ha aplicado (a un invitado encendido se le cambia la
+    # memoria en el config y sigue con la vieja hasta reiniciar).
+    cores_vivos = existing.get("config_cores")
+    if cores_vivos is None:
+        cores_vivos = existing.get("cores")
+    memoria_mb = existing.get("config_memory")
+    if not memoria_mb:
+        memoria_bytes = existing.get("memory_bytes")
+        memoria_mb = (int(memoria_bytes) // (1024 * 1024)) if memoria_bytes else None
+
+    nuevo: dict = {}
+    if cores_vivos is not None and int(cores_vivos) != int(built["cores"]):
+        nuevo["cores"] = int(built["cores"])
+    if memoria_mb and int(memoria_mb) != int(built["memory"]):
+        nuevo["memory"] = int(built["memory"])
+    if not nuevo:
+        return None
+    return {
+        "op": "guest_set",
+        "vmid": built["vmid"],
+        "name": built["name"],
+        "type": built["guest"],
+        "status": existing.get("status") or "unknown",
+        "cores": int(built["cores"]),
+        "memory": int(built["memory"]),
+        # Lo que tenía, para poder contarlo en el plan y en el informe: un plan que
+        # dice el valor nuevo y calla el viejo no enseña la diferencia.
+        "tenia": {"cores": cores_vivos, "memory": memoria_mb},
+    }
 
 
 def _check_foreign_spaces(world: dict, lab: dict, env: dict) -> None:
@@ -1264,8 +1370,8 @@ def _space_from_comment(comment: str):
     return match.group(1) if match else None
 
 
-def _ids_of(guests) -> set:
-    return {int(g["vmid"]) for g in guests if g.get("vmid") is not None}
+def _ids_of(invitados) -> set:
+    return {int(g["vmid"]) for g in invitados if g.get("vmid") is not None}
 
 
 def _lowest_free(taken: set, low: int, high: int) -> int:
@@ -1292,7 +1398,7 @@ def site(world: dict, env: dict) -> dict:
     """
     management = env["management"]
     used = set(int(v) for v in (world.get("used_vmids") or []))
-    used |= _ids_of(world.get("guests") or [])
+    used |= _ids_of(world.get("invitados") or [])
     vmid = _lowest_free(used, env["vmids"]["min"], env["vmids"]["max"])
     address = derive_management(vmid, management["address_space"])
     # El invitado de gestión se reconoce por su NOMBRE, no por su pool: es el servicio
@@ -1302,7 +1408,7 @@ def site(world: dict, env: dict) -> dict:
     # crearía un segundo servicio al lado del que ya corre. La diferencia de pool se
     # arregla moviéndolo (`allow-move`, medido en la API), no creando otro.
     existing = next(
-        (g for g in world.get("guests") or [] if g.get("name") == management["guest"]),
+        (g for g in world.get("invitados") or [] if g.get("name") == management["guest"]),
         None,
     )
     if existing:
@@ -1469,14 +1575,17 @@ def render_docs(lab: dict, env: dict) -> str:
         # leer y comparar como cualquier otra línea del documento.
         # El plano va escrito aquí dentro, como SVG en texto: no hay fichero que se
         # pueda quedar viejo ni que haya que regenerar aparte, y el diff del commit
-        # enseña exactamente qué cambió en el dibujo cuando cambia la declaración.
-        nombre = lab["lab"]
-        if lab.get("networks"):
-            import plano  # noqa: PLC0415  (los módulos viven en tools/)
-            lines += ["", "### Topología", "", plano.plano(lab, "topologia"), "",
-                      _pie_plano(True)]
-            lines += ["", "### Cableado (L2)", "", plano.plano(lab, "cableado"), "",
-                      _pie_plano(False)]
+        # enseña exactamente qué cambió en el dibujo cuando cambia la declaración. Es lo
+        # que declara el README: la carpeta de un laboratorio sólo tiene su `.yml` y su
+        # `.md`, y el dibujo es una parte más de la página.
+        import plano  # noqa: PLC0415  (los módulos viven en tools/)
+        # Un solo plano. Hubo dos —topología y cableado— y el de cableado lo dibujaba
+        # otro motor, plano y antiguo: enseñaba los mismos equipos, los mismos puertos
+        # y las mismas direcciones, pero con otra colocación, y quien abría el
+        # documento veía dos dibujos que no coincidían. El bueno es este, que ya dibuja
+        # un símbolo por equipo y una línea por cable con el puerto de cada punta.
+        lines += ["", "### Topología", "", plano.plano(lab, "topologia"), "",
+                  _pie_plano(True)]
     lines += ["", "### Networks", "", "| network | address |", "| --- | --- |"]
     for net in lab["networks"]:
         lines.append(f"| `{net['name']}` | `{net['address']}` |")

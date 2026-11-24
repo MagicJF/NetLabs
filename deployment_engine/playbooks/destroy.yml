@@ -39,7 +39,7 @@
         pool: "{{ lab.lab }}"
         marca: "netlabs lab={{ lab.lab }}"
         puentes: "{{ world.bridges | selectattr('comments', 'search', 'netlabs lab=' ~ lab.lab) | list }}"
-        suyos: "{{ world.guests | selectattr('pool', 'equalto', lab.lab) | list }}"
+        suyos: "{{ world.invitados | selectattr('pool', 'equalto', lab.lab) | list }}"
 
     - name: "destroy · {{ lab.lab }}"
       ansible.builtin.debug:
@@ -120,12 +120,12 @@
     - name: destroy · no puede quedar nada del laboratorio
       ansible.builtin.assert:
         that:
-          - (world.guests | selectattr('pool', 'equalto', pool) | list | length) == 0
+          - (world.invitados | selectattr('pool', 'equalto', pool) | list | length) == 0
           - (world.bridges | selectattr('comments', 'search', marca) | list | length) == 0
           - pool not in (world.pools | default([]))
         fail_msg: >-
           Después de destruir queda algo del laboratorio {{ lab.lab }}:
-          invitados {{ world.guests | selectattr('pool', 'equalto', pool) | map(attribute='name') | list }},
+          invitados {{ world.invitados | selectattr('pool', 'equalto', pool) | map(attribute='name') | list }},
           puentes {{ world.bridges | selectattr('comments', 'search', marca) | map(attribute='iface') | list }},
           pool {{ pool }} {{ 'presente' if pool in (world.pools | default([])) else 'ausente' }}.
 

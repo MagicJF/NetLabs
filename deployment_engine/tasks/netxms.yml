@@ -9,10 +9,15 @@
 #              Ni la clave ni el testigo de la sesión viajan en la línea de órdenes: van
 #              por la entrada estándar. Ninguna respuesta que traiga una credencial se
 #              imprime (`interior_imprime: false`), así que el informe queda sin claves.
-#              Sólo se escribe la diferencia: se dan de alta los que faltan. Un equipo
-#              que ya está con OTRAS credenciales no se toca —el API de esta versión sólo
-#              las acepta al crearlo— y se dice en voz alta (`pendientes`) en vez de
-#              fingir que se arregló.
+#              Sólo se escribe la diferencia: se dan de alta los que faltan y se retiran
+#              los que llevan el nombre de un equipo del laboratorio apuntando a otra
+#              máquina —la dirección de gestión se deriva del vmid, y cuando el invitado
+#              se rehace cambia: atado a la dirección, el equipo viejo se quedaba en la
+#              vista y abrir un router en la consola llevaba al switch de otra sede—. El API de esta
+#              versión no deja corregir la dirección, así que se retira y se da de alta.
+#              Un equipo que ya está con OTRAS credenciales no se toca —el API sólo las
+#              acepta al crearlo— y se dice en voz alta (`pendientes`) en vez de fingir
+#              que se arregló.
 # VER:         docs/diseno.md §2.8 (las cinco vías), §3.4, §7;
 #              docs/decisiones/0003-registrar-los-equipos-en-la-vista.md
 
@@ -130,7 +135,8 @@
   ansible.builtin.set_fact:
     netxms_plan: >-
       {{ equipos | netlabs_netxms_ops(netxms_censo, netxms_fichas | default([], true),
-                                      netxms_api, secrets) }}
+                                      netxms_api, secrets, vivas | default([], true),
+                                      propias | default([], true)) }}
   no_log: true
 
 - name: netxms · lo que hay que dar de alta

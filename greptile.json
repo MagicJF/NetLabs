@@ -1,7 +1,15 @@
 {
   "strictness": 3,
-  "commentTypes": ["logic", "syntax", "style"],
-  "autoReview": ["open", "push", "rebase"],
+  "commentTypes": [
+    "logic",
+    "syntax",
+    "style"
+  ],
+  "autoReview": [
+    "open",
+    "push",
+    "rebase"
+  ],
   "triggerOnDrafts": false,
   "statusCheck": true,
   "statusCommentsEnabled": true,
@@ -11,7 +19,7 @@
   "includeConfidenceScore": true,
   "fixWithAI": true,
   "ignorePatterns": "logs/**\n**/__pycache__/**\n*.pyc\n.venv/**",
-  "instructions": "Este repositorio se escribe en español: identificadores, comentarios y documentos. Los comentarios del código explican POR QUÉ, no QUÉ hace la línea; un comentario que repite el código es un hallazgo. Cada herramienta del motor declara en su cabecera PROPÓSITO, INVARIANTES, LÍMITES y VER. Los planos de red son SVG generados por deployment_engine/tools/plano.py: si un SVG cambia sin que cambie su declaración YAML, eso es un hallazgo. No propongas dependencias nuevas sin necesidad: el motor sólo usa la biblioteca estándar, PyYAML y Ansible.",
+  "instructions": "Este repositorio se escribe en español: identificadores, comentarios y documentos. Los comentarios del código explican POR QUÉ, no QUÉ hace la línea; un comentario que repite el código es un hallazgo. Cada herramienta del motor declara en su cabecera PROPÓSITO, INVARIANTES, LÍMITES y VER. Los planos de red son SVG en texto dentro de la página del laboratorio, generados por deployment_engine/tools/plano.py a partir de su declaración: la carpeta de un laboratorio sólo declara su `.yml` y su `.md`, y no se generan ficheros de imagen —ni `.svg` sueltos ni PNG—, así que no propongas sacar el plano a un fichero. Que un visor no pinte un SVG incrustado, GitHub incluido, es conocido y aceptado: el plano se lee como texto y cualquier visor que sí lo pinte lo dibuja. Un plano que no coincida con lo que la declaración produce hoy sí es un hallazgo, y `./netlabs check` lo comprueba; que el dibujo cambie porque cambia el generador no lo es, si el generador mejora para todos los laboratorios. No propongas dependencias nuevas sin necesidad: el motor sólo usa la biblioteca estándar, PyYAML y Ansible.",
   "customContext": {
     "files": [
       {

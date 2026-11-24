@@ -1,0 +1,435 @@
+# ACME, Inc. — dos sedes, ocho routers y el switching donde toca.
+#
+# Es el plano del enunciado, con una regla que se cumple en todas partes: cada equipo
+# hace una cosa. Los routers enrutan entre dos áreas y por eso se dibujan —y se
+# declaran— a caballo de las dos; los switches conmutan, y hay uno en cada red que
+# tiene más de un equipo colgando.
+#
+#   Internet (203.0.113.0/30, la nube)
+#      |                                |          <- la nube no está dentro de ACME:
+#     rte1                             rte2           es el exterior, y se dibuja fuera
+#      |                                |
+#   swc1 (red de la sede)          swc2
+#    |     |     |                    |     |     |
+#  rta1 rta2 rta3               rta4 rta5 rta6     8 routers: 2 de borde + 6
+#    |     |     |                    |     |     |       de departamento, cada uno en
+#  swa1  swa2  swa3                swa4  swa5  swa6      la frontera de dos áreas
+#    |     |     |                    |     |     |
+#  wsp1  wsp3  wsp4                wsp5  wsp6  wsp7
+#  wsp2  svs1
+#
+# Diez áreas: ACME (10.0.0.0/8), las dos sedes (10.20.0.0/16 y 10.40.0.0/16), los seis
+# departamentos y la nube de Internet. La jerarquía es la del plano: el /24 dentro del
+# /16 dentro del /8, como capas de cebolla.
+#
+# Dentro de cada sede, la red de la sede —`ny`, 10.20.0.0/16— es el segmento donde se
+# juntan el router de borde y los tres routers de departamento, y por eso lleva su
+# switch, `swc1`. Las interfaces de ese segmento van con máscara /28 (10.20.0.x): si
+# llevaran el /16 del área, cada router creería que los departamentos de al lado cuelgan
+# de su mismo cable y no enrutaría nada. El área dice cuánto espacio hay; la máscara,
+# qué hay en el cable.
+#
+# El direccionamiento de la sede se reparte en .1 el borde, .11 .12 .13 los routers de
+# departamento, y .100-199 el DHCP de cada departamento, que sirve el router del
+# departamento: el de borde no reparte direcciones de redes que no son suyas.
+
+lab: d_acme_dos_sedes
+
+address_spaces:
+  # ACME, inc. no se declara como espacio: la caja 10.0.0.0/8 la deduce el plano de las
+  # dos sedes que la comparten. Declararla se comería la red de gestión (10.30.0.0/16).
+  - 10.20.0.0/16        # la sede de Nueva York
+  - 10.40.0.0/16        # la sede de Tokio
+  - 203.0.113.0/30      # Internet: el tramo público que comparten las dos sedes
+
+networks:
+  # `shape: cloud` no cambia nada del despliegue: es un puente como los demás. Cambia
+  # cómo se dibuja —una nube, fuera de las áreas del cliente— porque no es un segmento
+  # de ACME sino el exterior, al que cada sede se asoma por su cuenta.
+  - {name: transito, address: 203.0.113.0/30, title: Internet, shape: cloud}
+  # El área de la sede: el segmento donde se juntan el router de borde y los tres
+  # routers de departamento. Las interfaces van con máscara /28 (10.20.0.0/28) y no con
+  # el /16 del área: con el /16 en la interfaz, cada router creería que los
+  # departamentos de al lado cuelgan de su mismo cable y no enrutaría nada.
+  - {name: ny, address: 10.20.0.0/16, title: New York}
+  - {name: ny_ventas, address: 10.20.55.0/24, title: Sales}
+  - {name: ny_ingenieria, address: 10.20.66.0/24, title: Engineering}
+  - {name: ny_marketing, address: 10.20.77.0/24, title: Marketing}
+  - {name: tk, address: 10.40.0.0/16, title: Tokyo}
+  - {name: tk_ventas, address: 10.40.55.0/24, title: Sales}
+  - {name: tk_ingenieria, address: 10.40.66.0/24, title: Engineering}
+  - {name: tk_marketing, address: 10.40.77.0/24, title: Marketing}
+
+nodes:
+  # --- los dos routers de borde: entre Internet y la red de su sede -----------------
+  - role: rte1
+    type: router
+    stage: 1
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [transito, ny]     # p1 = Internet, p2 = la red de Nueva York
+    address: 203.0.113.1/30
+    configure:
+      addresses:
+        - {network: transito, address: 203.0.113.1/30}
+        - {network: ny, address: 10.20.0.1/28}
+      # Los tres departamentos están detrás de su router: el de borde sólo aprende por
+      # dónde salir. Y la otra sede, por Internet.
+      routes:
+        - {destination: 10.20.55.0/24, gateway: 10.20.0.11}
+        - {destination: 10.20.66.0/24, gateway: 10.20.0.12}
+        - {destination: 10.20.77.0/24, gateway: 10.20.0.13}
+        - {destination: 10.40.0.0/16, gateway: 203.0.113.2}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: rte2
+    type: router
+    stage: 1
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [transito, tk]
+    address: 203.0.113.2/30
+    configure:
+      addresses:
+        - {network: transito, address: 203.0.113.2/30}
+        - {network: tk, address: 10.40.0.1/28}
+      routes:
+        - {destination: 10.40.55.0/24, gateway: 10.40.0.11}
+        - {destination: 10.40.66.0/24, gateway: 10.40.0.12}
+        - {destination: 10.40.77.0/24, gateway: 10.40.0.13}
+        - {destination: 10.20.0.0/16, gateway: 203.0.113.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  # --- el switch de la red de cada sede: aquí se juntan el borde y los tres routers --
+  # Un switch no enruta: conmuta. Lleva la mitad de memoria que un router (128 frente a
+  # 256) y un núcleo, que es el mínimo; el disco ya está en el mínimo de 1 GB en ambos.
+  - role: swc1
+    type: switch
+    stage: 2
+    after: [rte1]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [ny, ny, ny, ny]    # rte1, rta1, rta2, rta3
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: swc2
+    type: switch
+    stage: 2
+    after: [rte2]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [tk, tk, tk, tk]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  # --- los seis routers de departamento: entre la red de la sede y su departamento ---
+  - role: rta1
+    type: router
+    stage: 2
+    after: [swc1]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [ny, ny_ventas]
+    address: 10.20.0.11/28
+    configure:
+      addresses:
+        - {network: ny, address: 10.20.0.11/28}
+        - {network: ny_ventas, address: 10.20.55.1/24}
+      # Todo lo que no es su departamento sale por el router de la sede.
+      routes:
+        - {destination: 0.0.0.0/0, gateway: 10.20.0.1}
+      dhcp_server:
+        - {network: ny_ventas, pool: 10.20.55.100-10.20.55.199, gateway: 10.20.55.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: rta2
+    type: router
+    stage: 2
+    after: [swc1]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [ny, ny_ingenieria]
+    address: 10.20.0.12/28
+    configure:
+      addresses:
+        - {network: ny, address: 10.20.0.12/28}
+        - {network: ny_ingenieria, address: 10.20.66.1/24}
+      routes:
+        - {destination: 0.0.0.0/0, gateway: 10.20.0.1}
+      dhcp_server:
+        - {network: ny_ingenieria, pool: 10.20.66.100-10.20.66.199, gateway: 10.20.66.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: rta3
+    type: router
+    stage: 2
+    after: [swc1]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [ny, ny_marketing]
+    address: 10.20.0.13/28
+    configure:
+      addresses:
+        - {network: ny, address: 10.20.0.13/28}
+        - {network: ny_marketing, address: 10.20.77.1/24}
+      routes:
+        - {destination: 0.0.0.0/0, gateway: 10.20.0.1}
+      dhcp_server:
+        - {network: ny_marketing, pool: 10.20.77.100-10.20.77.199, gateway: 10.20.77.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: rta4
+    type: router
+    stage: 2
+    after: [swc2]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [tk, tk_ventas]
+    address: 10.40.0.11/28
+    configure:
+      addresses:
+        - {network: tk, address: 10.40.0.11/28}
+        - {network: tk_ventas, address: 10.40.55.1/24}
+      routes:
+        - {destination: 0.0.0.0/0, gateway: 10.40.0.1}
+      dhcp_server:
+        - {network: tk_ventas, pool: 10.40.55.100-10.40.55.199, gateway: 10.40.55.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: rta5
+    type: router
+    stage: 2
+    after: [swc2]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [tk, tk_ingenieria]
+    address: 10.40.0.12/28
+    configure:
+      addresses:
+        - {network: tk, address: 10.40.0.12/28}
+        - {network: tk_ingenieria, address: 10.40.66.1/24}
+      routes:
+        - {destination: 0.0.0.0/0, gateway: 10.40.0.1}
+      dhcp_server:
+        - {network: tk_ingenieria, pool: 10.40.66.100-10.40.66.199, gateway: 10.40.66.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: rta6
+    type: router
+    stage: 2
+    after: [swc2]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [tk, tk_marketing]
+    address: 10.40.0.13/28
+    configure:
+      addresses:
+        - {network: tk, address: 10.40.0.13/28}
+        - {network: tk_marketing, address: 10.40.77.1/24}
+      routes:
+        - {destination: 0.0.0.0/0, gateway: 10.40.0.1}
+      dhcp_server:
+        - {network: tk_marketing, pool: 10.40.77.100-10.40.77.199, gateway: 10.40.77.1}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  # --- el switch de cada departamento: es quien conecta los clientes al router ------
+  - role: swa1
+    type: switch
+    stage: 3
+    after: [rta1]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [ny_ventas, ny_ventas, ny_ventas]      # router, wsp1, wsp2
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: swa2
+    type: switch
+    stage: 3
+    after: [rta2]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [ny_ingenieria, ny_ingenieria, ny_ingenieria]   # router, wsp3, svs1
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: swa3
+    type: switch
+    stage: 3
+    after: [rta3]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [ny_marketing, ny_marketing]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: swa4
+    type: switch
+    stage: 3
+    after: [rta4]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [tk_ventas, tk_ventas]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: swa5
+    type: switch
+    stage: 3
+    after: [rta5]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [tk_ingenieria, tk_ingenieria]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: swa6
+    type: switch
+    stage: 3
+    after: [rta6]
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [tk_marketing, tk_marketing]
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  # --- los clientes: piden dirección al router de su departamento -------------------
+  - role: wsp1
+    type: workstation
+    stage: 4
+    after: [swa1]
+    resources: {cores: 1, memory: 128, disk: 2}
+    networks: [ny_ventas]
+    address: dhcp
+
+  - role: wsp2
+    type: workstation
+    stage: 4
+    after: [swa1]
+    resources: {cores: 1, memory: 128, disk: 2}
+    networks: [ny_ventas]
+    address: dhcp
+
+  - role: wsp3
+    type: workstation
+    stage: 4
+    after: [swa2]
+    resources: {cores: 1, memory: 128, disk: 2}
+    networks: [ny_ingenieria]
+    address: dhcp
+
+  - role: svs1                    # el servidor de ingeniería, con dirección propia
+    type: server
+    stage: 4
+    after: [swa2]
+    resources: {cores: 1, memory: 256, disk: 4}
+    networks: [ny_ingenieria]
+    address: 10.20.66.10/24
+
+  - role: wsp4
+    type: workstation
+    stage: 4
+    after: [swa3]
+    resources: {cores: 1, memory: 128, disk: 2}
+    networks: [ny_marketing]
+    address: dhcp
+
+  - role: wsp5
+    type: workstation
+    stage: 4
+    after: [swa4]
+    resources: {cores: 1, memory: 128, disk: 2}
+    networks: [tk_ventas]
+    address: dhcp
+
+  - role: wsp6
+    type: workstation
+    stage: 4
+    after: [swa5]
+    resources: {cores: 1, memory: 128, disk: 2}
+    networks: [tk_ingenieria]
+    address: dhcp
+
+  - role: wsp7
+    type: workstation
+    stage: 4
+    after: [swa6]
+    resources: {cores: 1, memory: 128, disk: 2}
+    networks: [tk_marketing]
+    address: dhcp
+
+links:
+  # Internet: las dos sedes comparten el tramo público, no un cable entre routers.
+  - a: {node: rte1, port: 1}
+    z: {node: rte2, port: 1}
+  # La red de cada sede, con su switch en medio.
+  - a: {node: rte1, port: 2}
+    z: {node: swc1, port: 1}
+  - a: {node: swc1, port: 2}
+    z: {node: rta1, port: 1}
+  - a: {node: swc1, port: 3}
+    z: {node: rta2, port: 1}
+  - a: {node: swc1, port: 4}
+    z: {node: rta3, port: 1}
+  - a: {node: rte2, port: 2}
+    z: {node: swc2, port: 1}
+  - a: {node: swc2, port: 2}
+    z: {node: rta4, port: 1}
+  - a: {node: swc2, port: 3}
+    z: {node: rta5, port: 1}
+  - a: {node: swc2, port: 4}
+    z: {node: rta6, port: 1}
+  # Cada departamento: router, switch de acceso y clientes.
+  - a: {node: rta1, port: 2}
+    z: {node: swa1, port: 1}
+  - a: {node: swa1, port: 2}
+    z: {node: wsp1, port: 1}
+  - a: {node: swa1, port: 3}
+    z: {node: wsp2, port: 1}
+  - a: {node: rta2, port: 2}
+    z: {node: swa2, port: 1}
+  - a: {node: swa2, port: 2}
+    z: {node: wsp3, port: 1}
+  - a: {node: swa2, port: 3}
+    z: {node: svs1, port: 1}
+  - a: {node: rta3, port: 2}
+    z: {node: swa3, port: 1}
+  - a: {node: swa3, port: 2}
+    z: {node: wsp4, port: 1}
+  - a: {node: rta4, port: 2}
+    z: {node: swa4, port: 1}
+  - a: {node: swa4, port: 2}
+    z: {node: wsp5, port: 1}
+  - a: {node: rta5, port: 2}
+    z: {node: swa5, port: 1}
+  - a: {node: swa5, port: 2}
+    z: {node: wsp6, port: 1}
+  - a: {node: rta6, port: 2}
+    z: {node: swa6, port: 1}
+  - a: {node: swa6, port: 2}
+    z: {node: wsp7, port: 1}

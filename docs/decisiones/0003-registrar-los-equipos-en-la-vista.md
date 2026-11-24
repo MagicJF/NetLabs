@@ -70,3 +70,37 @@ cambiara de nombre, cambian `netlabs.yml` y `secrets.yml`, no el motor.
 Un equipo que ya estaba en la vista con otras credenciales **no se arregla solo**: sale en la lista de
 `pendientes` de cada `apply` hasta que alguien lo cambie a mano en la consola de NetXMS. Es a
 propósito —borrarlo para rehacerlo perdería lo recolectado— y está dicho en el propio informe.
+
+## Enmienda: la identidad de un equipo es su nombre, no su dirección
+
+Lo anterior valía mientras la dirección de un equipo no cambiara. **Cambia**, y de la peor
+forma: la dirección de gestión se deriva del vmid (`derive_management`), y el vmid es otro
+cuando el invitado se rehace —destroy + apply, o un huérfano recogido y vuelto a crear—.
+
+Con la identidad atada a la dirección, cada despliegue daba de alta un equipo **nuevo** con
+el nombre de siempre, y el viejo se quedaba en la vista apuntando a la dirección que ahora
+tiene **otra máquina**. Medido en la vista real: el nodo llamado `rta6` apuntaba a
+`10.30.0.116`, que era el switch `swa2` — el sondeo lo delataba solo, con
+`sysName = "swa2"` en la ficha del nodo `rta6`—; había además tres nodos llamados `swa1`.
+Quien abría la terminal desde la consola aterrizaba en otro equipo, y con la credencial
+buena: la sesión funcionaba y mentía.
+
+Corregido así:
+
+- Se busca **por nombre**. Si el equipo con ese nombre no lleva su dirección, se **retira y
+  se vuelve a dar de alta** con la buena. El API de esta versión **no deja corregirla**: ni
+  `PUT` ni `PATCH` la cambian —contestan 200 y la ficha sigue igual, medido—, así que la
+  única vía es retirar y rehacer. Se pierde lo recolectado de ese nodo, que se repuebla en
+  el siguiente sondeo; se gana que la consola lleve al equipo que dice.
+- Las direcciones de gestión de un laboratorio no se reutilizan entre despliegues, así que
+  un nodo con el nombre bueno y una dirección que hoy tiene otro equipo **de este
+  laboratorio** es siempre un resto. Uno con el nombre bueno y una dirección viva de **otro**
+  laboratorio se deja en paz: dos laboratorios pueden tener cada uno su `rte1`.
+- Las retiradas se hacen **todas antes** que las altas: un resto puede estar ocupando la
+  dirección del equipo que hay que dar de alta, y el API contesta 409 a una dirección que
+  ya es de otro nodo (medido).
+
+Sigue en pie lo de las **credenciales**: un equipo que ya está en su sitio con otras
+credenciales no se rehace —se perdería lo recolectado sin ganar nada, porque su dirección
+está bien— y se dice en `pendientes`.
+
