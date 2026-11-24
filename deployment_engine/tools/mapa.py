@@ -150,6 +150,22 @@ def _partir(linea: str, ancho_max: float) -> list:
         return [linea]
     lineas, actual = [], ""
     for palabra in linea.split():
+        if tamano_de_rotulo(palabra)[0] > ancho_max:
+            # Una palabra sola más ancha que el área: se parte por letras. Es feo, pero un
+            # texto que se sale de su caja es peor: deja de decir de qué red es.
+            if actual:
+                lineas.append(actual)
+                actual = ""
+            trozo = ""
+            for letra in palabra:
+                if trozo and tamano_de_rotulo(trozo + letra)[0] > ancho_max:
+                    lineas.append(trozo)
+                    trozo = letra
+                else:
+                    trozo += letra
+            if trozo:
+                lineas.append(trozo)
+            continue
         prueba = f"{actual} {palabra}".strip()
         if actual and tamano_de_rotulo(prueba)[0] > ancho_max:
             lineas.append(actual)
@@ -190,7 +206,7 @@ def candidatos(area: dict, ancho: float, alto: float) -> list:
     pueden quedar debajo de un cable. No se prueba fuera del área: un rótulo que dice de
     qué red es no puede caer en la caja de otra red, porque entonces miente.
     """
-    holgura_x = area["ancho"] - ancho
+    holgura_x = max(0.0, area["ancho"] - ancho)
     if holgura_x >= 2 * ETIQUETA_MARGEN:
         izquierda = area["x"] + ETIQUETA_MARGEN
         derecha = area["x"] + area["ancho"] - ancho - ETIQUETA_MARGEN

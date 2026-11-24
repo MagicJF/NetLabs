@@ -273,6 +273,16 @@ class ElMapaDelLaboratorio(unittest.TestCase):
                 self.assertGreaterEqual(caja["posY"], area["y"], nombre)
                 self.assertLessEqual(caja["posY"] + alto, area["y"] + area["alto"], nombre)
 
+    def test_un_rotulo_mas_ancho_que_su_area_se_parte(self):
+        """Si el texto no cabe a lo ancho, se parte: nunca se sale de su área."""
+        area = {"titulo": "Ventas", "subred": "10.44.1.0 - 10.44.1.255 (/24)",
+                "x": 0.0, "y": 0.0, "ancho": 60.0, "alto": 300.0}
+        textos, ancho, alto = mapa.rotulos_de(area)
+        self.assertLessEqual(ancho, area["ancho"])
+        self.assertGreater(len(textos), 2)
+        for texto in textos:
+            self.assertLessEqual(mapa.tamano_de_rotulo(texto)[0], area["ancho"])
+
     def test_dos_cajas_de_texto_no_se_pisan(self):
         """Los rótulos se esquivan también entre sí: un título encima de otro no se lee.
 
