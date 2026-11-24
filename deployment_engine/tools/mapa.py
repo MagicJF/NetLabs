@@ -138,15 +138,41 @@ def renglones(area: dict) -> list:
     return [f"{area['titulo']} ({prefijo.rstrip(')')})", rango]
 
 
+def _partir(linea: str, ancho_max: float) -> list:
+    """Parte un renglón por sus espacios hasta que quepa en el ancho del área.
+
+    Un rótulo que no cabe se sale de su caja, y una cabecera fuera de su red miente. Se
+    prefiere un renglón más —el bloque de direcciones partido en dos— a un texto que invade
+    la red de al lado. Una palabra sola que no quepa no se puede partir: se deja y se avisa
+    con el ancho que ocupa, que es lo único honesto que se puede hacer sin cambiar la letra.
+    """
+    if tamano_de_rotulo(linea)[0] <= ancho_max:
+        return [linea]
+    lineas, actual = [], ""
+    for palabra in linea.split():
+        prueba = f"{actual} {palabra}".strip()
+        if actual and tamano_de_rotulo(prueba)[0] > ancho_max:
+            lineas.append(actual)
+            actual = palabra
+        else:
+            actual = prueba
+    if actual:
+        lineas.append(actual)
+    return lineas
+
+
 def rotulos_de(area: dict) -> tuple:
     """Los rótulos de un área y lo que ocupan juntos: el nombre y, debajo, su bloque.
 
     Se colocan como un solo bloque —el nombre arriba, el bloque debajo— porque así se leen;
     dos búsquedas por separado acababan con el nombre arriba del área y su bloque al otro
     extremo. Y se busca una sola vez porque lo que ocupa el grupo es lo que hay que
-    esquivar: si el grupo cabe en un hueco, cada renglón cabe dentro del grupo.
+    esquivar: si el grupo cabe en un hueco, cada renglón cabe dentro del grupo. Si un
+    renglón no cabe en el ancho del área, se parte antes de medir: el grupo crece a lo alto,
+    pero no se sale por la derecha.
     """
-    textos = renglones(area)
+    ancho_max = max(1.0, area["ancho"] - 2 * ETIQUETA_MARGEN)
+    textos = [trozo for linea in renglones(area) for trozo in _partir(linea, ancho_max)]
     ancho, alto = tamano_del_grupo(textos)
     return textos, ancho, alto
 

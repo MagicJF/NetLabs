@@ -66,7 +66,7 @@ class ElMapaDelLaboratorio(unittest.TestCase):
         leidos = [json.loads(mapa.texto_de(e))["text"] for e in contenido["elements"]
                   if e["type"] == mapa.ELEMENTO_TEXTO]
         areas = mapa.disposicion(svg)["areas"]
-        esperados = [texto for area in areas for texto in mapa.renglones(area)]
+        esperados = [texto for area in areas for texto in mapa.rotulos_de(area)[0]]
         self.assertEqual(sorted(leidos), sorted(esperados))
         # Cada área enseña su nombre y el bloque de direcciones entero, con su prefijo: era
         # lo que no se leía por culpa de los cables.
@@ -263,11 +263,11 @@ class ElMapaDelLaboratorio(unittest.TestCase):
             objetos = con_vista(lab)
             contenido = mapa.contenido(lab, svg, objetos)
             etiquetas = [e for e in contenido["elements"] if e["type"] == mapa.ELEMENTO_TEXTO]
-            esperadas = [(area, texto) for area in areas for texto in mapa.renglones(area)]
+            esperadas = [(area, texto) for area in areas for texto in mapa.rotulos_de(area)[0]]
             self.assertEqual(len(etiquetas), len(esperadas), nombre)
             for caja, (area, texto) in zip(etiquetas, esperadas):
                 self.assertEqual(json.loads(mapa.texto_de(caja))["text"], texto, nombre)
-                ancho, alto = mapa.rotulos_de(area)[1:]
+                ancho, alto = mapa.tamano_de_rotulo(texto)
                 self.assertGreaterEqual(caja["posX"], area["x"], nombre)
                 self.assertLessEqual(caja["posX"] + ancho, area["x"] + area["ancho"], nombre)
                 self.assertGreaterEqual(caja["posY"], area["y"], nombre)
