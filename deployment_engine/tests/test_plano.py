@@ -342,3 +342,33 @@ class TestConvenciones(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ElPlanoSueltoAlLadoDeLaPagina(unittest.TestCase):
+    """El plano va, además, como fichero `.svg` al lado de la página del laboratorio.
+
+    Los dos salen del mismo dibujo —el que produce `plano.plano(lab, "topologia")`— en la
+    misma pasada de `./netlabs docs`, así que un fichero distinto del dibujo de hoy es un
+    plano viejo, y eso se ve aquí sin abrir la página.
+    """
+
+    def test_el_fichero_de_cada_laboratorio_es_su_plano(self):
+        for nombre in todos_los_laboratorios():
+            fichero = RAIZ / "labs" / nombre / f"{nombre}-topologia.svg"
+            esperado = plano.plano(laboratorio(nombre), "topologia").rstrip("\n") + "\n"
+            self.assertTrue(fichero.exists(), f"{nombre}: no tiene plano suelto")
+            self.assertEqual(fichero.read_text(), esperado, f"{nombre}: plano viejo")
+
+    def test_un_laboratorio_sin_redes_no_tiene_plano_suelto(self):
+        # El de control no declara redes: no hay nada que dibujar, y un `.svg` vacío al
+        # lado sería un fichero que dice que hay un plano que no existe.
+        for carpeta in (RAIZ / "labs").iterdir():
+            if carpeta.name in todos_los_laboratorios():
+                continue
+            self.assertFalse((carpeta / f"{carpeta.name}-topologia.svg").exists())
+
+    def test_el_fichero_lleva_el_mismo_dibujo_que_la_pagina(self):
+        for nombre in todos_los_laboratorios():
+            pagina = (RAIZ / "labs" / nombre / f"{nombre}.md").read_text()
+            dentro = pagina.split("<svg", 1)[1].split("</svg>", 1)[0]
+            fichero = (RAIZ / "labs" / nombre / f"{nombre}-topologia.svg").read_text()
+            self.assertEqual("<svg" + dentro + "</svg>", fichero.rstrip("\n"), nombre)

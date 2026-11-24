@@ -913,7 +913,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     # Los cables: cada uno es un puente tonto entre dos puertos. El nombre lleva la
     # letra del laboratorio y sus dos puntas, así que dos laboratorios con la misma
     # topología no chocan en el mismo hipervisor.
-    cables = _cables(lab) if not control else {"per_port": {}, "links": []}
+    los_cables = cables(lab) if not control else {"per_port": {}, "links": []}
     nodes = []
     effects = []
     steps = []
@@ -921,7 +921,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         if control:
             built = _build_control_node(node, assigned[node["role"]], name, env, mgmt_net)
         else:
-            built = _build_node(node, assigned[node["role"]], name, lab, env, mgmt_net, cables)
+            built = _build_node(node, assigned[node["role"]], name, lab, env, mgmt_net, los_cables)
         nodes.append(built)
         effects.append(
             f"{built['name']:<18} vmid {built['vmid']:<5} "
@@ -954,7 +954,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
 
     # Un puente es un cable: ni dirección, ni puerta, ni MAC. Sólo su nombre y
     # su marca, para que el motor sepa que es suyo y pueda retirarlo.
-    for cable in cables["links"]:
+    for cable in los_cables["links"]:
         bridge = cable["name"]
         comment = f"netlabs lab={name} space={cable['space']} cable={bridge}"
         exists = next((b for b in bridges if b.get("iface") == bridge), None)
@@ -971,7 +971,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     # La otra mitad de la diferencia, también para los cables: un puente que
     # lleva la marca de este laboratorio y ya no se declara es basura suya y se
     # retira. Uno sin marca no se toca: puede ser de otro o del propio hipervisor.
-    declarados = {c["name"] for c in cables["links"]}
+    declarados = {c["name"] for c in los_cables["links"]}
     for bridge in bridges:
         iface = bridge.get("iface")
         if iface in declarados or _lab_from_comment(bridge.get("comments") or "") != name:
@@ -1086,6 +1086,16 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
             "no es la suya: "
             + ", ".join(f"{n['name']} ({n['mgmt_address']})" for n in equipos)
         )
+        # Y el mapa: la vista dibuja su topología sola —cada equipo donde le parece, que
+        # no se parece a nada de lo que dibuja el plano—, así que se le manda uno a
+        # medida, con las áreas del plano y cada equipo donde el plano lo pone. Su paso
+        # es el de al lado y no el mismo: el mapa se escribe después de registrar, porque
+        # un elemento del mapa sin equipo detrás no lo acepta la vista.
+        steps.append({"op": "netxms_mapa"})
+        effects.append(
+            "colocar en lo que observa el sitio el mapa de la red de este laboratorio, "
+            "con cada equipo donde lo pone el plano y las redes del plano entre ellos"
+        )
 
     return {
         "lab": name,
@@ -1109,7 +1119,7 @@ def _endpoint(role: str, port: int) -> str:
     return f"{role}p{port}"
 
 
-def _cables(lab: dict) -> dict:
+def cables(lab: dict) -> dict:
     """Los cables del laboratorio, con su nombre y la red que transportan.
 
     El nombre empieza por la letra del laboratorio y sigue con sus dos puntas, así
@@ -1573,11 +1583,11 @@ def render_docs(lab: dict, env: dict) -> str:
     if lab.get("networks"):
         # El dibujo es código, no una imagen: se ve en el visor de Markdown y se puede
         # leer y comparar como cualquier otra línea del documento.
-        # El plano va escrito aquí dentro, como SVG en texto: no hay fichero que se
-        # pueda quedar viejo ni que haya que regenerar aparte, y el diff del commit
-        # enseña exactamente qué cambió en el dibujo cuando cambia la declaración. Es lo
-        # que declara el README: la carpeta de un laboratorio sólo tiene su `.yml` y su
-        # `.md`, y el dibujo es una parte más de la página.
+        # El plano va escrito aquí dentro, como SVG en texto: se lee y se compara como
+        # cualquier otra línea del documento, y el diff del commit enseña exactamente qué
+        # cambió en el dibujo cuando cambia la declaración. Va además como fichero suelto
+        # (`docs.escribir_plano`), del mismo dibujo y en la misma pasada, para poder
+        # abrirlo y compartirlo por sí solo y para servir de fondo al mapa de la vista.
         import plano  # noqa: PLC0415  (los módulos viven en tools/)
         # Un solo plano. Hubo dos —topología y cableado— y el de cableado lo dibujaba
         # otro motor, plano y antiguo: enseñaba los mismos equipos, los mismos puertos
@@ -1603,8 +1613,8 @@ def render_docs(lab: dict, env: dict) -> str:
             f"{', '.join(f'`{n}`' for n in node['networks'])} | {address} | {res} |"
         )
     lines += ["", "### Cables", "", "| bridge | a | z | network |", "| --- | --- | --- | --- |"]
-    cables = _cables(lab)
-    for cable in cables["links"]:
+    los_cables = cables(lab)
+    for cable in los_cables["links"]:
         lines.append(f"| `{cable['name']}` | `{cable['a']}` | `{cable['z']}` | `{cable['space']}` |")
     areas = sorted({area for node in lab["nodes"] for area in (node.get("configure") or {})})
     if areas:

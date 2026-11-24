@@ -1,0 +1,210 @@
+# PROPÓSITO:   el mapa a medida del laboratorio en lo que observa el sitio. La vista
+#              dibuja su propia topología —cada equipo donde le parece, que no se parece
+#              a nada de lo que dibuja el plano—: aquí se le manda el mapa del plano, con
+#              las áreas como cajas, cada equipo de red donde el plano lo pone (a caballo
+#              de sus redes) y cada cable del laboratorio entre los equipos que une. Así
+#              quien mira la vista ve el mismo dibujo que la documentación.
+# INVARIANTES: se llama con `curl` desde DENTRO del invitado de gestión (su API sólo
+#              escucha ahí) por la puerta de siempre, y va DESPUÉS del registro
+#              (`netxms.yml`): un elemento de mapa sin equipo detrás lo rechaza la vista.
+#              El testigo de la sesión va por la entrada estándar, nunca en la línea de
+#              órdenes, y ninguna respuesta se imprime.
+#              Sólo se escribe la diferencia: si el mapa que hay ya es el que el plano
+#              pide, no se toca —el `PUT` reemplaza el dibujo entero, así que escribir
+#              de más sería perder lo que alguien hubiera ajustado a mano—.
+#              Un equipo del plano que la vista no conozca no se dibuja (ni sus cables) y
+#              se dice en voz alta (`pendientes`) en vez de dibujar un mapa a medias en
+#              silencio.
+# VER:         docs/diseno.md §2.9 (el mapa a medida), §3.6;
+#              docs/decisiones/0004-el-mapa-de-la-vista-lo-coloca-el-plano.md y
+#              docs/decisiones/0005-el-mapa-dice-lo-que-dice-el-yaml.md
+
+# --- dar con el mapa del laboratorio ---------------------------------------
+# La raíz de mapas no se supone: se lee de la vista, que es quien la numera.
+- name: netxms · leer las raíces de la vista
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · leer las raíces de la vista"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_raices_cmd }}"
+
+- name: netxms · las raíces que devolvió la vista
+  ansible.builtin.set_fact:
+    netxms_mapa_raiz: >-
+      {{ interior.stdout | default('[]', true) | from_json
+         | netlabs_netxms_raiz_de_mapas | default('', true) }}
+
+- name: netxms · el API no tiene raíz de mapas
+  ansible.builtin.fail:
+    msg: >-
+      El servicio de gestión ({{ netxms_api }}) no declara su raíz de mapas entre sus
+      objetos de nivel superior: {{ interior.stdout | default('(sin respuesta)', true) | trim }}.
+      Sin ella no hay dónde colgar el mapa del laboratorio.
+  when: netxms_mapa_raiz | int == 0
+
+- name: netxms · leer los mapas que ya tiene la vista
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · leer los mapas de la vista"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_hijos_cmd(netxms_mapa_raiz) }}"
+
+- name: netxms · el mapa de este laboratorio, si ya está
+  ansible.builtin.set_fact:
+    netxms_mapa_id: >-
+      {{ interior.stdout | default('[]', true) | from_json
+         | netlabs_netxms_mapa_de(lab.lab) | default('', true) }}
+
+# El mapa se nombra como el laboratorio: es su dibujo, y así una segunda pasada lo
+# encuentra en vez de dejar una copia por cada despliegue.
+- name: netxms · dar de alta el mapa del laboratorio
+  include_tasks: interior_ssh.yml
+  when: netxms_mapa_id | int == 0
+  vars:
+    interior_descripcion: "netxms · dar de alta el mapa {{ lab.lab }}"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: true
+    interior_secreto: "{{ netxms_testigo }}\n{{ {'class': 'NetworkMap', 'parentId': netxms_mapa_raiz, 'name': lab.lab} | to_json }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_mapa_crear_cmd }}"
+
+- name: netxms · el número del mapa recién dado de alta
+  ansible.builtin.set_fact:
+    netxms_mapa_id: "{{ (interior.stdout | default('{}', true) | from_json).id | default('', true) }}"
+  when: netxms_mapa_id | int == 0
+
+- name: netxms · el mapa del laboratorio no llegó a nacer
+  ansible.builtin.fail:
+    msg: >-
+      La vista no devolvió el número del mapa del laboratorio: no se puede escribir el
+      mapa que pide el plano.
+  when: netxms_mapa_id | int == 0
+
+# --- releer el censo con los equipos ya registrados -------------------------
+# El censo y las fichas se leyeron al registrar los equipos (`netxms.yml`), ANTES de las
+# altas: en el primer `apply` no llevan los equipos recién creados, y el mapa se escribiría
+# sin ellos ni sus cables aunque el registro hubiera ido bien. Se vuelven a leer aquí, ya
+# con los equipos dentro, para que el mapa que pide el plano los incluya.
+- name: netxms · releer el censo con los equipos ya registrados
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · releer el censo de equipos"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_api | netlabs_netxms_censo_cuerpo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_censo_cmd }}"
+
+- name: netxms · el censo, con los equipos ya registrados
+  ansible.builtin.set_fact:
+    netxms_censo: "{{ interior.stdout | default('[]', true) | from_json }}"
+  no_log: true
+
+- name: netxms · los equipos que la vista ya conoce tras las altas
+  ansible.builtin.set_fact:
+    netxms_ids: "{{ equipos | netlabs_netxms_ids(netxms_censo) }}"
+  no_log: true
+
+- name: netxms · releer la ficha de esos equipos
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · releer {{ netxms_ids | length }} ficha(s)"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_ids | netlabs_netxms_fichas_cuerpo(netxms_api) }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_fichas_cmd }}"
+  when: netxms_ids | length > 0
+
+- name: netxms · las fichas, con los equipos ya registrados
+  ansible.builtin.set_fact:
+    netxms_fichas: "{{ (interior.stdout | default('{}', true) | from_json).objects | default([], true) }}"
+  no_log: true
+  when: netxms_ids | length > 0
+
+# --- las interfaces, que son el otro extremo de cada cable ------------------
+# La vista dice el nombre de cada interfaz y la ficha de cada equipo cuáles son suyas.
+# Con esas dos lecturas —el censo y las fichas recién releídos tras las altas, más el
+# censo de interfaces— cada cable del mapa queda atado a la interfaz por la que sale, y
+# no sólo unido a dos iconos.
+- name: netxms · leer las interfaces que la vista conoce
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · leer las interfaces de la vista"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_api | netlabs_netxms_interfaces_cuerpo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_interfaces_cmd }}"
+
+- name: netxms · las interfaces que devolvió la vista
+  ansible.builtin.set_fact:
+    netxms_interfaces: "{{ interior.stdout | default('[]', true) | from_json }}"
+
+# --- escribir el mapa que pide el plano ------------------------------------
+- name: netxms · leer lo que el mapa tiene dibujado
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · leer el mapa {{ lab.lab }}"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_mapa_leer_cmd(netxms_mapa_id) }}"
+
+- name: netxms · el mapa que pide el plano
+  ansible.builtin.set_fact:
+    netxms_mapa_plan: >-
+      {{ lab | netlabs_netxms_mapa_ops(equipos, netxms_censo,
+         interior.stdout | default('{}', true) | from_json, netxms_api, netxms_mapa_id,
+         netxms_fichas | default([], true), netxms_interfaces | default([], true)) }}
+
+- name: netxms · colocar el mapa del laboratorio como el plano
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · {{ netxms_mapa_op.effect }}"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: true
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_mapa_op.cuerpo }}"
+    interior_imprime: false
+    comando: "{{ netxms_mapa_op.cmd }}"
+  loop: "{{ netxms_mapa_plan.ops }}"
+  loop_control: {loop_var: netxms_mapa_op, label: "{{ netxms_mapa_op.effect }}"}
+  no_log: true
+  when: netxms_mapa_plan.ops | length > 0
+
+# Lo que el mapa enseña, para que se pueda comprobar de un vistazo que es el del plano y
+# que sus cables dicen de qué equipo y de qué interfaz sale cada punta.
+- name: netxms · el mapa del laboratorio en la vista
+  ansible.builtin.debug:
+    msg: >-
+      mapa {{ lab.lab }}: {{ netxms_mapa_plan.equipos }} equipos de red, sus
+      {{ netxms_mapa_plan.cables }} cables y {{ netxms_mapa_plan.areas }} áreas, donde
+      los pone el plano, con {{ netxms_mapa_plan.interfaces }} interfaces puestas en sus
+      puntas y {{ netxms_mapa_plan.rotulos }} etiquetas —la ficha de cada equipo con sus
+      patas y sus direcciones, y el nombre y el bloque de cada zona—.{% if
+      netxms_mapa_plan.ops | length == 0 %} Ya está como el plano.{% endif %}
+
+# Un equipo de red que la vista no conozca no se puede dibujar: se dice con su nombre,
+# porque un mapa al que le falta un router sin decirlo es un mapa que miente.
+- name: netxms · equipos del plano que la vista no conoce
+  ansible.builtin.debug:
+    msg: >-
+      fuera del mapa por no estar en la vista: {{ netxms_mapa_plan.pendientes | join(', ') }}.
+      Se registran en el paso anterior; si siguen faltando, la vista los tiene con otras
+      credenciales y hay que rehacerlos a mano.
+  when: netxms_mapa_plan.pendientes | length > 0

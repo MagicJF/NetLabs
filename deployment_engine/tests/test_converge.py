@@ -1217,5 +1217,120 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertEqual(json.loads(converge.netxms_fichas_cuerpo(ids)), {"ids": [5, 7, 9]})
 
 
+class ElMapaAtaCadaCableASuInterfaz(unittest.TestCase):
+    """El otro extremo del cable: la interfaz por la que sale cada punta.
+
+    El censo de la vista no dice de quién es cada interfaz —no trae el padre—, pero la ficha
+    de un equipo trae la lista de sus hijos, que son justo sus interfaces, y el censo de
+    interfaces dice el nombre de cada número. Cruzando las dos lecturas que ya se hacían, el
+    puerto `p3` del plano queda atado a la `ether3` del equipo y no a un cable anónimo.
+    """
+
+    NODOS = [
+        {"role": "rta1", "name": "rta1", "mgmt_address": "10.30.0.101"},
+        {"role": "swc1", "name": "swc1", "mgmt_address": "10.30.0.102"},
+        {"role": "rta9", "name": "rta9", "mgmt_address": "10.30.0.109"},  # no está en la vista
+    ]
+    CENSO = [
+        {"id": 420, "name": "rta1", "ipAddress": {"address": "10.30.0.101"}},
+        {"id": 421, "name": "swc1", "ipAddress": {"address": "10.30.0.102"}},
+    ]
+    FICHAS = [
+        {"id": 420, "class": "Node", "children": [436, 437, 438]},
+        {"id": 421, "class": "Node", "children": [501, 502]},
+    ]
+    INTERFACES = [
+        {"id": 436, "class": "Interface", "name": "lo"},
+        {"id": 437, "class": "Interface", "name": "ether1"},
+        {"id": 438, "class": "Interface", "name": "ether2"},
+        {"id": 501, "class": "Interface", "name": "ether1"},
+        {"id": 502, "class": "Interface", "name": "ether2"},
+        {"id": 999, "class": "Interface", "name": "ether9"},  # de otro laboratorio
+    ]
+
+    def test_cada_equipo_se_queda_con_sus_interfaces_y_no_con_las_de_otro(self):
+        atadas = converge.netxms_interfaces_de(self.NODOS, self.CENSO, self.FICHAS,
+                                               self.INTERFACES)
+        self.assertEqual(atadas, {
+            "rta1": {"ether1": 437, "ether2": 438, "lo": 436},
+            "swc1": {"ether1": 501, "ether2": 502},
+        })
+
+    def test_un_equipo_que_no_esta_en_la_vista_no_ata_nada(self):
+        # Y no se le cuelga la interfaz de otro: `ether9` no es de nadie de este laboratorio.
+        atadas = converge.netxms_interfaces_de(self.NODOS, self.CENSO, self.FICHAS,
+                                               self.INTERFACES)
+        self.assertNotIn("rta9", atadas)
+        self.assertNotIn(999, [n for nombres in atadas.values() for n in nombres.values()])
+
+    def test_sin_las_dos_lecturas_no_se_ata_nada_y_el_mapa_se_dibuja_igual(self):
+        self.assertEqual(converge.netxms_interfaces_de(self.NODOS, self.CENSO, [], []), {})
+        self.assertEqual(json.loads(converge.netxms_interfaces_cuerpo()),
+                         {"class": ["Interface"]})
+        self.assertIn("/objects/search", converge.netxms_interfaces_cmd("http://x/v1")[2])
+
+
+class LaCuentaDelMapa(unittest.TestCase):
+    """Lo que el mapa dice de sí mismo al escribirse: cuántas puntas quedaron atadas.
+
+    El debug del apply presenta ese número como «interfaces puestas en sus puntas». Contar
+    todas las interfaces que la vista le ha descubierto a cada equipo —`lo`, la de gestión,
+    las de puertos cuyos cables no salen en el mapa— diría de más y no diría cuántas puntas
+    quedaron atadas, que es lo que hay que poder comprobar.
+    """
+
+    API = "http://127.0.0.1:8000/v1"
+    NODOS = [
+        {"role": "rte1", "name": "rte1", "type": "router", "mgmt_address": "10.30.0.101",
+         "networks": ["lan1"]},
+        {"role": "rta1", "name": "rta1", "type": "router", "mgmt_address": "10.30.0.102",
+         "networks": ["lan1"]},
+    ]
+    CENSO = [
+        {"id": 100, "name": "rte1", "ipAddress": {"address": "10.30.0.101"}},
+        {"id": 101, "name": "rta1", "ipAddress": {"address": "10.30.0.102"}},
+    ]
+    # Cada equipo tiene su `lo` y su `ether1`: contar las interfaces descubiertas daría
+    # cuatro; sólo dos puntas —una por extremo del único cable— quedan atadas.
+    FICHAS = [
+        {"id": 100, "class": "Node", "children": [1, 2]},
+        {"id": 101, "class": "Node", "children": [3, 4]},
+    ]
+    INTERFACES = [
+        {"id": 1, "class": "Interface", "name": "lo"},
+        {"id": 2, "class": "Interface", "name": "ether1"},
+        {"id": 3, "class": "Interface", "name": "lo"},
+        {"id": 4, "class": "Interface", "name": "ether1"},
+    ]
+    LAB = {
+        "lab": "z_prueba",
+        "networks": [{"name": "lan1", "address": "10.20.0.0/24"}],
+        "nodes": [
+            {"role": "rte1", "name": "rte1", "type": "router", "networks": ["lan1"]},
+            {"role": "rta1", "name": "rta1", "type": "router", "networks": ["lan1"]},
+        ],
+        "links": [{"a": {"node": "rte1", "port": 1}, "z": {"node": "rta1", "port": 1}}],
+    }
+    SVG = ('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300">'
+           '<g data-area="Núcleo" data-x="10" data-y="10" data-ancho="180" data-alto="120" '
+           'data-subred="10.20.0.0/24" data-nube="0"/>'
+           '<g data-rol="rte1" data-x="60.0" data-y="60.0"/>'
+           '<g data-rol="rta1" data-x="120.0" data-y="60.0"/></svg>')
+
+    def test_la_cuenta_suma_las_puntas_atadas_y_no_todas_las_interfaces(self):
+        plan = converge.netxms_mapa_ops(self.LAB, self.NODOS, self.CENSO, None, self.API,
+                                        "7", self.FICHAS, self.INTERFACES, self.SVG)
+        self.assertEqual(plan["equipos"], 2)
+        self.assertEqual(plan["cables"], 1)
+        # Dos puntas atadas —una por extremo—, no las cuatro interfaces descubiertas.
+        self.assertEqual(plan["interfaces"], 2)
+
+    def test_sin_interfaces_descubiertas_la_cuenta_es_cero_y_el_mapa_se_dibuja(self):
+        plan = converge.netxms_mapa_ops(self.LAB, self.NODOS, self.CENSO, None, self.API,
+                                        "7", [], [], self.SVG)
+        self.assertEqual(plan["interfaces"], 0)
+        self.assertEqual(plan["cables"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

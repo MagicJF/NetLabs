@@ -605,7 +605,7 @@ def _servicios(lab: dict, por_red: dict[str, Region]) -> None:
             region = por_red.get(srv.get("network") or "")
             if region is None:
                 continue
-            rango = _rango_corto(srv.get("pool") or "", str(region.cidr))
+            rango = rango_corto(srv.get("pool") or "", str(region.cidr))
             if rango:
                 region.servicios.append(f"dhcp {rango}")
 
@@ -1098,7 +1098,14 @@ def _plano_anidado(lab: dict) -> str:
         ])
 
     for rol_a, puerto_a, rol_z, puerto_z in cables:
-        piezas.append(cable_entre(rol_a, puerto_a, rol_z, puerto_z))
+        # El cable lleva sus dos puntas y sus dos puertos en atributos `data-*`: es lo que
+        # permite al mapa de la vista atar cada cable al puerto del que sale —y nombrarlo
+        # como se llama en el laboratorio— sin recalcular nada por su cuenta.
+        piezas.append(
+            f'<g class="cable" data-a="{_esc(rol_a)}" data-pa="{puerto_a}" '
+            f'data-z="{_esc(rol_z)}" data-pz="{puerto_z}">'
+            f"{cable_entre(rol_a, puerto_a, rol_z, puerto_z)}</g>"
+        )
 
     # La nube no tiene equipos: cada router se asoma a ella con su pata y su puerto.
     for nombre, asomos in nubes.items():
@@ -1452,7 +1459,7 @@ def plano(lab: dict, modo: str = "topologia") -> str:
                 continue
             cidr = next((n["address"] for n in (lab.get("networks") or [])
                          if n.get("name") == red), "")
-            rango = _rango_corto(srv.get("pool") or "", cidr)
+            rango = rango_corto(srv.get("pool") or "", cidr)
             if rango:
                 servicios.setdefault(red, []).append(f"dhcp {rango}")
 
@@ -1620,7 +1627,7 @@ def _etiqueta(cx: float, cy: float, lineas: list[str], clase: str = "equipo",
     return "".join(partes)
 
 
-def _rango_corto(rango: str, cidr: str) -> str:
+def rango_corto(rango: str, cidr: str) -> str:
     """El rango DHCP sin repetir lo que ya dice la subred: `10.44.1.100-199`."""
     desde, _, hasta = str(rango).partition("-")
     prefijo = str(ipaddress.ip_network(cidr, strict=False).network_address).rsplit(".", 1)[0] + "."

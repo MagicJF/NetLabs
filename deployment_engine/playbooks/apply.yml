@@ -257,6 +257,16 @@
              | netlabs_direcciones_vivas(env.management.address_space) }}
       when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
 
+    # --- el mapa del laboratorio en lo que observa el sitio -----------------
+    # Después del registro y no antes: un elemento del mapa se apoya en un equipo que la
+    # vista ya conoce, y el registro es quien los da de alta. El mapa se coloca donde lo
+    # pone el plano (`plano.py`), así que la vista y la documentación enseñan lo mismo.
+    - name: apply · el mapa del laboratorio en lo que observa el sitio
+      include_tasks: ../tasks/netxms_mapa.yml
+      vars:
+        equipos: "{{ plan.nodes | selectattr('management') | list }}"
+      when: plan.steps | selectattr('op', 'equalto', 'netxms_mapa') | list | length > 0
+
     # --- el interior de los nodos de control, por SSH ----------------------
     # Un nodo de control no tiene router ni DHCP: su interior se converge por SSH
     # con la misma puerta que usa el resto del motor. Sólo se escribe la diferencia.

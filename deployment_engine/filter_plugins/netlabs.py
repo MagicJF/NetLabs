@@ -187,4 +187,18 @@ class FilterModule:
                     nodes, encontrados, detalles, api, secrets, vivas=vivas, propias=propias),
             "netlabs_netxms_borrar_cmd": lambda api, id_objeto:
                 converge.netxms_borrar_cmd(api, id_objeto),
+            # El mapa a medida: el del laboratorio, colocado como el plano.
+            "netlabs_netxms_raices_cmd": lambda api: converge.netxms_raices_cmd(api),
+            "netlabs_netxms_hijos_cmd": lambda api, id_objeto:
+                converge.netxms_hijos_cmd(api, id_objeto),
+            "netlabs_netxms_raiz_de_mapas": lambda raices: converge.netxms_raiz_de_mapas(raices),
+            "netlabs_netxms_mapa_de": lambda hijos, nombre: converge.netxms_mapa_de(hijos, nombre),
+            "netlabs_netxms_mapa_crear_cmd": lambda api: converge.netxms_mapa_crear_cmd(api),
+            "netlabs_netxms_mapa_leer_cmd": lambda api, id_mapa:
+                converge.netxms_mapa_leer_cmd(api, id_mapa),
+            "netlabs_netxms_interfaces_cmd": lambda api: converge.netxms_interfaces_cmd(api),
+            "netlabs_netxms_interfaces_cuerpo": lambda api=None: converge.netxms_interfaces_cuerpo(),
+            "netlabs_netxms_mapa_ops": lambda lab, nodes, encontrados, actual, api, id_mapa,
+                fichas=None, interfaces=None: converge.netxms_mapa_ops(
+                    lab, nodes, encontrados, actual, api, id_mapa, fichas, interfaces),
         }
