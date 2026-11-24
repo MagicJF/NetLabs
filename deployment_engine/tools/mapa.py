@@ -597,12 +597,28 @@ def _resumen_elemento_de(mapa: dict) -> list:
     return sorted(_resumen_elemento(e) for e in mapa.get("elements") or [])
 
 
+def _nombre_del_cable(enlace: dict) -> str:
+    """El nombre que el enlace lleva dentro de su configuración: el de su puente.
+
+    El nombre no viaja en `name` —la vista lo dibuja en el centro del enlace y tapa el
+    cable— sino en la configuración, y se lee de ahí: comparar el texto crudo de la
+    configuración haría reescribir el mapa cada vez que la vista reordena sus claves.
+    """
+    crudo = enlace.get("config") or ""
+    try:
+        return str(json.loads(crudo).get("cableName") or "")
+    except (AttributeError, ValueError):
+        return str(crudo)
+
+
 def _resumen_cableado(mapa: dict) -> list:
     """Los cables por lo que dicen: qué equipos unen, por qué interfaz y cómo se llaman.
 
     El número de enlace no entra —lo reparte la vista— pero sí todo lo que se lee en el
     mapa: sin esto, un mapa con los cables anónimos y con las puntas sueltas se daría por
-    bueno y no habría forma de que el nombre del cable llegara a la vista nunca.
+    bueno y no habría forma de que el nombre del cable llegara a la vista nunca. El nombre
+    se compara donde de verdad va —la configuración del enlace—, porque es lo único que
+    hace que un nombre borrado o cambiado en la vista se reponga.
     """
     elementos = mapa.get("elements") or []
     nombre = {}
@@ -626,7 +642,7 @@ def _resumen_cableado(mapa: dict) -> list:
                           str(enlace.get("connectorName1") or "")),
                          (str(otra), int(enlace.get("interface2") or 0),
                           str(enlace.get("connectorName2") or ""))))
-        lazos.add((tuple(puntas), str(enlace.get("name") or "")))
+        lazos.add((tuple(puntas), str(enlace.get("name") or ""), _nombre_del_cable(enlace)))
     return sorted(lazos)
 
 
