@@ -198,7 +198,9 @@
       desde sus {{ netxms_generados_plan.equipos }} equipos de red y los {{ netxms_generados_plan.semillas | length }}
       objetos que la vista les da.{% if netxms_generados_plan.ops | length == 0 %} Ya están dados
       de alta.{% endif %} Los dibuja la vista con lo que los equipos le cuentan: no se les
-      escribe ni una coordenada.
+      escribe ni una coordenada. El de direcciones es un mapa de la red, no de este
+      laboratorio: como la red de gestión es de todos, salen en él también los demás
+      laboratorios y el propio servicio de gestión.
 
 # Lo que el mapa enseña, para que se pueda comprobar de un vistazo que es el del plano y
 # que sus cables dicen de qué equipo y de qué interfaz sale cada punta.
