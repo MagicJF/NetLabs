@@ -193,7 +193,7 @@ class ElMapaDelLaboratorio(unittest.TestCase):
         self.assertEqual(sorted(cuerpo), ["defaultLinkColor", "defaultLinkColorSource",
                                           "defaultLinkRouting", "defaultLinkStyle",
                                           "defaultLinkWidth", "elements", "height",
-                                          "links", "width"])
+                                          "links", "objectDisplayMode", "width"])
         for prohibida in ("filter", "linkScript", "background", "mapType", "layout"):
             self.assertNotIn(prohibida, cuerpo)
         self.assertTrue(all(v is not None for v in cuerpo.values()))
@@ -276,13 +276,15 @@ class ElMapaDelLaboratorio(unittest.TestCase):
             self.assertEqual(len(etiquetas), len(esperadas), nombre)
             for caja, (area, texto) in zip(etiquetas, esperadas):
                 self.assertEqual(json.loads(mapa.texto_de(caja))["text"], texto, nombre)
-                # El rótulo cae dentro del área o, como mucho, justo encima o justo debajo
-                # —lo que ocupa su grupo entero, que es lo que se coloca—.
-                margen = mapa.rotulos_de(area)[2] + 2 * mapa.ETIQUETA_MARGEN
-                self.assertGreaterEqual(caja["posX"], area["x"])
-                self.assertLessEqual(caja["posX"], area["x"] + area["ancho"])
-                self.assertGreaterEqual(caja["posY"], area["y"] - margen)
-                self.assertLessEqual(caja["posY"], area["y"] + area["alto"] + margen)
+                # El rótulo cae dentro del área o, cuando dentro no cabe, pegado a uno de
+                # sus lados: se lee igual y deja de pisar lo que hay dentro.
+                ancho, alto = mapa.rotulos_de(area)[1:]
+                self.assertGreaterEqual(caja["posX"], area["x"] - ancho - mapa.ETIQUETA_MARGEN)
+                self.assertLessEqual(caja["posX"], area["x"] + area["ancho"] + mapa.ETIQUETA_MARGEN)
+                # El grupo se coloca entero; sus renglones caen debajo de su tope.
+                self.assertGreaterEqual(caja["posY"], area["y"] - alto - mapa.ETIQUETA_MARGEN)
+                self.assertLessEqual(caja["posY"],
+                                     area["y"] + area["alto"] + alto + mapa.ETIQUETA_MARGEN)
 
     def test_cada_cable_se_llama_como_en_el_laboratorio_y_dice_sus_dos_puertos(self):
         """El nombre de un cable es el de su puente y sus puntas dicen su puerto.
@@ -306,8 +308,13 @@ class ElMapaDelLaboratorio(unittest.TestCase):
             for enlace, cable in zip(contenido["links"], en_la_vista):
                 una, punta_a = cable["a"]["node"], int(cable["a"]["port"])
                 otra, punta_z = cable["z"]["node"], int(cable["z"]["port"])
-                self.assertEqual(enlace["name"], nombres[una][punta_a], nombre)
-                self.assertEqual(enlace["name"], nombres[otra][punta_z], nombre)
+                # El nombre no se dibuja —la vista lo pone en el centro y tapa el cable—
+                # pero queda informado en la configuración del enlace.
+                self.assertEqual(enlace["name"], "", nombre)
+                self.assertEqual(json.loads(enlace["config"])["cableName"],
+                                 nombres[una][punta_a], nombre)
+                self.assertEqual(json.loads(enlace["config"])["cableName"],
+                                 nombres[otra][punta_z], nombre)
                 self.assertEqual(enlace["connectorName1"], f"p{punta_a}", nombre)
                 self.assertEqual(enlace["connectorName2"], f"p{punta_z}", nombre)
 
@@ -435,38 +442,6 @@ class ElMapaDelLaboratorio(unittest.TestCase):
         self.assertEqual(donde["areas"][0]["subred"], "10.0.0.0/24")
         self.assertEqual(donde["equipos"], {"rte1": (30.0, 30.0)})
         self.assertEqual(donde["cables"], [{"a": "rte1", "pa": 1, "z": "rta1", "pz": 1}])
-
-
-class LosMapasQueDibujaElServidor(unittest.TestCase):
-    """Lo que se le pide a la vista para que dibuje ella: de dónde parte, y nada más.
-
-    De estos mapas no se escribe ni una coordenada —los dibuja el servidor con lo que sus
-    equipos le cuentan—, así que lo único que se comprueba es que la petición lleva lo justo:
-    el laboratorio, el tipo, los equipos de los que arranca y hasta dónde puede mirar.
-    """
-
-    def test_cada_mapa_de_comprobacion_se_nombra_con_su_laboratorio(self):
-        generados = mapa.generados(laboratorio())
-        self.assertEqual([m["nombre"] for m in generados],
-                         ["e_tres_routers · capa 2", "e_tres_routers · direcciones"])
-        self.assertEqual([m["tipo"] for m in generados],
-                         [mapa.MAPA_CAPA_2, mapa.MAPA_DIRECCIONES])
-
-    def test_el_cuerpo_pide_la_semilla_y_el_radio_y_ni_una_coordenada(self):
-        capa_2 = json.loads(mapa.cuerpo_de_generado(laboratorio(), mapa.MAPA_CAPA_2, [7, 3], 6))
-        self.assertEqual(capa_2["class"], "NetworkMap")
-        self.assertEqual(capa_2["parentId"], 6)
-        self.assertEqual(capa_2["mapType"], mapa.MAPA_CAPA_2)
-        self.assertEqual(capa_2["seedObjects"], [7, 3])
-        self.assertEqual(capa_2["discoveryRadius"], mapa.RADIO_GENERADO[mapa.MAPA_CAPA_2])
-        for prohibida in ("elements", "links", "width", "height", "layout"):
-            self.assertNotIn(prohibida, capa_2)
-
-    def test_el_de_direcciones_mira_un_salto_y_el_de_capa_2_no_se_aleja(self):
-        # Medido sobre `e_tres_routers`: con radio 2 el mapa de direcciones se va por la red de
-        # gestión y trae los equipos de los demás laboratorios.
-        self.assertEqual(mapa.RADIO_GENERADO[mapa.MAPA_DIRECCIONES], 1)
-        self.assertLess(mapa.RADIO_GENERADO[mapa.MAPA_CAPA_2], 1)
 
 
 if __name__ == "__main__":

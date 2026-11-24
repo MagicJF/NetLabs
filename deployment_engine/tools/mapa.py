@@ -50,61 +50,6 @@ ELEMENTO_TEXTO = 5         # una caja de texto: un rótulo suelto
 
 TAMANO_EQUIPO = 100        # lado del hueco de un equipo en el mapa, como la vista
 
-# Los mapas que dibuja el servidor. No los dibuja el plano —no se les escribe ni una
-# coordenada—: la vista los compone con lo que sus equipos le cuentan, y por eso no repiten
-# el plano, lo **comprueban**. El de capa 2 enseña por qué puerto dice cada equipo que ve a
-# su vecino; el de direcciones, las redes y las rutas que la vista ha descubierto.
-MAPA_CAPA_2 = 1            # Layer 2 topology (los puertos que los equipos dicen que ven)
-MAPA_DIRECCIONES = 2       # IP topology (las redes y las rutas descubiertas)
-
-DESCRIPCION_GENERADO = {
-    MAPA_CAPA_2: "los puertos por los que cada equipo dice que ve a su vecino",
-    MAPA_DIRECCIONES: "las redes y las rutas que la vista ha descubierto",
-}
-
-# Se nombran colgando del nombre del laboratorio, como su plano, para que una segunda pasada
-# los encuentre en vez de dejar una copia por cada despliegue.
-NOMBRE_GENERADO = {
-    MAPA_CAPA_2: "{lab} · capa 2",
-    MAPA_DIRECCIONES: "{lab} · direcciones",
-}
-
-# Hasta dónde puede mirar cada uno desde los equipos del laboratorio. Medido sobre
-# `e_tres_routers`: el de capa 2 dibuja el laboratorio entero con cualquier radio —el dominio
-# de capa 2 ya lo acota—, y el de direcciones con radio 1 se queda en lo que cuelga de la red
-# de gestión, mientras que con 2 se va a por los demás laboratorios.
-RADIO_GENERADO = {
-    MAPA_CAPA_2: 0,
-    MAPA_DIRECCIONES: 1,
-}
-
-
-def generados(lab: dict) -> list[dict]:
-    """Los mapas de comprobación que le tocan a un laboratorio, en orden."""
-    return [{"tipo": tipo, "nombre": nombre_de_generado(lab, tipo)}
-            for tipo in (MAPA_CAPA_2, MAPA_DIRECCIONES)]
-
-
-def nombre_de_generado(lab: dict, tipo: int) -> str:
-    """Cómo se llama en la vista uno de estos mapas."""
-    return NOMBRE_GENERADO[int(tipo)].format(lab=str(lab.get("lab") or ""))
-
-
-def cuerpo_de_generado(lab: dict, tipo: int, semillas: list, raiz) -> str:
-    """Lo que se le manda a la vista para dar de alta uno de estos mapas.
-
-    Se le dice **de dónde parte** —los equipos del laboratorio, que son la semilla— y hasta
-    dónde puede mirar. El dibujo lo pone él: aquí no viaja ni una coordenada.
-    """
-    return json.dumps({
-        "class": "NetworkMap",
-        "parentId": int(raiz),
-        "name": nombre_de_generado(lab, tipo),
-        "mapType": int(tipo),
-        "seedObjects": [int(s) for s in semillas or []],
-        "discoveryRadius": RADIO_GENERADO[int(tipo)],
-    }, ensure_ascii=False)
-
 # Cómo se ve el mapa. Los colores van en BGR —la vista los guarda así y los lee así— y
 # son de la familia que se lee sobre un fondo claro: la vista pinta el relleno de una caja
 # con el color del adorno muy rebajado y su borde entero, y el borde es lo que se ve.
@@ -114,16 +59,18 @@ AZUL_PIZARRA = 0x573B1F        # rgb(31, 59, 87): el cable, oscuro sobre el gris
 TRAZO_CABLE = 2                # la vista pone 4 por defecto: con 2 el cable tapa menos
 ESTILO_CABLE = 1               # continua, como el plano
 ENRUTADO_CABLE = 1             # recto, como el plano
+ETIQUETA_GRANDE = 2            # la vista llama así a la ficha con nombre, IP y MAC
 
-# Lo que el mapa pide de sí mismo: el color y el trazo de sus cables. Sin esto la vista
-# los dibuja con su criterio —un gris ancho y translúcido que se pierde en el fondo— y no
-# hay forma de pedirlo desde fuera.
+# Lo que el mapa pide de sí mismo: el color y el trazo de sus cables y cómo se ven sus
+# equipos. Sin esto la vista los dibuja con su criterio —un gris ancho y translúcido que se
+# pierde en el fondo, y un icono sin dirección— y no hay forma de pedirlo desde fuera.
 AJUSTES_DEL_MAPA = {
     "defaultLinkColorSource": 0,          # color propio, no el del estado del enlace
     "defaultLinkColor": AZUL_PIZARRA,
     "defaultLinkWidth": TRAZO_CABLE,
     "defaultLinkStyle": ESTILO_CABLE,
     "defaultLinkRouting": ENRUTADO_CABLE,
+    "objectDisplayMode": ETIQUETA_GRANDE,  # nombre e IP junto al icono, no sólo el icono
 }
 
 # Cuánto ocupa un rótulo. La vista mide el texto con la fuente que le digo, así que aquí
@@ -136,7 +83,7 @@ ETIQUETA_ALTO = 24
 ETIQUETA_MARGEN = 10           # aire entre el rótulo y el borde de su área
 ETIQUETA_GUARDA = 6            # de sobra, al comprobar si un cable lo pisa
 ETIQUETA_APOYO = 2             # aire entre el nombre de un área y su bloque, debajo
-CUADRICULA = 5                 # rincones que se prueban por cada lado, si los de fuera fallan
+CUADRICULA = 7                 # rincones que se prueban por cada lado, si los de fuera fallan
 AIRE_FICHA = 16                # aire entre un equipo y el cartel que lo describe
 RADIOS_FICHA = 10              # anillos alrededor de un equipo, si sus cuatro lados están tomados
 VUELTAS_FICHA = 16             # sitios que se prueban en cada anillo
@@ -239,7 +186,12 @@ def candidatos(area: dict, ancho: float, alto: float) -> list:
                           round(arriba + (abajo - arriba) * fila / (CUADRICULA - 1))))
     orden += [(izquierda, abajo), (derecha, abajo), (izquierda, medio_y), (derecha, medio_y),
               (izquierda, max(0.0, area["y"] - alto - ETIQUETA_MARGEN)),
-              (izquierda, area["y"] + area["alto"] + ETIQUETA_MARGEN)]
+              (izquierda, area["y"] + area["alto"] + ETIQUETA_MARGEN),
+              # Fuera del área, pegados a sus lados: cuando dentro no queda un hueco
+              # —una sede apretada, con sus fichas y sus cables— el rótulo se lee igual
+              # de bien al lado de su caja, y deja de pisar lo que hay dentro.
+              (max(0.0, area["x"] - ancho - ETIQUETA_MARGEN), arriba),
+              (area["x"] + area["ancho"] + ETIQUETA_MARGEN, arriba)]
 
     sitios, vistos = [], set()
     for sitio in orden:
@@ -249,21 +201,48 @@ def candidatos(area: dict, ancho: float, alto: float) -> list:
     return sitios
 
 
-def sitio_libre(area: dict, ancho: float, alto: float, cables: list, ocupado: list) -> tuple:
-    """El primer rincón del área donde el rótulo no queda tapado por un cable ni por un equipo.
+def _cuanto_pisa(rectangulo: tuple, cables: list, ocupado: list) -> tuple:
+    """Cuánto estorba un rótulo ahí: cables que lo cruzan y área que le quitan.
+
+    Se ordena por lo que más se nota: un cable que cruza el texto lo vuelve ilegible; un
+    rótulo encima de otro o de una ficha se lee mal, pero se lee. El área compartida se
+    suma para distinguir el sitio que pisa una ficha entera del que sólo roza un borde.
+    """
+    cruces = sum(1 for uno, otro in cables if corta(rectangulo, uno, otro))
+    pisado = 0
+    for x, y, ancho, alto in ocupado:
+        cruce_x = max(0.0, min(rectangulo[0] + rectangulo[2], x + ancho) - max(rectangulo[0], x))
+        cruce_y = max(0.0, min(rectangulo[1] + rectangulo[3], y + alto) - max(rectangulo[1], y))
+        pisado += cruce_x * cruce_y
+    return cruces, int(pisado)
+
+
+def sitio_libre(area: dict, ancho: float, alto: float, cables: list, ocupado: list,
+                lienzo: tuple | None = None) -> tuple:
+    """El rincón del área donde el rótulo no queda tapado por un cable ni por un equipo.
 
     `cables` son los segmentos que dibuja la vista (`((x, y), (x, y))`) y `ocupado` los
-    rectángulos que ya hay puestos. Si no queda ninguno libre se devuelve el primero: un
-    rótulo tapado se ve mal, pero un rótulo fuera de su área no dice nada.
+    rectángulos que ya hay puestos. Si no queda ninguno libre se devuelve el que menos pisa
+    —el que menos cables cruza y menos área ocupada toca—, no el primero: en una sede
+    apretada el primer rincón es justo el que está debajo de una ficha, y devolverlo dejaba
+    los títulos solapados. Los sitios fuera del lienzo se descartan.
     """
-    for x, y in candidatos(area, ancho, alto):
+    sitios = candidatos(area, ancho, alto)
+    if lienzo is not None:
+        ancho_lienzo, alto_lienzo = lienzo
+        sitios = [(x, y) for x, y in sitios
+                  if x >= 0 and y >= 0 and x + ancho <= ancho_lienzo and y + alto <= alto_lienzo]
+    mejor, mejor_pisada = None, None
+    for x, y in sitios:
         rectangulo = (x - ETIQUETA_GUARDA, y - ETIQUETA_GUARDA,
                       ancho + 2 * ETIQUETA_GUARDA, alto + 2 * ETIQUETA_GUARDA)
-        if any(solapan(rectangulo, otro) for otro in ocupado):
-            continue
-        if any(corta(rectangulo, uno, otro) for uno, otro in cables):
-            continue
-        return x, y
+        pisada = _cuanto_pisa(rectangulo, cables, ocupado)
+        if pisada == (0, 0):
+            return x, y
+        if mejor_pisada is None or pisada < mejor_pisada:
+            mejor, mejor_pisada = (x, y), pisada
+    if mejor is not None:
+        return mejor
     return candidatos(area, ancho, alto)[0]
 
 
@@ -487,19 +466,21 @@ def contenido(lab: dict, svg: str, objetos: dict, interfaces: dict | None = None
         if una not in elemento_de or otra not in elemento_de:
             continue
         trazos.append((en_donde[una], en_donde[otra]))
-        # El cable se llama como en el laboratorio —`e_swc1p1_rta1p1`, que es el nombre de su
-        # puente— y cada punta dice su puerto; la interfaz es la que la vista le ha
-        # descubierto al equipo con ese número. Sin ella el cable se dibuja igual, pero no
-        # queda atado a algo que se pueda medir.
+        # El nombre del cable —`e_swc1p1_rta1p1`, el de su puente— no se dibuja en el mapa:
+        # la vista lo pone en el centro del enlace y tapa el cable. Va en la configuración
+        # del enlace, que es donde la vista lo guarda sin enseñarlo. Cada punta sí dice su
+        # puerto y su interfaz, que es lo que se lee: `p1 ether1`.
+        nombre_cable = str(nombres.get(una, {}).get(punta_a) or "")
         enlaces.append({
             "element1": elemento_de[una], "element2": elemento_de[otra],
             "interface1": _interfaz(interfaces, una, punta_a),
             "interface2": _interfaz(interfaces, otra, punta_z),
             "type": 0, "flags": 0,
-            "name": str(nombres.get(una, {}).get(punta_a) or ""),
+            "name": "",
             "connectorName1": _puerto(interfaces, una, punta_a),
             "connectorName2": _puerto(interfaces, otra, punta_z),
-            "colorSource": 0, "color": 0, "colorProvider": "", "config": "",
+            "colorSource": 0, "color": 0, "colorProvider": "",
+            "config": json.dumps({"dciList": [], "cableName": nombre_cable}, ensure_ascii=False),
         })
 
     # Los equipos ocupan su hueco: una ficha encima de uno se leería mal aunque no pasara
@@ -532,7 +513,10 @@ def contenido(lab: dict, svg: str, objetos: dict, interfaces: dict | None = None
     puestos = {}
     for indice, area in sorted(enumerate(donde["areas"]), key=lambda par: par[1]["ancho"] * par[1]["alto"]):
         textos, ancho, alto = rotulos_de(area)
-        x, y = sitio_libre(area, ancho, alto, trazos, ocupado)
+        x, y = sitio_libre(area, ancho, alto, trazos, ocupado, (donde["ancho"], donde["alto"]))
+        # El rótulo también ocupa sitio: sin apuntarlo aquí, el de un área podía caer
+        # encima del de otra —y los títulos se solapaban— porque cada uno sólo esquivaba
+        # los cables y las fichas, no los rótulos ya puestos.
         ocupado.append((x, y, ancho, alto))
         puestos[indice] = (textos, x, y)
 
