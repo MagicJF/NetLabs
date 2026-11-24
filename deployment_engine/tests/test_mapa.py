@@ -67,10 +67,6 @@ class ElMapaDelLaboratorio(unittest.TestCase):
                   if e["type"] == mapa.ELEMENTO_TEXTO]
         areas = mapa.disposicion(svg)["areas"]
         esperados = [texto for area in areas for texto in mapa.renglones(area)]
-        # Y las fichas de los equipos, que también son cajas de texto: ni una de más ni una de
-        # menos, porque una caja huérfana en el mapa es una caja que nadie sabe de quién es.
-        esperados += [texto for node in lab["nodes"] if node["role"] in con_vista(lab)
-                      for texto in mapa.ficha_de(node, lab, {})]
         self.assertEqual(sorted(leidos), sorted(esperados))
         # Cada área enseña su nombre y el bloque de direcciones entero, con su prefijo: era
         # lo que no se leía por culpa de los cables.
@@ -259,32 +255,23 @@ class ElMapaDelLaboratorio(unittest.TestCase):
                                      f"{nombre}: un equipo queda debajo de «{texto}»")
 
     def test_el_rotulo_cae_dentro_del_area_que_rotula(self):
-        """Dentro del área o pegado a ella: en un área diminuta no cabe de otra forma."""
+        """El rótulo de un área cae siempre dentro de su área: nunca en la de al lado."""
         for nombre in todos_los_laboratorios():
             lab = laboratorio(nombre)
             svg = plano.plano(lab, "topologia")
             areas = mapa.disposicion(svg)["areas"]
             objetos = con_vista(lab)
             contenido = mapa.contenido(lab, svg, objetos)
-            cajas = [e for e in contenido["elements"] if e["type"] == mapa.ELEMENTO_TEXTO]
-            # Los rótulos de las áreas se colocan y se escriben después de las fichas, en el
-            # mismo orden en que están las áreas: quitando las fichas de delante, quedan ellos.
-            cuantas_fichas = len([t for node in lab["nodes"] if node["role"] in objetos
-                                  for t in mapa.ficha_de(node, lab, {})])
-            etiquetas = cajas[cuantas_fichas:]
+            etiquetas = [e for e in contenido["elements"] if e["type"] == mapa.ELEMENTO_TEXTO]
             esperadas = [(area, texto) for area in areas for texto in mapa.renglones(area)]
             self.assertEqual(len(etiquetas), len(esperadas), nombre)
             for caja, (area, texto) in zip(etiquetas, esperadas):
                 self.assertEqual(json.loads(mapa.texto_de(caja))["text"], texto, nombre)
-                # El rótulo cae dentro del área o, cuando dentro no cabe, pegado a uno de
-                # sus lados: se lee igual y deja de pisar lo que hay dentro.
                 ancho, alto = mapa.rotulos_de(area)[1:]
-                self.assertGreaterEqual(caja["posX"], area["x"] - ancho - mapa.ETIQUETA_MARGEN)
-                self.assertLessEqual(caja["posX"], area["x"] + area["ancho"] + mapa.ETIQUETA_MARGEN)
-                # El grupo se coloca entero; sus renglones caen debajo de su tope.
-                self.assertGreaterEqual(caja["posY"], area["y"] - alto - mapa.ETIQUETA_MARGEN)
-                self.assertLessEqual(caja["posY"],
-                                     area["y"] + area["alto"] + alto + mapa.ETIQUETA_MARGEN)
+                self.assertGreaterEqual(caja["posX"], area["x"], nombre)
+                self.assertLessEqual(caja["posX"] + ancho, area["x"] + area["ancho"], nombre)
+                self.assertGreaterEqual(caja["posY"], area["y"], nombre)
+                self.assertLessEqual(caja["posY"] + alto, area["y"] + area["alto"], nombre)
 
     def test_dos_cajas_de_texto_no_se_pisan(self):
         """Los rótulos se esquivan también entre sí: un título encima de otro no se lee.
@@ -293,7 +280,7 @@ class ElMapaDelLaboratorio(unittest.TestCase):
         rótulos: el título del laboratorio caía sobre el de una sede y ninguna prueba lo
         veía, porque todas comparaban texto contra cable o contra equipo, nunca caja de
         texto contra caja de texto. Se comparan aquí todas entre sí —los títulos de las
-        áreas y las fichas de los equipos— sobre todos los laboratorios del repositorio.
+        áreas— sobre todos los laboratorios del repositorio.
         """
         for nombre in todos_los_laboratorios():
             lab = laboratorio(nombre)
@@ -402,29 +389,8 @@ class ElMapaDelLaboratorio(unittest.TestCase):
             enlace["config"] = json.dumps(dict(reversed(list(dentro.items()))), ensure_ascii=False)
         self.assertTrue(mapa.esta_al_dia(vuelta, contenido))
 
-    def test_cada_equipo_lleva_su_ficha_con_sus_patas_su_interfaz_y_su_red(self):
-        """Lo que el YML declara de un equipo va al mapa: sus patas, sus redes y sus direcciones."""
-        lab = laboratorio()
-        svg = plano.plano(lab, "topologia")
-        objetos = con_vista(lab)
-        interfaces = {rol: {f"ether{n}": 900 + n for n in range(1, 9)} for rol in objetos}
-        contenido = mapa.contenido(lab, svg, objetos, interfaces)
-        textos = [json.loads(mapa.texto_de(c))["text"] for c in contenido["elements"]
-                  if c["type"] == mapa.ELEMENTO_TEXTO]
-        for node in lab["nodes"]:
-            if node["role"] not in objetos:
-                continue
-            cuantas = len(node["networks"])
-            patas = " · ".join(f"p{n} ether{n}" for n in range(1, cuantas + 1))
-            self.assertIn(f"{node['role']} · {cuantas} pata{'' if cuantas == 1 else 's'}: {patas}",
-                          textos, node["role"])
-            for dicha in (node.get("configure") or {}).get("addresses") or []:
-                self.assertIn(dicha["address"], " · ".join(textos), node["role"])
-            for srv in (node.get("configure") or {}).get("dhcp_server") or []:
-                self.assertTrue(any(t.startswith("reparte dhcp ") for t in textos), node["role"])
-
     def test_la_punta_del_cable_dice_la_interfaz_por_la_que_sale(self):
-        """El nombre de la interfaz viaja en la punta: la ficha no lo repite, y ahí se lee."""
+        """El nombre de la interfaz viaja en la punta del cable, y ahí se lee."""
         lab = laboratorio()
         svg = plano.plano(lab, "topologia")
         objetos = con_vista(lab)

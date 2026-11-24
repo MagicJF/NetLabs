@@ -364,11 +364,13 @@ a un lado y a otro. Así que el motor **le manda un mapa hecho a medida**, con e
 que la documentación:
 
 - las **áreas** del plano, como cajas de grupo; su nombre y su bloque de direcciones van en **cajas
-  de texto** colocadas donde no pase ningún cable —la vista pega el rótulo de una caja arriba a la
-  izquierda, que es justo por donde entra el cable que baja del núcleo, y lo tapa—;
+  de texto** colocadas **dentro de su propia área**, arriba a la izquierda como las cabeceras del
+  plano, apartándose sólo lo justo para no pisar un cable o un equipo: un rótulo que dice de qué
+  red es no puede caer en la caja de otra red;
 - cada **equipo de red** del laboratorio donde el plano lo pone —el router en la frontera de
-  las redes que une, el switch del núcleo en el centro—, con su **ficha** al lado: su papel, sus
-  patas con la interfaz y la dirección de cada una y el rango que reparte si reparte DHCP;
+  las redes que une, el switch del núcleo en el centro—, con la **etiqueta grande** de la vista:
+  nombre e IP, sin cartel de patas ni de reparto, que no aportaba y se comía el sitio de las
+  cabeceras;
 - cada **cable** del laboratorio, entre los dos equipos que une, con el **puerto y la interfaz de
   cada punta** (`p1 ether1`), atados a la interfaz de la vista por la que de verdad sale, y los
   **ajustes** que dicen cómo se dibujan: color propio y trazo fino, porque el gris ancho que pone
@@ -379,7 +381,7 @@ que la documentación:
 El dibujo **no se escribe a mano y lo que dice tampoco**: la geometría se lee del propio plano
 (`plano.py` escribe la posición de cada cosa en atributos `data-*` del SVG) —así el mapa de la
 vista y el plano de la documentación **no pueden discrepar**: son el mismo dibujo—, y los nombres,
-puertos, interfaces y fichas salen del **YML** y viajan con esos mismos atributos. El mapa se
+puertos e interfaces salen del **YML** y viajan con esos mismos atributos. El mapa se
 nombra como el laboratorio, y se escribe **sólo si no es ya el que el plano pide** —escribirlo de
 más sería perder cualquier ajuste hecho a mano, porque el API lo reemplaza entero—.
 
