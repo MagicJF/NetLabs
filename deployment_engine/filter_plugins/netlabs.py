@@ -202,6 +202,8 @@ class FilterModule:
                 fichas=None, interfaces=None: converge.netxms_mapa_ops(
                     lab, nodes, encontrados, actual, api, id_mapa, fichas, interfaces),
             "netlabs_netxms_generados_ops": lambda lab, nodes, encontrados, raiz, hijos, api,
-                rehacer=False: converge.netxms_generados_ops(
-                    lab, nodes, encontrados, raiz, hijos, api, rehacer),
+                rehacer=False, guardadas=None: converge.netxms_generados_ops(
+                    lab, nodes, encontrados, raiz, hijos, api, rehacer, guardadas),
+            "netlabs_netxms_generados_ya": lambda lab, hijos:
+                converge.netxms_generados_ya(lab, hijos),
         }

@@ -1559,8 +1559,25 @@ def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: di
     }
 
 
+def netxms_generados_ya(lab: dict, hijos: list | None) -> list[dict]:
+    """Los mapas de comprobación del laboratorio que la vista ya tiene, con su número.
+
+    Sólo interesan los que existen: de un mapa que aún no está no hay semillas que comparar
+    —se da de alta—, y los de otro laboratorio no son de este. Se listan para leer de cada
+    uno las semillas con las que se dio de alta (su `/map`), que es lo único que dice si el
+    mapa parte de los equipos de ahora o de los de antes de rehacerlos.
+    """
+    por_nombre = {str(objeto.get("name") or ""): int(objeto["id"]) for objeto in hijos or []
+                  if str(objeto.get("class") or "") == NETXMS_CLASE_MAPA
+                  and objeto.get("id") is not None}
+    return [{"nombre": str(generado["nombre"]),
+             "id": por_nombre[str(generado["nombre"])]}
+            for generado in mapa.generados(lab) if str(generado["nombre"]) in por_nombre]
+
+
 def netxms_generados_ops(lab: dict, nodes: list[dict], censo: list | None, raiz,
-                         hijos: list | None, api: str, rehacer: bool = False) -> dict:
+                         hijos: list | None, api: str, rehacer: bool = False,
+                         guardadas: dict | None = None) -> dict:
     """Lo que hay que escribir para que la vista tenga sus mapas de comprobación.
 
     El mapa del laboratorio lo dibuja el plano; estos los dibuja el servidor con lo que sus
@@ -1570,15 +1587,25 @@ def netxms_generados_ops(lab: dict, nodes: list[dict], censo: list | None, raiz,
 
     `rehacer` dice si esta pasada ha tocado el registro de equipos: el número de un equipo
     cambia cuando el invitado se rehace, y un mapa que parte de los equipos de ayer enseña
-    equipos de ayer. Es lo único que no se puede preguntar al mapa sin leerlo entero, y el
-    registro ya lo sabe. Si el equipo no se ha tocado, no se toca el mapa: eso es lo que hace
+    equipos de ayer. Si el equipo no se ha tocado, no se toca el mapa: eso es lo que hace
     que una segunda pasada no escriba.
+
+    `guardadas` son las semillas que cada mapa ya tiene en la vista, por nombre, leídas de su
+    propio `/map` (`netxms_mapa_leer_cmd`). El registro de una pasada y el mapa de la misma
+    pueden separarse: un `apply` completa el registro y falla antes de llegar aquí, y el
+    reintento ya no escribe equipos —`rehacer` queda en falso— pero los mapas siguen partiendo
+    de los números de antes de rehacer. Comparar sus semillas con las de ahora es lo que hace
+    que ese reintento también los repare. Un mapa del que no se leyeron las semillas se deja
+    como estaba salvo que `rehacer` lo pida: no se rehace por no saber, que eso escribiría en
+    cada pasada.
     """
     equipos, faltan = netxms_objetos_de(nodes, censo)
     semillas = sorted(int(i) for i in equipos.values())
     por_nombre = {str(objeto.get("name") or ""): int(objeto["id"]) for objeto in hijos or []
                   if str(objeto.get("class") or "") == NETXMS_CLASE_MAPA
                   and objeto.get("id") is not None}
+    guardadas = {str(clave): sorted(int(s) for s in (valor or []))
+                 for clave, valor in (guardadas or {}).items()}
     ops: list[dict] = []
     al_dia: list[str] = []
     rehechos: list[str] = []
@@ -1593,7 +1620,11 @@ def netxms_generados_ops(lab: dict, nodes: list[dict], censo: list | None, raiz,
         if nombre not in por_nombre:
             ops.append(alta)
             continue
-        if not rehacer:
+        # El mapa ya está. Se rehace si esta pasada ha tocado el registro, o si sus semillas
+        # no son las de ahora: un mapa que parte de los equipos de ayer sigue pareciendo al
+        # día por el nombre, y sólo sus semillas lo delatan.
+        sin_leer = nombre not in guardadas
+        if not rehacer and (sin_leer or guardadas[nombre] == semillas):
             al_dia.append(nombre)
             continue
         ops.append({

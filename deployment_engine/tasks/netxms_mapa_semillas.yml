@@ -1,0 +1,27 @@
+# PROPÓSITO:   leer las semillas que ya tiene un mapa de comprobación en lo que observa el
+#              sitio. Es lo único que dice si el mapa parte de los equipos de ahora o de los
+#              de antes de rehacerlos: el nombre no cambia, las semillas sí.
+# INVARIANTES: las semillas se leen del propio `/map` del mapa —es donde el API las guarda—
+#              y se acumulan por nombre en `netxms_semillas_guardadas`, que el que llama
+#              recorre con un bucle y por eso no se inicializa aquí. Una lectura no cambia
+#              nada. El testigo de la sesión va por la entrada estándar y no se imprime.
+# VER:         docs/diseno.md §3.4; docs/decisiones/0006
+
+- name: netxms · leer las semillas guardadas de «{{ netxms_generado_ya.nombre }}»
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · semillas de «{{ netxms_generado_ya.nombre }}»"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_mapa_leer_cmd(netxms_generado_ya.id) }}"
+
+- name: netxms · las semillas guardadas de «{{ netxms_generado_ya.nombre }}»
+  ansible.builtin.set_fact:
+    netxms_semillas_guardadas: >-
+      {{ (netxms_semillas_guardadas | default({}, true)) | combine({
+         netxms_generado_ya.nombre:
+         ((interior.stdout | default('{}', true) | from_json).seedObjects | default([], true))
+         | map('int') | list | sort }) }}
