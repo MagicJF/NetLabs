@@ -23,13 +23,20 @@
 #              y cada cable su **nombre y sus dos puertos**, tal y como se llaman en el
 #              laboratorio: lo que el YML declara viaja al mapa en vez de quedarse en el
 #              fichero, y el cable queda atado a la interfaz de la que de verdad sale.
+# LÍMITES:     el dibujo es el del plano, con su lienzo y sus posiciones: este módulo no
+#              recalcula geometría ni inventa áreas, y lo que no cabe —un rótulo, una
+#              ficha— se busca sitio hasta el tope de sus anillos y, agotado, se devuelve
+#              el menos malo en vez de moverse a otro sitio. Reconoce interfaces por su
+#              nombre (`ether<N>`) y equipos por su rol: un equipo cuya interfaz no siga
+#              esa convención se dibuja igual pero sin atar, y uno que la vista no conozca
+#              no se dibuja. Nada de aquí habla con el API, escribe ni espera.
 # VER:         docs/diseno.md §3.4 (el mapa a medida);
 #              docs/decisiones/0004-el-mapa-de-la-vista-lo-coloca-el-plano.md y
 #              docs/decisiones/0005-el-mapa-dice-lo-que-dice-el-yaml.md
 
 import json
 import math
-import re
+import xml.etree.ElementTree as ET
 
 import plano                    # el mismo plano del que sale la geometría, y sus rangos
 from identity import cables     # el nombre de un cable se deriva en un solo sitio
@@ -140,32 +147,35 @@ def disposicion(svg: str) -> dict:
 
     Se lee de los atributos `data-*` que el propio plano lleva —los mismos que usan las
     pruebas del dibujo—, así que el mapa no puede colocarse en un sitio distinto del que
-    el plano enseña.
+    el plano enseña. El SVG se lee con el lector XML de la biblioteca estándar y no con
+    expresiones, porque el plano escapa al escribir —un rótulo «Ventas & almacén» viaja
+    como `Ventas &amp; almacén`— y el lector XML devuelve el texto tal cual, que es lo que
+    tiene que leerse en la vista; copiar el atributo crudo enseñaría el escape.
     """
-    lienzo = re.search(r'<svg[^>]*width="([\d.]+)"[^>]*height="([\d.]+)"', svg)
-    if lienzo is None:
+    raiz = ET.fromstring(svg)
+    ancho, alto = raiz.get("width"), raiz.get("height")
+    if ancho is None or alto is None:
         raise ValueError("el plano no declara su tamaño: no hay mapa que colocar")
-    areas = []
-    for etiqueta in re.finditer(r"<g data-area=\"([^\"]*)\"([^>]*)/>", svg):
-        atributos = dict(re.findall(r'data-([a-z]+)="([^"]*)"', etiqueta.group(2)))
-        areas.append({
-            "titulo": etiqueta.group(1),
-            "subred": atributos.get("subred", ""),
-            "x": float(atributos["x"]),
-            "y": float(atributos["y"]),
-            "ancho": float(atributos["ancho"]),
-            "alto": float(atributos["alto"]),
-            "nube": atributos.get("nube") == "1",
-        })
-    equipos = {}
-    for etiqueta in re.finditer(r'<g data-rol="([^"]+)" data-x="([\d.]+)" data-y="([\d.]+)"', svg):
-        equipos[etiqueta.group(1)] = (float(etiqueta.group(2)), float(etiqueta.group(3)))
-    cables_del_plano = []
-    for etiqueta in re.finditer(r'<g class="cable" data-a="([^"]*)" data-pa="(\d+)" '
-                                r'data-z="([^"]*)" data-pz="(\d+)"', svg):
-        cables_del_plano.append({"a": etiqueta.group(1), "pa": int(etiqueta.group(2)),
-                                 "z": etiqueta.group(3), "pz": int(etiqueta.group(4))})
-    return {"ancho": float(lienzo.group(1)), "alto": float(lienzo.group(2)),
+    areas, equipos, cables_del_plano = [], {}, []
+    for grupo in raiz.iter():
+        atributos = grupo.attrib
+        if "data-area" in atributos:
+            areas.append({
+                "titulo": atributos["data-area"],
+                "subred": atributos.get("data-subred", ""),
+                "x": float(atributos["data-x"]),
+                "y": float(atributos["data-y"]),
+                "ancho": float(atributos["data-ancho"]),
+                "alto": float(atributos["data-alto"]),
+                "nube": atributos.get("data-nube") == "1",
+            })
+        elif "data-rol" in atributos:
+            equipos[atributos["data-rol"]] = (float(atributos["data-x"]),
+                                              float(atributos["data-y"]))
+        elif atributos.get("class") == "cable" and "data-a" in atributos:
+            cables_del_plano.append({"a": atributos["data-a"], "pa": int(atributos["data-pa"]),
+                                     "z": atributos["data-z"], "pz": int(atributos["data-pz"])})
+    return {"ancho": float(ancho), "alto": float(alto),
             "areas": areas, "equipos": equipos, "cables": cables_del_plano}
 
 

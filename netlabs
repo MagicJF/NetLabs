@@ -128,7 +128,6 @@ class Reenvios:
             proceso = self._abrir_uno(local, destino)
             if proceso is None:
                 continue
-            self.procesos.append(proceso)
             self.puertos.append(local)
 
     def _abrir_de_una_vez(self, destinos: list[tuple[int, dict]]) -> bool:
@@ -143,8 +142,13 @@ class Reenvios:
         for _intento in range(3):
             proceso = subprocess.Popen(orden, stdout=subprocess.DEVNULL,
                                        stderr=subprocess.PIPE, text=True)
+            # Se apunta al nacer, no al confirmar la escucha: `_esperar_puerto` puede
+            # tardar y, si algo interrumpe el `apply` —un Ctrl-C, el tope—, el `finally`
+            # de `cerrar` no vería este proceso y el reenvío quedaría abierto para
+            # siempre. Un proceso terminado en la lista no estorba: `terminate` sobre él
+            # no hace nada y `wait` vuelve en el acto.
+            self.procesos.append(proceso)
             if all(_esperar_puerto(local, 6.0) for local, _ in destinos):
-                self.procesos.append(proceso)
                 return True
             proceso.terminate()
             try:
@@ -181,6 +185,10 @@ class Reenvios:
                  "-N", "-L", f"{local}:{destino['address']}:80", "root@127.0.0.1"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
             )
+            # Apuntado al nacer por la misma razón que en `_abrir_de_una_vez`: entre el
+            # `Popen` y la confirmación de la escucha hay una espera, y una interrupción
+            # ahí dejaba el reenvío fuera de la lista de los que `cerrar` cierra.
+            self.procesos.append(proceso)
             if _esperar_puerto(local):
                 return proceso
             proceso.terminate()
@@ -258,7 +266,8 @@ def verbo_plan(lab: str) -> int:
 def verbo_apply(lab: str) -> int:
     env = entorno()
     log = log_de("apply", lab)
-    plan = plan_json(lab, log_de("plan", lab))
+    log_plan = log_de("plan", lab)
+    plan = plan_json(lab, log_plan)
     if plan is None:
         print("el plan no salió: no se aplica nada.")
         return 1
@@ -274,7 +283,10 @@ def verbo_apply(lab: str) -> int:
         if faltan:
             print(f"no hay camino hacia la red de gestión en "
                   f"{', '.join(str(p) for p in faltan)}: no se aplica nada.")
-            print(f"\ninforme: {log.relative_to(RAIZ)}")
+            # El informe del plan sí existe y dice qué se pensaba hacer; el del apply
+            # no, porque `apply.yml` no llegó a correr, y anunciarlo mandaba a un
+            # fichero que no está.
+            print(f"\ninforme del plan: {log_plan.relative_to(RAIZ)}")
             return 1
         codigo = ansible("apply.yml", {"netlabs_lab": lab}, log)
     finally:

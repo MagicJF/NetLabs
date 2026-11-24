@@ -92,10 +92,55 @@
       mapa que pide el plano.
   when: netxms_mapa_id | int == 0
 
+# --- releer el censo con los equipos ya registrados -------------------------
+# El censo y las fichas se leyeron al registrar los equipos (`netxms.yml`), ANTES de las
+# altas: en el primer `apply` no llevan los equipos recién creados, y el mapa se escribiría
+# sin ellos ni sus cables aunque el registro hubiera ido bien. Se vuelven a leer aquí, ya
+# con los equipos dentro, para que el mapa que pide el plano los incluya.
+- name: netxms · releer el censo con los equipos ya registrados
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · releer el censo de equipos"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_api | netlabs_netxms_censo_cuerpo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_censo_cmd }}"
+
+- name: netxms · el censo, con los equipos ya registrados
+  ansible.builtin.set_fact:
+    netxms_censo: "{{ interior.stdout | default('[]', true) | from_json }}"
+  no_log: true
+
+- name: netxms · los equipos que la vista ya conoce tras las altas
+  ansible.builtin.set_fact:
+    netxms_ids: "{{ equipos | netlabs_netxms_ids(netxms_censo) }}"
+  no_log: true
+
+- name: netxms · releer la ficha de esos equipos
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · releer {{ netxms_ids | length }} ficha(s)"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_ids | netlabs_netxms_fichas_cuerpo(netxms_api) }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_fichas_cmd }}"
+  when: netxms_ids | length > 0
+
+- name: netxms · las fichas, con los equipos ya registrados
+  ansible.builtin.set_fact:
+    netxms_fichas: "{{ (interior.stdout | default('{}', true) | from_json).objects | default([], true) }}"
+  no_log: true
+  when: netxms_ids | length > 0
+
 # --- las interfaces, que son el otro extremo de cada cable ------------------
 # La vista dice el nombre de cada interfaz y la ficha de cada equipo cuáles son suyas.
-# Con esas dos lecturas —que ya se hicieron para registrar los equipos— cada cable del
-# mapa queda atado a la interfaz por la que sale, y no sólo unido a dos iconos.
+# Con esas dos lecturas —el censo y las fichas recién releídos tras las altas, más el
+# censo de interfaces— cada cable del mapa queda atado a la interfaz por la que sale, y
+# no sólo unido a dos iconos.
 - name: netxms · leer las interfaces que la vista conoce
   include_tasks: interior_ssh.yml
   vars:

@@ -48,7 +48,7 @@
 # esa diferencia justo cuando existe.
 - name: "leer el config de cada invitado"
   include_tasks: ../tasks/guest_config.yml
-  loop: "{{ world.guests }}"
+  loop: "{{ world.invitados }}"
   loop_control: {label: "{{ item.name }}"}
   vars:
     invitado: "{{ item }}"

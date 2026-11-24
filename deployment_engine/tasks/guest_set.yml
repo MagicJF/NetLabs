@@ -41,27 +41,59 @@
     pve_do: "parar {{ cambio.name }} ({{ cambio.vmid }})"
   when: estaba_en_marcha | bool
 
-- include_tasks: pve.yml
-  vars:
-    pve_method: PUT
-    pve_path: "/nodes/{{ env.proxmox.node }}/{{ cambio.type }}/{{ cambio.vmid }}/config"
-    pve_body:
-      cores: "{{ cambio.cores }}"
-      memory: "{{ cambio.memory }}"
-    pve_do: "escribir en {{ cambio.name }} {{ cambio.cores }} core(s) y {{ cambio.memory }} MB"
-    pve_status: [200]
+- name: "PVE · escribir los recursos de {{ cambio.name }} y devolverlo a la vida"
+  block:
+    - include_tasks: pve.yml
+      vars:
+        pve_method: PUT
+        pve_path: "/nodes/{{ env.proxmox.node }}/{{ cambio.type }}/{{ cambio.vmid }}/config"
+        pve_body:
+          cores: "{{ cambio.cores }}"
+          memory: "{{ cambio.memory }}"
+        pve_do: "escribir en {{ cambio.name }} {{ cambio.cores }} core(s) y {{ cambio.memory }} MB"
+        pve_status: [200]
 
-- name: "PVE · devolver a {{ cambio.name }} a la vida"
-  include_tasks: pve.yml
-  vars:
-    pve_method: POST
-    pve_path: "/nodes/{{ env.proxmox.node }}/{{ cambio.type }}/{{ cambio.vmid }}/status/start"
-    pve_do: "arrancar {{ cambio.name }} ({{ cambio.vmid }}) con sus recursos nuevos"
-    pve_status: [200]
-  when: estaba_en_marcha | bool
+    - name: "PVE · devolver a {{ cambio.name }} a la vida"
+      include_tasks: pve.yml
+      vars:
+        pve_method: POST
+        pve_path: "/nodes/{{ env.proxmox.node }}/{{ cambio.type }}/{{ cambio.vmid }}/status/start"
+        pve_do: "arrancar {{ cambio.name }} ({{ cambio.vmid }}) con sus recursos nuevos"
+        pve_status: [200]
+      when: estaba_en_marcha | bool
 
-- include_tasks: wait_task.yml
-  vars:
-    upid: "{{ pve_r.json.data }}"
-    pve_do: "arrancar {{ cambio.name }} ({{ cambio.vmid }})"
-  when: estaba_en_marcha | bool
+    - include_tasks: wait_task.yml
+      vars:
+        upid: "{{ pve_r.json.data }}"
+        pve_do: "arrancar {{ cambio.name }} ({{ cambio.vmid }})"
+      when: estaba_en_marcha | bool
+  rescue:
+    # El PUT o el arranque fallaron con el invitado parado: dejarlo así lo apaga hasta
+    # que alguien mire, y un fallo del motor no puede costar el servicio del invitado.
+    # Se devuelve a la vida si estaba en marcha —con la config que tenga, que es lo que
+    # había— y se vuelve a fallar: el error no se esconde, pero el equipo sigue arriba.
+    - name: "PVE · recuperar la marcha de {{ cambio.name }} tras el fallo"
+      include_tasks: pve.yml
+      vars:
+        pve_method: POST
+        pve_path: "/nodes/{{ env.proxmox.node }}/{{ cambio.type }}/{{ cambio.vmid }}/status/start"
+        pve_do: "arrancar {{ cambio.name }} ({{ cambio.vmid }}) tras el fallo"
+        pve_status: [200]
+      when: estaba_en_marcha | bool
+
+    - include_tasks: wait_task.yml
+      vars:
+        upid: "{{ pve_r.json.data }}"
+        pve_do: "arrancar {{ cambio.name }} ({{ cambio.vmid }}) tras el fallo"
+      when: estaba_en_marcha | bool
+
+    - name: "PVE · decir por qué no se pudo reescribir {{ cambio.name }}"
+      ansible.builtin.fail:
+        msg: >-
+          no se pudieron escribir los recursos de {{ cambio.name }} ({{ cambio.vmid }}):
+          {{ ansible_failed_result.msg | default('sin detalle') }}.
+          {% if estaba_en_marcha | bool %}
+          Se volvió a arrancar con la configuración que tenía.
+          {% else %}
+          Estaba parado y sigue parado.
+          {% endif %}

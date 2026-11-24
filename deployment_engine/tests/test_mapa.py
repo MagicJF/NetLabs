@@ -414,6 +414,28 @@ class ElMapaDelLaboratorio(unittest.TestCase):
             self.assertTrue(contenido["elements"], f"{nombre} no da ni un elemento de mapa")
             self.assertTrue(mapa.esta_al_dia(contenido, contenido), nombre)
 
+    def test_un_rotulo_con_ampersand_se_lee_sin_el_escape_del_plano(self):
+        """El plano escapa `&`, `<` y `>` al escribir; la vista tiene que leerlos tal cual.
+
+        Un área «Ventas & almacén» viaja en el SVG como `Ventas &amp; almacén`. Copiada
+        cruda, el mapa enseñaría los caracteres del escape; leída con el lector XML de la
+        biblioteca estándar, se lee el nombre de verdad. Se comprueba sobre un SVG pequeño
+        hecho a mano, que es la única forma de tener un `&` en un rótulo.
+        """
+        svg = ('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">'
+               '<g data-area="Ventas &amp; almacén" data-x="10" data-y="10" '
+               'data-ancho="80" data-alto="60" data-subred="10.0.0.0/24" data-nube="0"/>'
+               '<g data-rol="rte1" data-x="30.0" data-y="30.0"/>'
+               '<g class="cable" data-a="rte1" data-pa="1" data-z="rta1" data-pz="1"/>'
+               '</svg>')
+        donde = mapa.disposicion(svg)
+        self.assertEqual(donde["ancho"], 200)
+        self.assertEqual(donde["alto"], 100)
+        self.assertEqual(donde["areas"][0]["titulo"], "Ventas & almacén")
+        self.assertEqual(donde["areas"][0]["subred"], "10.0.0.0/24")
+        self.assertEqual(donde["equipos"], {"rte1": (30.0, 30.0)})
+        self.assertEqual(donde["cables"], [{"a": "rte1", "pa": 1, "z": "rta1", "pz": 1}])
+
 
 class LosMapasQueDibujaElServidor(unittest.TestCase):
     """Lo que se le pide a la vista para que dibuje ella: de dónde parte, y nada más.

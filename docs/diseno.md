@@ -154,9 +154,10 @@ decir, también por la API (§3.8)—. A un Linux, **sólo** por SSH. Al servici
 motor—: por esa puerta registra el motor cada equipo de red con su credencial y le coloca el
 mapa de la red (§3.4), y no toca su base
 por ninguna otra (§3.4; `docs/decisiones/0003`, `0004`, `0005` y `0006`). Un equipo se identifica en la vista por su
-**nombre**: su dirección de gestión se deriva del vmid y cambia cuando el invitado se rehace, así
-que un nodo con el nombre bueno y la dirección de otra máquina se retira y se vuelve a dar de alta
-—el API no deja corregir la dirección—. Una vía nueva para lo mismo es un defecto, no una
+**nombre**: su dirección de gestión se deriva del vmid, así que cambia cuando al invitado se le
+asigna **otro** vmid —rehacerlo conservando el vmid conserva la dirección—, y un nodo con el
+nombre bueno y la dirección de otra máquina se retira y se vuelve a dar de alta —el API no deja
+corregir la dirección—. Una vía nueva para lo mismo es un defecto, no una
 comodidad.
 
 *Evita:* llamadas a la API repartidas por todo el motor, imposibles de seguir y de auditar.
@@ -178,9 +179,10 @@ así, qué se aprendió). La comprobación re-renderiza la región generada y **
 de lo que hay en el fichero.
 
 La región generada lleva además un **plano**, también sacado de la declaración: la
-**topología** (cada red como área translúcida con su nombre, su subred y la dirección de su
-puerta, y dentro quién cuelga de ella), con un símbolo por equipo y una línea por cable, cada
-una con el puerto de sus dos puntas. Un solo plano: hubo también un dibujo de cableado, hecho
+**topología** (cada red como área translúcida con su nombre y su subred, y dentro quién cuelga
+de ella —la dirección de la puerta no se repite en la cabecera del área: se lee junto al símbolo
+del router, que es quien la tiene—), con un símbolo por equipo y una línea por cable, cada una
+con el puerto de sus dos puntas. Un solo plano: hubo también un dibujo de cableado, hecho
 por un segundo motor plano, que enseñaba los mismos equipos y los mismos puertos con otra
 colocación —dos retratos del mismo dato que no coincidían y hacían dudar de los dos—. Lo dibuja
 `tools/plano.py` y va **en los dos sitios**: dentro del `.md`, como SVG en texto —es código
