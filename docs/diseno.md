@@ -153,8 +153,10 @@ decir, también por la API (§3.8)—. A un Linux, **sólo** por SSH. Al servici
 (NetXMS), **sólo** por su API REST y **desde dentro de su invitado** —ahí aterriza el túnel del
 motor—: por esa puerta registra el motor cada equipo de red con su credencial y le coloca el
 mapa de la red (§3.4), y no toca su base
-por ninguna otra (§3.4; `docs/decisiones/0003`, `0004` y `0005`). Un equipo se identifica en la vista por su
-**nombre**: su dirección de gestión se deriva del vmid, así que cambia cuando al invitado se le
+por ninguna otra (§3.4; `docs/decisiones/0003`, `0004` y `0005`). Un equipo se identifica en la
+vista por su **nombre y su dirección de gestión**: dos laboratorios pueden tener a la vez un
+`rta1`, y el nombre solo no basta para saber de cuál es el registro. La dirección se deriva del
+vmid, así que cambia cuando al invitado se le
 asigna **otro** vmid —rehacerlo conservando el vmid conserva la dirección—, y un nodo con el
 nombre bueno y la dirección de otra máquina se retira y se vuelve a dar de alta —el API no deja
 corregir la dirección—. Una vía nueva para lo mismo es un defecto, no una
@@ -357,6 +359,14 @@ Extenderlo a los nodos finales es posible y no se descarta, pero no es requisito
 que decir en voz alta: esa shell es **para una persona**, no para el motor — Ansible configura
 por su vía (§6) y no por la terminal de nadie.
 
+**Dos laboratorios con los mismos nombres.** NetXMS admite dos nodos llamados `rta1`; lo que
+los distingue es su **dirección de gestión**, que sale del vmid y por tanto es única. El mapa
+de cada laboratorio se construye sólo con los objetos cuya pareja nombre+dirección es la suya,
+así que el mapa de uno no enseña equipos del otro. La terminal de la consola también va a la
+dirección del nodo, no a su nombre: abrir `rta1` desde el mapa del laboratorio `d` conecta con
+el `rta1` de `d`, no con el de `e`. Lo único que puede confundir es el árbol de objetos, donde
+los dos nombres se ven iguales; ahí ayudan la dirección y el comentario de propiedad del nodo.
+
 **El mapa a medida: lo que la vista enseña es el plano.** La vista sabe dibujar su propia
 topología —descubre por direcciones y la reparte a su manera—, y ese dibujo **no se parece a
 nada de lo que dibuja el plano**: ni las áreas, ni dónde cae cada router, ni qué redes quedan
@@ -364,11 +374,13 @@ a un lado y a otro. Así que el motor **le manda un mapa hecho a medida**, con e
 que la documentación:
 
 - las **áreas** del plano, como cajas de grupo; su nombre y su bloque de direcciones van en **cajas
-  de texto** colocadas donde no pase ningún cable —la vista pega el rótulo de una caja arriba a la
-  izquierda, que es justo por donde entra el cable que baja del núcleo, y lo tapa—;
+  de texto** colocadas **dentro de su propia área**, arriba a la izquierda como las cabeceras del
+  plano, apartándose sólo lo justo para no pisar un cable o un equipo: un rótulo que dice de qué
+  red es no puede caer en la caja de otra red;
 - cada **equipo de red** del laboratorio donde el plano lo pone —el router en la frontera de
-  las redes que une, el switch del núcleo en el centro—, con su **ficha** al lado: su papel, sus
-  patas con la interfaz y la dirección de cada una y el rango que reparte si reparte DHCP;
+  las redes que une, el switch del núcleo en el centro—, con la **etiqueta grande** de la vista:
+  nombre e IP, sin cartel de patas ni de reparto, que no aportaba y se comía el sitio de las
+  cabeceras;
 - cada **cable** del laboratorio, entre los dos equipos que une, con el **puerto y la interfaz de
   cada punta** (`p1 ether1`), atados a la interfaz de la vista por la que de verdad sale, y los
   **ajustes** que dicen cómo se dibujan: color propio y trazo fino, porque el gris ancho que pone
@@ -379,7 +391,7 @@ que la documentación:
 El dibujo **no se escribe a mano y lo que dice tampoco**: la geometría se lee del propio plano
 (`plano.py` escribe la posición de cada cosa en atributos `data-*` del SVG) —así el mapa de la
 vista y el plano de la documentación **no pueden discrepar**: son el mismo dibujo—, y los nombres,
-puertos, interfaces y fichas salen del **YML** y viajan con esos mismos atributos. El mapa se
+puertos e interfaces salen del **YML** y viajan con esos mismos atributos. El mapa se
 nombra como el laboratorio, y se escribe **sólo si no es ya el que el plano pide** —escribirlo de
 más sería perder cualquier ajuste hecho a mano, porque el API lo reemplaza entero—.
 

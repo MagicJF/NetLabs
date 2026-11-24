@@ -18,15 +18,15 @@
 #              área por el que no pase ningún cable ni se apoye ningún equipo. La
 #              colocación es de este módulo, y por eso se puede comprobar por programa
 #              (test_mapa) en vez de a ojo.
-#              Cada equipo lleva además su **ficha** —sus patas con la interfaz que la vista
-#              le ha descubierto y la red que sirve, sus direcciones y el rango que reparte—
-#              y cada cable su **nombre y sus dos puertos**, tal y como se llaman en el
-#              laboratorio: lo que el YML declara viaja al mapa en vez de quedarse en el
-#              fichero, y el cable queda atado a la interfaz de la que de verdad sale.
+#              Cada equipo lleva la **etiqueta grande** de la vista —nombre e IP—, no un
+#              cartel de texto con sus patas: ese cartel no aportaba y se comía el sitio
+#              de las cabeceras. Cada cable sí lleva sus **dos puertos** —`p1 ether1`— y su
+#              nombre queda guardado en la configuración del enlace, sin dibujarse encima
+#              del cable.
 # LÍMITES:     el dibujo es el del plano, con su lienzo y sus posiciones: este módulo no
-#              recalcula geometría ni inventa áreas, y lo que no cabe —un rótulo, una
-#              ficha— se busca sitio hasta el tope de sus anillos y, agotado, se devuelve
-#              el menos malo en vez de moverse a otro sitio. Reconoce interfaces por su
+#              recalcula geometría ni inventa áreas, y el rótulo de un área se busca siempre
+#              dentro de ella; si no cabe, se centra, pero nunca se va a la caja de al lado.
+#              Reconoce interfaces por su
 #              nombre (`ether<N>`) y equipos por su rol: un equipo cuya interfaz no siga
 #              esa convención se dibuja igual pero sin atar, y uno que la vista no conozca
 #              no se dibuja. Nada de aquí habla con el API, escribe ni espera.
@@ -35,10 +35,8 @@
 #              docs/decisiones/0005-el-mapa-dice-lo-que-dice-el-yaml.md
 
 import json
-import math
 import xml.etree.ElementTree as ET
 
-import plano                    # el mismo plano del que sale la geometría, y sus rangos
 from identity import cables     # el nombre de un cable se deriva en un solo sitio
 
 # Cómo nombra la vista a las cosas del mapa. Son los números que viajan en el JSON del
@@ -80,13 +78,10 @@ ETIQUETA_FUENTE = 9            # puntos: se lee y deja sitio en áreas de 300 de
 ETIQUETA_LETRA = 6.4           # ancho estimado de una letra a esa fuente
 ETIQUETA_RELLENO = 20          # el aire de la caja alrededor del texto
 ETIQUETA_ALTO = 24
-ETIQUETA_MARGEN = 10           # aire entre el rótulo y el borde de su área
-ETIQUETA_GUARDA = 6            # de sobra, al comprobar si un cable lo pisa
+ETIQUETA_MARGEN = 8            # aire entre el rótulo y el borde de su área
+ETIQUETA_GUARDA = 4            # de sobra, al comprobar si un cable lo pisa
 ETIQUETA_APOYO = 2             # aire entre el nombre de un área y su bloque, debajo
-CUADRICULA = 7                 # rincones que se prueban por cada lado, si los de fuera fallan
-AIRE_FICHA = 16                # aire entre un equipo y el cartel que lo describe
-RADIOS_FICHA = 10              # anillos alrededor de un equipo, si sus cuatro lados están tomados
-VUELTAS_FICHA = 16             # sitios que se prueban en cada anillo
+CUADRICULA = 7                 # rincones que se prueban dentro del área, si el primero no vale
 
 
 def disposicion(svg: str) -> dict:
@@ -143,16 +138,66 @@ def renglones(area: dict) -> list:
     return [f"{area['titulo']} ({prefijo.rstrip(')')})", rango]
 
 
+def _partir(linea: str, ancho_max: float) -> list:
+    """Parte un renglón por sus espacios hasta que quepa en el ancho del área.
+
+    Un rótulo que no cabe se sale de su caja, y una cabecera fuera de su red miente. Se
+    prefiere un renglón más —el bloque de direcciones partido en dos— a un texto que invade
+    la red de al lado. Una palabra sola que no quepa no se puede partir: se deja y se avisa
+    con el ancho que ocupa, que es lo único honesto que se puede hacer sin cambiar la letra.
+    """
+    if tamano_de_rotulo(linea)[0] <= ancho_max:
+        return [linea]
+    lineas, actual = [], ""
+    for palabra in linea.split():
+        if tamano_de_rotulo(palabra)[0] > ancho_max:
+            # Una palabra sola más ancha que el área: se parte por letras. Es feo, pero un
+            # texto que se sale de su caja es peor: deja de decir de qué red es.
+            if actual:
+                lineas.append(actual)
+                actual = ""
+            trozo = ""
+            for letra in palabra:
+                if trozo and tamano_de_rotulo(trozo + letra)[0] > ancho_max:
+                    lineas.append(trozo)
+                    trozo = letra
+                else:
+                    trozo += letra
+            if trozo:
+                lineas.append(trozo)
+            continue
+        prueba = f"{actual} {palabra}".strip()
+        if actual and tamano_de_rotulo(prueba)[0] > ancho_max:
+            lineas.append(actual)
+            actual = palabra
+        else:
+            actual = prueba
+    if actual:
+        lineas.append(actual)
+    return lineas
+
+
 def rotulos_de(area: dict) -> tuple:
     """Los rótulos de un área y lo que ocupan juntos: el nombre y, debajo, su bloque.
 
     Se colocan como un solo bloque —el nombre arriba, el bloque debajo— porque así se leen;
     dos búsquedas por separado acababan con el nombre arriba del área y su bloque al otro
     extremo. Y se busca una sola vez porque lo que ocupa el grupo es lo que hay que
-    esquivar: si el grupo cabe en un hueco, cada renglón cabe dentro del grupo.
+    esquivar: si el grupo cabe en un hueco, cada renglón cabe dentro del grupo. Si un
+    renglón no cabe en el ancho del área, se parte antes de medir: el grupo crece a lo alto,
+    pero no se sale por la derecha.
     """
-    textos = renglones(area)
+    ancho_max = max(1.0, area["ancho"] - 2 * ETIQUETA_MARGEN)
+    textos = [trozo for linea in renglones(area) for trozo in _partir(linea, ancho_max)]
     ancho, alto = tamano_del_grupo(textos)
+    if ancho > area["ancho"] or alto > area["alto"]:
+        # Un rótulo que no cabe no se dibuja a medias: se dice qué área y qué texto no
+        # caben. Pintarlo recortado o fuera de su caja sería mentir en el mapa, que es
+        # justo lo que estas cabeceras evitan.
+        raise ValueError(
+            f"el rótulo de «{area['titulo']}» no cabe en su área: mide {ancho}×{alto} "
+            f"y el área {area['ancho']}×{area['alto']}"
+        )
     return textos, ancho, alto
 
 
@@ -162,36 +207,36 @@ def tamano_de_rotulo(texto: str) -> tuple:
 
 
 def candidatos(area: dict, ancho: float, alto: float) -> list:
-    """Dónde puede ir un rótulo, por orden de preferencia: dentro de su área y, si no cabe,
-    pegado a ella.
+    """Dónde puede ir un rótulo: **siempre dentro del área que rotula**.
 
-    Primero los rincones —arriba y abajo, a la izquierda antes que a la derecha, que es
-    donde el plano pone sus rótulos— y luego el centro de los lados. Después una rejilla
-    por toda el área: en un área grande y muy cableada —dos sedes con sus routers de borde
-    y sus cables cruzando de una a otra— los rincones pueden quedar todos debajo de un
-    cable. Y si ni así, justo encima y justo debajo del área, que el rótulo se lee igual y
-    sigue diciendo de qué área es.
+    Primero la esquina de arriba a la izquierda, que es donde el plano pone sus cabeceras,
+    y luego una rejilla por toda el área: en un área grande y muy cableada las esquinas
+    pueden quedar debajo de un cable. No se prueba fuera del área: un rótulo que dice de
+    qué red es no puede caer en la caja de otra red, porque entonces miente.
     """
-    izquierda = area["x"] + ETIQUETA_MARGEN
-    arriba = area["y"] + ETIQUETA_MARGEN
-    derecha = max(izquierda, area["x"] + area["ancho"] - ancho - ETIQUETA_MARGEN)
-    abajo = max(arriba, area["y"] + area["alto"] - alto - ETIQUETA_MARGEN)
-    medio_x = max(izquierda, min(derecha, area["x"] + (area["ancho"] - ancho) / 2))
+    holgura_x = max(0.0, area["ancho"] - ancho)
+    if holgura_x >= 2 * ETIQUETA_MARGEN:
+        izquierda = area["x"] + ETIQUETA_MARGEN
+        derecha = area["x"] + area["ancho"] - ancho - ETIQUETA_MARGEN
+    else:
+        # El rótulo casi llena el área: se centra en vez de salirse por la derecha.
+        izquierda = area["x"] + max(0.0, holgura_x / 2)
+        derecha = izquierda
+    holgura_y = area["alto"] - alto
+    if holgura_y >= 2 * ETIQUETA_MARGEN:
+        arriba = area["y"] + ETIQUETA_MARGEN
+        abajo = area["y"] + area["alto"] - alto - ETIQUETA_MARGEN
+    else:
+        arriba = area["y"] + max(0.0, holgura_y / 2)
+        abajo = arriba
     medio_y = max(arriba, min(abajo, area["y"] + (area["alto"] - alto) / 2))
 
-    orden = [(izquierda, arriba), (derecha, arriba)]
+    orden = [(izquierda, arriba), (izquierda, area["y"] + 2)]
     for fila in range(CUADRICULA):
         for columna in range(CUADRICULA):
             orden.append((round(izquierda + (derecha - izquierda) * columna / (CUADRICULA - 1)),
                           round(arriba + (abajo - arriba) * fila / (CUADRICULA - 1))))
-    orden += [(izquierda, abajo), (derecha, abajo), (izquierda, medio_y), (derecha, medio_y),
-              (izquierda, max(0.0, area["y"] - alto - ETIQUETA_MARGEN)),
-              (izquierda, area["y"] + area["alto"] + ETIQUETA_MARGEN),
-              # Fuera del área, pegados a sus lados: cuando dentro no queda un hueco
-              # —una sede apretada, con sus fichas y sus cables— el rótulo se lee igual
-              # de bien al lado de su caja, y deja de pisar lo que hay dentro.
-              (max(0.0, area["x"] - ancho - ETIQUETA_MARGEN), arriba),
-              (area["x"] + area["ancho"] + ETIQUETA_MARGEN, arriba)]
+    orden += [(izquierda, abajo), (derecha, abajo), (izquierda, medio_y), (derecha, medio_y)]
 
     sitios, vistos = [], set()
     for sitio in orden:
@@ -205,8 +250,8 @@ def _cuanto_pisa(rectangulo: tuple, cables: list, ocupado: list) -> tuple:
     """Cuánto estorba un rótulo ahí: cables que lo cruzan y área que le quitan.
 
     Se ordena por lo que más se nota: un cable que cruza el texto lo vuelve ilegible; un
-    rótulo encima de otro o de una ficha se lee mal, pero se lee. El área compartida se
-    suma para distinguir el sitio que pisa una ficha entera del que sólo roza un borde.
+    rótulo encima de otro o de un equipo se lee mal, pero se lee. El área compartida se
+    suma para distinguir el sitio que pisa un equipo entero del que sólo roza un borde.
     """
     cruces = sum(1 for uno, otro in cables if corta(rectangulo, uno, otro))
     pisado = 0
@@ -224,7 +269,7 @@ def sitio_libre(area: dict, ancho: float, alto: float, cables: list, ocupado: li
     `cables` son los segmentos que dibuja la vista (`((x, y), (x, y))`) y `ocupado` los
     rectángulos que ya hay puestos. Si no queda ninguno libre se devuelve el que menos pisa
     —el que menos cables cruza y menos área ocupada toca—, no el primero: en una sede
-    apretada el primer rincón es justo el que está debajo de una ficha, y devolverlo dejaba
+    apretada el primer rincón es justo el que está debajo de un equipo, y devolverlo dejaba
     los títulos solapados. Los sitios fuera del lienzo se descartan.
     """
     sitios = candidatos(area, ancho, alto)
@@ -244,47 +289,6 @@ def sitio_libre(area: dict, ancho: float, alto: float, cables: list, ocupado: li
     if mejor is not None:
         return mejor
     return candidatos(area, ancho, alto)[0]
-
-
-def ficha_de(node: dict, lab: dict, interfaces: dict) -> list:
-    """El cartel de un equipo: sus patas con su interfaz y su red, sus direcciones y su reparto.
-
-    Todo sale de la declaración —cuántas patas tiene, qué red lleva cada una, qué dirección
-    y qué rango reparte— y de los nombres de interfaz que la vista le ha descubierto al
-    equipo, que es lo único que no se puede deducir del YML. El equipo del plano y el equipo
-    de la vista son el mismo si sus patas y sus interfaces coinciden; esto es lo que lo deja
-    ver en el mapa.
-    """
-    redes = {red["name"]: red for red in lab.get("networks") or []}
-    config = node.get("configure") or {}
-    direcciones = {d["network"]: d["address"] for d in config.get("addresses") or []}
-    suyas = interfaces.get(node["role"]) or {}
-
-    cuantas = len(node["networks"])
-    # Las patas en un solo renglón: el puerto del plano y la interfaz del equipo, que son lo
-    # mismo visto desde cada lado. La red de cada pata ya la dicen el plano y el cable que
-    # sale de ella; repetirla aquí haría un cartel que no cabe en las sedes pequeñas, que son
-    # justo donde más falta hace poder leerlo.
-    patas = " · ".join(f"p{puerto} ether{puerto}" if f"ether{puerto}" in suyas else f"p{puerto}"
-                       for puerto in range(1, cuantas + 1))
-    cabecera = f"{node['role']} · {cuantas} pata{'' if cuantas == 1 else 's'}"
-    lineas = [f"{cabecera}: {patas}" if patas else cabecera]
-
-    # La dirección de cada pata, si se declara; si el equipo la pide por DHCP se dice, como
-    # lo dice el plano, y no se le inventa ninguna.
-    dichas = " · ".join(direcciones[red] for red in node["networks"] if red in direcciones)
-    if dichas:
-        lineas.append(dichas)
-    elif node.get("address") == "dhcp":
-        lineas.append("dhcp")
-
-    for srv in config.get("dhcp_server") or []:
-        cidr = str((redes.get(srv.get("network")) or {}).get("address") or "")
-        corto = plano.rango_corto(srv.get("pool") or "", cidr) if cidr else ""
-        # «reparte» y no «dhcp» a secas: el rango ya lo dice el rótulo de su área, y lo que
-        # aquí se enseña es qué router lo reparte.
-        lineas.append(f"reparte dhcp {corto or srv.get('pool') or ''}".rstrip())
-    return lineas
 
 
 def _interfaz(interfaces: dict, rol: str, puerto: int) -> int:
@@ -314,49 +318,6 @@ def tamano_del_grupo(textos: list) -> tuple:
     """Lo que ocupa un grupo de renglones: manda el más ancho y el alto es su suma."""
     return (max(tamano_de_rotulo(texto)[0] for texto in textos),
             sum(tamano_de_rotulo(texto)[1] for texto in textos) + ETIQUETA_APOYO * (len(textos) - 1))
-
-
-def sitio_junto_a(punto: tuple, ancho: float, alto: float, cables: list, ocupado: list,
-                  lienzo: tuple) -> tuple:
-    """El primer sitio alrededor de un equipo donde su ficha no queda tapada por nada.
-
-    Primero los cuatro lados —a la derecha antes que a la izquierda, que es por donde baja
-    el cable de la red troncal— y después las diagonales y un anillo más ancho, por si el
-    equipo está en un rincón muy cableado. La ficha tiene que caber en el lienzo: un cartel
-    que se sale del mapa no se ve. Si no hay ningún sitio, se devuelve el de su derecha,
-    que es el que menos estorba —una ficha tapada se lee mal, pero una sin sitio no dice nada.
-    """
-    cx, cy = punto
-    ancho_lienzo, alto_lienzo = lienzo
-    medio = TAMANO_EQUIPO / 2
-
-    def cabe(x: float, y: float) -> bool:
-        if x < 0 or y < 0 or x + ancho > ancho_lienzo or y + alto > alto_lienzo:
-            return False
-        rectangulo = (x - ETIQUETA_GUARDA, y - ETIQUETA_GUARDA,
-                      ancho + 2 * ETIQUETA_GUARDA, alto + 2 * ETIQUETA_GUARDA)
-        if any(solapan(rectangulo, otro) for otro in ocupado):
-            return False
-        return not any(corta(rectangulo, uno, otro) for uno, otro in cables)
-
-    derecho, izquierdo = cx + medio + AIRE_FICHA, cx - medio - AIRE_FICHA - ancho
-    abajo, arriba = cy + medio + AIRE_FICHA, cy - medio - AIRE_FICHA - alto
-    # Los cuatro lados —a la derecha antes que a la izquierda—, luego las diagonales y
-    # después un anillo tras otro alrededor del equipo: en una sede apretada, con el router
-    # pegado al switch y los puestos alrededor, los cuatro lados se agotan.
-    orden = [(derecho, cy - alto / 2), (izquierdo, cy - alto / 2),
-             (cx - ancho / 2, abajo), (cx - ancho / 2, arriba),
-             (derecho, abajo), (izquierdo, abajo), (derecho, arriba), (izquierdo, arriba)]
-    for radio in range(1, RADIOS_FICHA + 1):
-        salto = medio + AIRE_FICHA * (radio + 1)
-        for paso in range(VUELTAS_FICHA):
-            giro = 2 * math.pi * paso / VUELTAS_FICHA
-            orden.append((cx + salto * math.cos(giro) - ancho / 2,
-                          cy + salto * math.sin(giro) - alto / 2))
-    for x, y in orden:
-        if cabe(round(x), round(y)):
-            return round(x), round(y)
-    return round(orden[0][0]), round(orden[0][1])
 
 
 def cajas_de_texto(textos: list, x: float, y: float, primero: int) -> list:
@@ -426,14 +387,14 @@ def config_de_rotulo(texto: str) -> str:
 
 
 def contenido(lab: dict, svg: str, objetos: dict, interfaces: dict | None = None) -> dict:
-    """El contenido del mapa: las áreas, los equipos, sus fichas y los cables, donde los pone el plano.
+    """El contenido del mapa: las áreas, los equipos y los cables, donde los pone el plano.
 
     `objetos` traduce el rol de cada equipo al número con el que la vista lo conoce, e
     `interfaces` trae, por equipo, el nombre de cada una de sus interfaces con el número de
     objeto que la vista le ha dado. Un equipo del plano que no esté en la vista no se dibuja
     —y los cables que salen de él tampoco—, porque un elemento del mapa sin objeto detrás no
     lo acepta la vista. Sin `interfaces` el mapa se dibuja igual, pero sus cables no quedan
-    atados a la interfaz de la que salen ni la ficha puede nombrarlas.
+    atados a la interfaz de la que salen.
     """
     donde = disposicion(svg)
     nombres = cables(lab)["per_port"]
@@ -483,40 +444,23 @@ def contenido(lab: dict, svg: str, objetos: dict, interfaces: dict | None = None
             "config": json.dumps({"dciList": [], "cableName": nombre_cable}, ensure_ascii=False),
         })
 
-    # Los equipos ocupan su hueco: una ficha encima de uno se leería mal aunque no pasara
-    # ningún cable por ahí.
+    # Los equipos ocupan su hueco. No llevan cartel: la vista ya les pone su etiqueta
+    # grande con el nombre y la IP, y un cartel con las patas y el reparto no aportaba y
+    # se comía el sitio de las cabeceras de las áreas.
     ocupado = [(round(cx - TAMANO_EQUIPO / 2), round(cy - TAMANO_EQUIPO / 2),
                 TAMANO_EQUIPO, TAMANO_EQUIPO) for cx, cy in en_donde.values()]
 
-    # Las fichas van primero, y pegadas a su equipo: son suyas y no se pueden ir lejos —un
-    # cartel que no está junto al equipo que describe no dice de quién es—. El rótulo de un
-    # área, en cambio, puede buscarse otro rincón dentro de ella: es él quien las esquiva.
-    fichas = {node["role"]: node for node in lab["nodes"] if node["role"] in en_donde}
-    for rol, (cx, cy) in sorted(en_donde.items()):
-        node = fichas.get(rol)
-        if node is None:
-            # Un equipo que está en la vista y en el plano pero no se declara en el fichero
-            # —el nodo de control, que vive en la red de gestión— no tiene ficha que enseñar.
-            continue
-        textos = ficha_de(node, lab, interfaces)
-        ancho, alto = tamano_del_grupo(textos)
-        x, y = sitio_junto_a((cx, cy), ancho, alto, trazos, ocupado, (donde["ancho"], donde["alto"]))
-        ocupado.append((x, y, ancho, alto))
-        cajas = cajas_de_texto(textos, x, y, numero + 1)
-        elementos += cajas
-        numero += len(cajas)
-
     # Los rótulos se colocan de la zona más pequeña a la más grande: la pequeña —una sede
-    # con su router y su switch, que es casi todo equipo, ficha y cable— no tiene dónde
-    # elegir, y la grande que la envuelve sí. Al revés, el rótulo del laboratorio se ponía en
-    # el primer hueco que encontraba —dentro de una sede— y dejaba a la sede sin sitio.
+    # con su router y su switch, que es casi todo equipo y cable— no tiene dónde elegir, y
+    # la grande que la envuelve sí. Al revés, el rótulo del laboratorio se ponía en el
+    # primer hueco que encontraba —dentro de una sede— y dejaba a la sede sin sitio.
     puestos = {}
     for indice, area in sorted(enumerate(donde["areas"]), key=lambda par: par[1]["ancho"] * par[1]["alto"]):
         textos, ancho, alto = rotulos_de(area)
         x, y = sitio_libre(area, ancho, alto, trazos, ocupado, (donde["ancho"], donde["alto"]))
         # El rótulo también ocupa sitio: sin apuntarlo aquí, el de un área podía caer
         # encima del de otra —y los títulos se solapaban— porque cada uno sólo esquivaba
-        # los cables y las fichas, no los rótulos ya puestos.
+        # los cables y los equipos, no los rótulos ya puestos.
         ocupado.append((x, y, ancho, alto))
         puestos[indice] = (textos, x, y)
 
