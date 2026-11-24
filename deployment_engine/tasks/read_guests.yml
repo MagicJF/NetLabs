@@ -1,0 +1,19 @@
+# PROPÓSITO:   volver a leer los invitados del clúster para saber qué direcciones de
+#              gestión están ocupadas AHORA, no cuando empezó la pasada.
+# INVARIANTES: es una lectura del hipervisor y no se guarda nada. Dice qué dirección tiene
+#              cada invitado —y con eso qué registro de la vista choca con ella—, pero no
+#              autoriza ninguna retirada: de eso se encarga la marca de propiedad del
+#              registro, que es lo único que demuestra de quién es.
+#              Se piden sólo los invitados: los puentes y los pools de esta lectura no se
+#              usan y releerlos sería leer lo que no ha cambiado.
+# VER:         docs/diseno.md §2.3, §2.8
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: GET
+    pve_path: /cluster/resources
+    pve_do: "volver a leer los invitados del clúster"
+
+- name: "anotar los invitados que hay ahora"
+  ansible.builtin.set_fact:
+    invitados_ahora: "{{ (pve_r.json.data | netlabs_world([], [])).invitados }}"

@@ -170,6 +170,26 @@
         cambio: "{{ item }}"
       when: cambios | length > 0
 
+    # Un invitado que existe y está parado no se arranca al ajustarle los recursos —su
+    # `guest_set` sólo devuelve a la vida al que ya lo estaba—, así que el arranque que el
+    # plan pide se ejecuta aquí, antes de esperarlos: la espera de abajo exige que estén en
+    # pie, y sin este paso agotaba su tope contra un invitado que nadie iba a arrancar.
+    - name: apply · el arranque de los invitados que el plan manda arrancar
+      include_tasks: ../tasks/start_guest.yml
+      # Los dos caminos que dejan a un invitado apagado teniendo que estar en pie: un
+      # `guest_start` del plan (existía, estaba parado y no cambia nada) y un `guest_set`
+      # sobre uno que estaba parado (se le escriben los recursos y nadie lo arranca). Sin
+      # el segundo, la espera de abajo agotaba su tope contra un invitado que nadie iba a
+      # levantar. Los recién creados y los rehechos ya se arrancan en su propia tarea.
+      loop: "{{ arranques }}"
+      loop_control: {loop_var: arranque, label: "{{ arranque }}"}
+      vars:
+        arranques: >-
+          {{ (plan.steps | selectattr('op', 'equalto', 'guest_start') | map(attribute='vmid') | list)
+             + (cambios | rejectattr('status', 'equalto', 'running') | map(attribute='vmid') | list) }}
+        guest: "{{ plan.nodes | selectattr('vmid', 'equalto', arranque) | first }}"
+      when: arranques | length > 0
+
     - name: apply · los invitados que ya existían tienen que estar en pie
       include_tasks: ../tasks/wait_running.yml
       loop: "{{ plan.nodes }}"
@@ -213,17 +233,27 @@
     # Y va pronto en el apply: un equipo que nace se registra antes de que lo descubra
     # el censo del observador, que es cuando ya no se puede hacer — su API sólo acepta
     # las credenciales al crear el equipo.
+    # Las direcciones con las que se clasifica el registro se leen AHORA y no al principio
+    # de la pasada: esta misma pasada ha creado y retirado invitados, y una dirección que
+    # acaba de nacer no estaba en la lectura vieja —el alta de un equipo chocaba entonces
+    # con el registro histórico que aún ocupaba su dirección, y el API devolvía 409 después
+    # de haber creado el invitado—. La lectura dice quién tiene cada dirección; quién es el
+    # dueño de un registro lo sigue diciendo su marca.
+    - name: apply · los invitados que hay ahora, antes de registrar
+      include_tasks: ../tasks/read_guests.yml
+      when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
+
     - name: apply · el registro de los equipos en lo que observa el sitio
       include_tasks: ../tasks/netxms.yml
       vars:
         equipos: "{{ plan.nodes | selectattr('management') | list }}"
         # Las direcciones que hoy tiene algún invitado del clúster: separan un resto de
         # un despliegue anterior de un equipo de otro laboratorio que se llame igual.
-        vivas: "{{ world.guests | netlabs_direcciones_vivas(env.management.address_space) }}"
+        vivas: "{{ invitados_ahora | netlabs_direcciones_vivas(env.management.address_space) }}"
         # Y las de los invitados de este laboratorio: las de sus equipos de red no bastan,
         # porque una estación de trabajo tampoco se registra y su dirección es de aquí.
         propias: >-
-          {{ world.guests | selectattr('pool', 'equalto', plan.pool) | list
+          {{ invitados_ahora | selectattr('pool', 'equalto', plan.pool) | list
              | netlabs_direcciones_vivas(env.management.address_space) }}
       when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
 

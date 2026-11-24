@@ -25,14 +25,14 @@ def netlabs_con_config(mundo: dict, configuraciones: dict) -> dict:
     `config_*` cuando está.
     """
     salida = dict(mundo)
-    salida["guests"] = []
-    for invitado in mundo.get("guests") or []:
+    salida["invitados"] = []
+    for invitado in mundo.get("invitados") or []:
         dato = (configuraciones or {}).get(str(invitado.get("vmid"))) or {}
         nuevo = dict(invitado)
         if dato:
             nuevo["config_cores"] = int(dato.get("cores") or invitado.get("cores") or 1)
             nuevo["config_memory"] = int(dato.get("memory") or 0)
-        salida["guests"].append(nuevo)
+        salida["invitados"].append(nuevo)
     return salida
 
 
@@ -53,7 +53,7 @@ def netlabs_direcciones_vivas(invitados, espacio: str) -> list:
 
 
 def _world(resources, networks, pools):
-    guests = [
+    invitados = [
         {
             "vmid": int(item["vmid"]),
             "name": item.get("name"),
@@ -83,8 +83,8 @@ def _world(resources, networks, pools):
     ]
     return {
         "node": None,
-        "used_vmids": sorted({g["vmid"] for g in guests}),
-        "guests": guests,
+        "used_vmids": sorted({g["vmid"] for g in invitados}),
+        "invitados": invitados,
         "bridges": bridges,
         "pools": sorted(p.get("poolid") for p in pools if p.get("poolid")),
     }

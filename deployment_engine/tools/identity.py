@@ -264,6 +264,15 @@ def validate(lab: dict, env: dict) -> None:
                 f"la red {net['name']!r} ({cidr}) no cabe en ningún espacio declarado en "
                 f"'address_spaces' ({', '.join(str(s) for s in nets)})"
             )
+        # Dos redes en el mismo bloque no son dos áreas: el plano reparte jerarquía por
+        # contención y las toma una dentro de otra, así que se queda sin raíz y revienta
+        # con un error interno. Se dice aquí, con las dos redes delante.
+        if cidr in by_name.values():
+            otra = next(n for n, suya in by_name.items() if suya == cidr)
+            raise LabError(
+                f"la red {net['name']!r} repite el CIDR {cidr}, que ya es de {otra!r}: "
+                "dos áreas con la misma dirección no se pueden anidar"
+            )
         by_name[net["name"]] = cidr
 
     nodes = lab["nodes"]
@@ -597,6 +606,18 @@ def _validate_area(role: str, area: str, body, networks: dict) -> None:
                 raise LabError(f"cada ruta de {role!r} es {{destination, gateway}}")
             for key in ("destination", "gateway"):
                 ipaddress.ip_interface(item[key])  # valida forma; el error de ValueError se deja subir
+            # El área escribe en `/rest/ip/route`, que es la tabla IPv4; una ruta IPv6
+            # pasaría la validación y luego no habría operación capaz de instalarla. Se
+            # rechaza aquí y se explica el límite, en vez de llegar a `apply` sin camino.
+            destino = ipaddress.ip_interface(item["destination"]).ip
+            salto = ipaddress.ip_interface(item["gateway"]).ip
+            if not isinstance(destino, ipaddress.IPv4Address) \
+                    or not isinstance(salto, ipaddress.IPv4Address):
+                raise LabError(
+                    f"la ruta {item['destination']!r} -> {item['gateway']!r} de {role!r} "
+                    "no es IPv4: el área 'routes' administra la tabla IPv4 del router "
+                    "(/rest/ip/route) y el motor no escribe la IPv6"
+                )
     elif area == "dhcp_server":
         _require_list(role, area, body)
         for item in body:
@@ -853,10 +874,10 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     if not control:
         _check_foreign_spaces(world, lab, env)
 
-    guests = world.get("guests") or []
+    invitados = world.get("invitados") or []
     bridges = world.get("bridges") or []
     used = set(int(v) for v in (world.get("used_vmids") or []))
-    mine = {g["vmid"]: g for g in guests if g.get("pool") == pool}
+    mine = {g["vmid"]: g for g in invitados if g.get("pool") == pool}
     by_role = {}
     sobra = []
     # El invitado se reconoce por su nombre, que es el del equipo, dentro del pool del
@@ -881,7 +902,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
             used.discard(assigned[node["role"]])
 
     low, high = env["vmids"]["min"], env["vmids"]["max"]
-    taken = set(used) | set(assigned.values()) | _ids_of(world.get("guests") or [])
+    taken = set(used) | set(assigned.values()) | _ids_of(world.get("invitados") or [])
     for node in lab["nodes"]:
         if node["role"] in assigned:
             continue
@@ -1359,8 +1380,8 @@ def _space_from_comment(comment: str):
     return match.group(1) if match else None
 
 
-def _ids_of(guests) -> set:
-    return {int(g["vmid"]) for g in guests if g.get("vmid") is not None}
+def _ids_of(invitados) -> set:
+    return {int(g["vmid"]) for g in invitados if g.get("vmid") is not None}
 
 
 def _lowest_free(taken: set, low: int, high: int) -> int:
@@ -1387,7 +1408,7 @@ def site(world: dict, env: dict) -> dict:
     """
     management = env["management"]
     used = set(int(v) for v in (world.get("used_vmids") or []))
-    used |= _ids_of(world.get("guests") or [])
+    used |= _ids_of(world.get("invitados") or [])
     vmid = _lowest_free(used, env["vmids"]["min"], env["vmids"]["max"])
     address = derive_management(vmid, management["address_space"])
     # El invitado de gestión se reconoce por su NOMBRE, no por su pool: es el servicio
@@ -1397,7 +1418,7 @@ def site(world: dict, env: dict) -> dict:
     # crearía un segundo servicio al lado del que ya corre. La diferencia de pool se
     # arregla moviéndolo (`allow-move`, medido en la API), no creando otro.
     existing = next(
-        (g for g in world.get("guests") or [] if g.get("name") == management["guest"]),
+        (g for g in world.get("invitados") or [] if g.get("name") == management["guest"]),
         None,
     )
     if existing:

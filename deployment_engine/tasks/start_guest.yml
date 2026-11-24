@@ -1,0 +1,21 @@
+# PROPÓSITO:   arrancar un invitado que ya existe y está parado, y esperar a que la tarea
+#              del hipervisor termine bien.
+# INVARIANTES: sólo arranca: no crea ni escribe recursos. El plan pide este paso para un
+#              invitado que existe y no está en marcha —uno que se quedó apagado, o uno al
+#              que se le acaban de ajustar los recursos, porque `guest_set` sólo devuelve
+#              a la vida al que ya lo estaba—. Un invitado recién creado o rehecho se
+#              arranca al nacer (`create_guest.yml`) y no llega aquí: volver a pedirlo
+#              sería un POST de arranque sobre uno que ya está en pie.
+# VER:         docs/diseno.md §7; identity.py · el paso `guest_start`
+
+- include_tasks: pve.yml
+  vars:
+    pve_method: POST
+    pve_path: "/nodes/{{ env.proxmox.node }}/{{ 'lxc' if guest.guest == 'lxc' else 'qemu' }}/{{ guest.vmid }}/status/start"
+    pve_do: "arrancar {{ guest.name }} ({{ guest.vmid }})"
+    pve_status: [200]
+
+- include_tasks: wait_task.yml
+  vars:
+    upid: "{{ pve_r.json.data }}"
+    pve_do: "arrancar {{ guest.name }} ({{ guest.vmid }})"
