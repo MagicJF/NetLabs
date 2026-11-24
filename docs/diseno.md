@@ -153,8 +153,10 @@ decir, también por la API (§3.8)—. A un Linux, **sólo** por SSH. Al servici
 (NetXMS), **sólo** por su API REST y **desde dentro de su invitado** —ahí aterriza el túnel del
 motor—: por esa puerta registra el motor cada equipo de red con su credencial y le coloca el
 mapa de la red (§3.4), y no toca su base
-por ninguna otra (§3.4; `docs/decisiones/0003`, `0004` y `0005`). Un equipo se identifica en la vista por su
-**nombre**: su dirección de gestión se deriva del vmid, así que cambia cuando al invitado se le
+por ninguna otra (§3.4; `docs/decisiones/0003`, `0004` y `0005`). Un equipo se identifica en la
+vista por su **nombre y su dirección de gestión**: dos laboratorios pueden tener a la vez un
+`rta1`, y el nombre solo no basta para saber de cuál es el registro. La dirección se deriva del
+vmid, así que cambia cuando al invitado se le
 asigna **otro** vmid —rehacerlo conservando el vmid conserva la dirección—, y un nodo con el
 nombre bueno y la dirección de otra máquina se retira y se vuelve a dar de alta —el API no deja
 corregir la dirección—. Una vía nueva para lo mismo es un defecto, no una
@@ -356,6 +358,14 @@ gestión** (la OOB): mismo camino que el resto, sin depender de las rutas del la
 Extenderlo a los nodos finales es posible y no se descarta, pero no es requisito. Lo que hay
 que decir en voz alta: esa shell es **para una persona**, no para el motor — Ansible configura
 por su vía (§6) y no por la terminal de nadie.
+
+**Dos laboratorios con los mismos nombres.** NetXMS admite dos nodos llamados `rta1`; lo que
+los distingue es su **dirección de gestión**, que sale del vmid y por tanto es única. El mapa
+de cada laboratorio se construye sólo con los objetos cuya pareja nombre+dirección es la suya,
+así que el mapa de uno no enseña equipos del otro. La terminal de la consola también va a la
+dirección del nodo, no a su nombre: abrir `rta1` desde el mapa del laboratorio `d` conecta con
+el `rta1` de `d`, no con el de `e`. Lo único que puede confundir es el árbol de objetos, donde
+los dos nombres se ven iguales; ahí ayudan la dirección y el comentario de propiedad del nodo.
 
 **El mapa a medida: lo que la vista enseña es el plano.** La vista sabe dibujar su propia
 topología —descubre por direcciones y la reparte a su manera—, y ese dibujo **no se parece a
