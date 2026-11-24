@@ -274,14 +274,24 @@ class ElMapaDelLaboratorio(unittest.TestCase):
                 self.assertLessEqual(caja["posY"] + alto, area["y"] + area["alto"], nombre)
 
     def test_un_rotulo_mas_ancho_que_su_area_se_parte(self):
-        """Si el texto no cabe a lo ancho, se parte: nunca se sale de su área."""
+        """Si el texto no cabe a lo ancho, se parte y el grupo sigue cabiendo entero."""
         area = {"titulo": "Ventas", "subred": "10.44.1.0 - 10.44.1.255 (/24)",
-                "x": 0.0, "y": 0.0, "ancho": 60.0, "alto": 300.0}
+                "x": 0.0, "y": 0.0, "ancho": 60.0, "alto": 600.0}
         textos, ancho, alto = mapa.rotulos_de(area)
         self.assertLessEqual(ancho, area["ancho"])
+        self.assertLessEqual(alto, area["alto"])
         self.assertGreater(len(textos), 2)
         for texto in textos:
             self.assertLessEqual(mapa.tamano_de_rotulo(texto)[0], area["ancho"])
+
+    def test_un_rotulo_que_no_cabe_para_el_mapa(self):
+        """Si no cabe ni partido, se para y se dice: no se dibuja fuera de su área."""
+        area = {"titulo": "Ventas", "subred": "10.44.1.0 - 10.44.1.255 (/24)",
+                "x": 0.0, "y": 0.0, "ancho": 60.0, "alto": 100.0}
+        with self.assertRaises(ValueError) as fallo:
+            mapa.rotulos_de(area)
+        self.assertIn("Ventas", str(fallo.exception))
+        self.assertIn("no cabe", str(fallo.exception))
 
     def test_dos_cajas_de_texto_no_se_pisan(self):
         """Los rótulos se esquivan también entre sí: un título encima de otro no se lee.

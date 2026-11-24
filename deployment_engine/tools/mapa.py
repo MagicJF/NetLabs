@@ -190,6 +190,14 @@ def rotulos_de(area: dict) -> tuple:
     ancho_max = max(1.0, area["ancho"] - 2 * ETIQUETA_MARGEN)
     textos = [trozo for linea in renglones(area) for trozo in _partir(linea, ancho_max)]
     ancho, alto = tamano_del_grupo(textos)
+    if ancho > area["ancho"] or alto > area["alto"]:
+        # Un rótulo que no cabe no se dibuja a medias: se dice qué área y qué texto no
+        # caben. Pintarlo recortado o fuera de su caja sería mentir en el mapa, que es
+        # justo lo que estas cabeceras evitan.
+        raise ValueError(
+            f"el rótulo de «{area['titulo']}» no cabe en su área: mide {ancho}×{alto} "
+            f"y el área {area['ancho']}×{area['alto']}"
+        )
     return textos, ancho, alto
 
 
