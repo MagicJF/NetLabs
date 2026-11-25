@@ -28,7 +28,7 @@ import re
 # que no existe no es un equipo, es una errata— y no se admite cualquier cosa.
 TYPES = {
     "router": {"code": "rt", "guest": "qemu", "network_device": True, "routes": True,
-               "functions": {"e": "borde", "c": "núcleo", "a": "acceso"}},
+               "functions": {"e": "borde", "c": "núcleo", "a": "acceso", "p": "proveedor"}},
     "firewall": {"code": "fw", "guest": "qemu", "network_device": True, "routes": True,
                  "functions": {"e": "borde", "i": "interior"}},
     "switch": {"code": "sw", "guest": "qemu", "network_device": True, "routes": False,

@@ -5,11 +5,12 @@
 # declaran— a caballo de las dos; los switches conmutan, y hay uno en cada red que
 # tiene más de un equipo colgando.
 #
-#   Internet (203.0.113.0/30, la nube)
-#      |                                |          <- la nube no está dentro de ACME:
-#     rte1                             rte2           es el exterior, y se dibuja fuera
-#      |                                |
-#   swc1 (red de la sede)          swc2
+#   Internet (203.0.113.0/24, la nube)            <- la nube no está dentro de ACME:
+#     swc3 · rtp1                                    es el exterior, y se dibuja fuera.
+#      |                     |                     Cada sede sale al proveedor; el
+#     rte1                 rte2                    tránsito entre sedes lo hace él,
+#      |                     |                     no un cable directo entre routers.
+#   swc1 (red de la sede)  swc2
 #    |     |     |                    |     |     |
 #  rta1 rta2 rta3               rta4 rta5 rta6     8 routers: 2 de borde + 6
 #    |     |     |                    |     |     |       de departamento, cada uno en
@@ -40,13 +41,14 @@ address_spaces:
   # dos sedes que la comparten. Declararla se comería la red de gestión (10.30.0.0/16).
   - 10.20.0.0/16        # la sede de Nueva York
   - 10.40.0.0/16        # la sede de Tokio
-  - 203.0.113.0/30      # Internet: el tramo público que comparten las dos sedes
+  - 203.0.113.0/24      # Internet: la nube pública; un tramo con proveedor
 
 networks:
   # `shape: cloud` no cambia nada del despliegue: es un puente como los demás. Cambia
   # cómo se dibuja —una nube, fuera de las áreas del cliente— porque no es un segmento
-  # de ACME sino el exterior, al que cada sede se asoma por su cuenta.
-  - {name: transito, address: 203.0.113.0/30, title: Internet, shape: cloud}
+  # de ACME sino el exterior, al que cada sede se asoma por su cuenta. El proveedor
+  # vive aquí dentro, y es quien enruta el tránsito entre las dos sedes.
+  - {name: transito, address: 203.0.113.0/24, title: Internet, shape: cloud}
   # El área de la sede: el segmento donde se juntan el router de borde y los tres
   # routers de departamento. Las interfaces van con máscara /28 (10.20.0.0/28) y no con
   # el /16 del área: con el /16 en la interfaz, cada router creería que los
@@ -61,24 +63,53 @@ networks:
   - {name: tk_marketing, address: 10.40.77.0/24, title: Marketing}
 
 nodes:
+  # --- el proveedor y su conmutador: el tránsito entre sedes pasa por aquí ----------
+  - role: swc3
+    type: switch
+    stage: 1
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [transito, transito, transito]   # rtp1, rte1, rte2
+    configure:
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
+  - role: rtp1
+    type: router
+    stage: 1
+    resources: {cores: 1, memory: 256, disk: 1}
+    networks: [transito]
+    address: 203.0.113.1/26
+    configure:
+      addresses:
+        - {network: transito, address: 203.0.113.1/26}
+      # Sabe volver a cada sede, y nada más: el cliente no le anuncia rutas.
+      routes:
+        - {destination: 10.20.0.0/16, gateway: 203.0.113.2}
+        - {destination: 10.40.0.0/16, gateway: 203.0.113.3}
+      users:
+        - {name: admin, password_from: secrets.routeros_clave}
+      services: {www: true}
+      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+
   # --- los dos routers de borde: entre Internet y la red de su sede -----------------
   - role: rte1
     type: router
     stage: 1
     resources: {cores: 1, memory: 256, disk: 1}
     networks: [transito, ny]     # p1 = Internet, p2 = la red de Nueva York
-    address: 203.0.113.1/30
+    address: 203.0.113.2/26
     configure:
       addresses:
-        - {network: transito, address: 203.0.113.1/30}
+        - {network: transito, address: 203.0.113.2/26}
         - {network: ny, address: 10.20.0.1/28}
       # Los tres departamentos están detrás de su router: el de borde sólo aprende por
-      # dónde salir. Y la otra sede, por Internet.
+      # dónde salir. La otra sede no tiene cable directo: sale por el proveedor.
       routes:
         - {destination: 10.20.55.0/24, gateway: 10.20.0.11}
         - {destination: 10.20.66.0/24, gateway: 10.20.0.12}
         - {destination: 10.20.77.0/24, gateway: 10.20.0.13}
-        - {destination: 10.40.0.0/16, gateway: 203.0.113.2}
+        - {destination: 0.0.0.0/0, gateway: 203.0.113.1}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -89,16 +120,16 @@ nodes:
     stage: 1
     resources: {cores: 1, memory: 256, disk: 1}
     networks: [transito, tk]
-    address: 203.0.113.2/30
+    address: 203.0.113.3/26
     configure:
       addresses:
-        - {network: transito, address: 203.0.113.2/30}
+        - {network: transito, address: 203.0.113.3/26}
         - {network: tk, address: 10.40.0.1/28}
       routes:
         - {destination: 10.40.55.0/24, gateway: 10.40.0.11}
         - {destination: 10.40.66.0/24, gateway: 10.40.0.12}
         - {destination: 10.40.77.0/24, gateway: 10.40.0.13}
-        - {destination: 10.20.0.0/16, gateway: 203.0.113.1}
+        - {destination: 0.0.0.0/0, gateway: 203.0.113.1}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -391,8 +422,12 @@ nodes:
     reserve: 10.40.77.50
 
 links:
-  # Internet: las dos sedes comparten el tramo público, no un cable entre routers.
-  - a: {node: rte1, port: 1}
+  # Internet: el proveedor y su switch; no hay cable directo entre routers.
+  - a: {node: swc3, port: 1}
+    z: {node: rtp1, port: 1}
+  - a: {node: swc3, port: 2}
+    z: {node: rte1, port: 1}
+  - a: {node: swc3, port: 3}
     z: {node: rte2, port: 1}
   # La red de cada sede, con su switch en medio.
   - a: {node: rte1, port: 2}

@@ -663,10 +663,10 @@ def _medir_region(region: Region) -> None:
             # Una sola fila de equipos: el switch a un extremo y los clientes al otro.
             region.alto = region.cabecera + MARGEN_ARRIBA + ALTO_EQUIPO + 26
         if region.nube:
-            # Una nube con el alto de una fila de equipos es una caja estrecha. Y sus
-            # equipos se dibujan a caballo del borde, así que necesitan aire dentro.
-            region.alto = max(region.alto, 170.0)
-            region.ancho = max(region.ancho, 300.0)
+            # La nube es el exterior y puede llevar dentro al proveedor y su switch: si
+            # es estrecha, su rótulo y los equipos se pisan.
+            region.alto = max(region.alto, 210.0)
+            region.ancho = max(region.ancho, 420.0)
         region.alto = max(region.alto, region.alto_min)
         region.ancho = max(region.ancho, region.ancho_min)
         return
@@ -948,7 +948,7 @@ def _plano_anidado(lab: dict) -> str:
         a, z = link["a"], link["z"]
         redes = por_nodo[a["node"]].get("networks") or []
         red = por_red.get(redes[a["port"] - 1]) if a["port"] <= len(redes) else None
-        if red is not None and red.nube:
+        if red is not None and red.nube and not _equipos_de(red):
             nubes.setdefault(red.nombre, []).extend([(a["node"], a["port"]),
                                                      (z["node"], z["port"])])
             continue
