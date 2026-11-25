@@ -398,9 +398,9 @@ que la documentación:
   plano, apartándose sólo lo justo para no pisar un cable o un equipo: un rótulo que dice de qué
   red es no puede caer en la caja de otra red;
 - cada **equipo de red** del laboratorio donde el plano lo pone —el router en la frontera de
-  las redes que une, el switch del núcleo en el centro—, con la **etiqueta grande** de la vista:
-  nombre e IP, sin cartel de patas ni de reparto, que no aportaba y se comía el sitio de las
-  cabeceras;
+  las redes que une, el switch del núcleo en el centro—, dibujado con su **icono**, sin etiqueta
+  de nombre e IP al lado ni cartel de patas: con veintiséis equipos, una ficha por equipo tapa el
+  dibujo y los cables que pasan por debajo;
 - cada **cable** del laboratorio, entre los dos equipos que une, con el **puerto y la interfaz de
   cada punta** (`p1 ether1`), atados a la interfaz de la vista por la que de verdad sale, y los
   **ajustes** que dicen cómo se dibujan: color propio y trazo fino, porque el gris ancho que pone

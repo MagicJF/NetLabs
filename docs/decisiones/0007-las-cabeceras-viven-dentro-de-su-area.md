@@ -37,6 +37,8 @@ ya enseña el nombre y la IP del equipo.
 - Los puestos de trabajo y servidores no se dibujaban en esta decisión porque no eran
   equipos de red registrados en la vista. La 0008 los incorpora: un nodo final entra por su
   dirección estática o por la que su router le reserva por MAC.
+- La etiqueta grande que aquí se dejaba a cada equipo la retira la 0012: se pasa al icono, sin
+  ficha al lado, para que los cables se vean enteros.
 
 Ver: `docs/diseno.md` §3.4, `deployment_engine/tools/mapa.py`,
 `deployment_engine/tests/test_mapa.py`.
