@@ -701,26 +701,27 @@ posicionales ni números mágicos, y el orden de las patas es el orden en que se
 lab: <letra>_<título>                    # la letra es la cabeza de cada cable y el nombre
                                          # es también el de la carpeta, el fichero y el pool
 
-address_spaces: [<cidr>, ...]            # addresses this lab may use; no other lab may
+address_spaces: [<cidr>, ...]            # los espacios que este laboratorio puede usar;
+                                         # ningún otro se puede solapar con ellos
 
-networks:                                # named networks of the lab
-  - name: <network-name>
+networks:                                # las redes con nombre del laboratorio
+  - name: <nombre-de-red>
     address: <cidr>
 
 nodes:
   - role: <equipo>                       # su nombre en todas partes: dos letras de tipo,
                                          # una de función y el ordinal (`swc2`)
     type: router | server | workstation | switch
-    stage: <integer>                     # coarse order: a stage waits for the previous one
-    after: [<role>, ...]                 # optional: fine order inside the same stage
+    stage: <entero>                      # orden grueso: una etapa espera a la anterior
+    after: [<rol>, ...]                  # opcional: orden fino dentro de la misma etapa
     resources: {cores, memory, disk}
-    image: <image, when it applies>
-    networks: [<network-name>, ...]      # order is the interface numbering: net0, net1...
-    address: <cidr | dhcp>               # dhcp = asks its network for one
-    reserve: <ip>                        # optional: the fixed address DHCP gives it
-                                         # (only with address: dhcp; the engine creates
-                                         # the static lease by MAC on the serving router)
-    configure:                           # optional: if absent, the engine does not go in
+    image: <imagen, cuando aplica>
+    networks: [<nombre-de-red>, ...]     # el orden numera las interfaces: net0, net1...
+    address: <cidr | dhcp>               # dhcp = pide una a su red
+    reserve: <ip>                        # opcional: la dirección fija que le da el DHCP
+                                         # (sólo con address: dhcp; el motor crea la
+                                         # concesión por MAC en el router que sirve su red)
+    configure:                           # opcional: si falta, el motor no entra
       <area>: { ... }
 ```
 

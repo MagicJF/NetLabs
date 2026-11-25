@@ -121,13 +121,13 @@ class LasReservasDeLosNodosFinales(unittest.TestCase):
     def test_una_reserva_que_falta_se_crea_en_el_servidor(self):
         ops = converge.ros_ops(self.nodo(), {"pools": [], "dhcp_servers": [],
                                              "dhcp_networks": [], "dhcp_leases": []}, "clave")
-        leases = [o for o in ops if o["path"] == "/rest/ip/dhcp-server/lease"]
-        self.assertEqual(len(leases), 1)
-        self.assertEqual(leases[0]["method"], "PUT")
-        self.assertEqual(leases[0]["body"]["address"], "10.44.1.50")
-        self.assertEqual(leases[0]["body"]["mac-address"], "BC:24:11:00:00:01")
-        self.assertEqual(leases[0]["body"]["server"], "netlabs-lan1")
-        self.assertIn("reserva 10.44.1.50", leases[0]["effect"])
+        reservas = [o for o in ops if o["path"] == "/rest/ip/dhcp-server/lease"]
+        self.assertEqual(len(reservas), 1)
+        self.assertEqual(reservas[0]["method"], "PUT")
+        self.assertEqual(reservas[0]["body"]["address"], "10.44.1.50")
+        self.assertEqual(reservas[0]["body"]["mac-address"], "BC:24:11:00:00:01")
+        self.assertEqual(reservas[0]["body"]["server"], "netlabs-lan1")
+        self.assertIn("reserva 10.44.1.50", reservas[0]["effect"])
 
     def test_una_reserva_que_ya_esta_no_se_reescribe(self):
         current = {

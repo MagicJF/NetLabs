@@ -509,7 +509,7 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
     servidores = {s.get("name"): s for s in current.get("dhcp_servers") or []}
     redes = {r.get("address"): r for r in current.get("dhcp_networks") or []}
     concesiones = {str(l.get("comment") or ""): l for l in current.get("dhcp_leases") or []}
-    deseados_pool, deseados_srv, deseados_red, deseados_lease = set(), set(), set(), set()
+    deseados_pool, deseados_srv, deseados_red, deseados_reserva = set(), set(), set(), set()
 
     for item in declarados:
         iface = interface_of(node, item["network"])
@@ -552,12 +552,12 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
                         "body": {"gateway": gateway},
                         "effect": f"red servida {cidr} por {gateway}"})
 
-        for lease in item.get("leases") or []:
-            comentario = f"{PREFIX}reserva-{lease['role']}"
-            deseados_lease.add(comentario)
+        for reserva in item.get("leases") or []:
+            comentario = f"{PREFIX}reserva-{reserva['role']}"
+            deseados_reserva.add(comentario)
             cuerpo = {
-                "address": str(lease["address"]),
-                "mac-address": str(lease["mac"]),
+                "address": str(reserva["address"]),
+                "mac-address": str(reserva["mac"]),
                 "server": nombre,
                 "comment": comentario,
                 "disabled": "no",
@@ -566,8 +566,8 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
             if actual is None:
                 ops.append({"method": "PUT", "path": "/rest/ip/dhcp-server/lease",
                             "body": cuerpo,
-                            "effect": f"reserva {lease['address']} para {lease['role']} "
-                                      f"({lease['mac']}) en {nombre}"})
+                            "effect": f"reserva {reserva['address']} para {reserva['role']} "
+                                      f"({reserva['mac']}) en {nombre}"})
             else:
                 cambios = {}
                 if str(actual.get("address")) != cuerpo["address"]:
@@ -581,8 +581,8 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
                 if cambios:
                     ops.append({"method": "PATCH", "path": f"/rest/ip/dhcp-server/lease/{actual['.id']}",
                                 "body": cambios,
-                                "effect": f"reserva {lease['address']} para {lease['role']} "
-                                          f"({lease['mac']}) en {nombre}"})
+                                "effect": f"reserva {reserva['address']} para {reserva['role']} "
+                                          f"({reserva['mac']}) en {nombre}"})
 
     for nombre, pool in pools.items():
         if nombre.startswith(PREFIX) and nombre not in deseados_pool:
@@ -597,7 +597,7 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
             ops.append({"method": "DELETE", "path": f"/rest/ip/dhcp-server/network/{red['.id']}",
                         "effect": f"sobra la red servida {cidr}"})
     for comentario, concesion in concesiones.items():
-        if comentario.startswith(f"{PREFIX}reserva-") and comentario not in deseados_lease:
+        if comentario.startswith(f"{PREFIX}reserva-") and comentario not in deseados_reserva:
             ops.append({"method": "DELETE", "path": f"/rest/ip/dhcp-server/lease/{concesion['.id']}",
                         "effect": f"sobra la reserva {concesion.get('address')} "
                                   f"({concesion.get('comment')})"})

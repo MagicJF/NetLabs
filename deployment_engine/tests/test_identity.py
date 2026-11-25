@@ -245,6 +245,94 @@ class ElPlan(unittest.TestCase):
         with self.assertRaisesRegex(identity.LabError, "sólo acompaña a 'address: dhcp'"):
             identity.plan(mundo(), lab, entorno())
 
+    def test_dos_planes_con_la_misma_declaracion_no_se_pisan(self):
+        # El plan no puede tocar la declaración que recibe: si al inyectar la reserva
+        # le añadiera la concesión al `dhcp_server` del laboratorio, el segundo plan de
+        # la misma declaración se rechazaría a sí mismo al validarla otra vez.
+        lab = laboratorio()
+        puesto = next(n for n in lab["nodes"] if n["type"] == "workstation")
+        puesto["reserve"] = "10.44.1.50"
+        primero = identity.plan(mundo(), lab, entorno())
+        segundo = identity.plan(mundo(), lab, entorno())
+        self.assertEqual(primero, segundo)
+        # La declaración sigue sin la clave que el motor deriva para el router.
+        self.assertNotIn("leases", lab["nodes"][0]["configure"]["dhcp_server"][0])
+
+    def test_una_reserva_se_concede_en_la_red_que_la_contiene(self):
+        """La concesión va al servidor y a la tarjeta de la red de la reserva.
+
+        Un puesto con dos patas cuya reserva cae en la segunda no puede acabar
+        reservado en el servidor de la primera con la MAC de la primera: la dirección
+        se concedería por una tarjeta que no está en esa red y el puesto no la recibiría.
+        """
+        lab = {
+            "lab": "z_dos_redes",
+            "address_spaces": ["10.50.0.0/16"],
+            "networks": [
+                {"name": "lan1", "address": "10.50.1.0/24"},
+                {"name": "lan2", "address": "10.50.2.0/24"},
+            ],
+            "nodes": [
+                {"role": "rte1", "type": "router", "stage": 1,
+                 "networks": ["lan1", "lan2"], "address": "10.50.1.1/24",
+                 "configure": {
+                     "addresses": [{"network": "lan1", "address": "10.50.1.1/24"},
+                                   {"network": "lan2", "address": "10.50.2.1/24"}],
+                     "dhcp_server": [
+                         {"network": "lan1", "pool": "10.50.1.100-10.50.1.199",
+                          "gateway": "10.50.1.1"},
+                         {"network": "lan2", "pool": "10.50.2.100-10.50.2.199",
+                          "gateway": "10.50.2.1"},
+                     ]}},
+                {"role": "swc1", "type": "switch", "stage": 2, "after": ["rte1"],
+                 "networks": ["lan2", "lan2"]},
+                {"role": "wsp1", "type": "workstation", "stage": 3, "after": ["swc1"],
+                 "networks": ["lan1", "lan2"], "address": "dhcp", "reserve": "10.50.2.50"},
+            ],
+            "links": [
+                {"a": {"node": "rte1", "port": 1}, "z": {"node": "wsp1", "port": 1}},
+                {"a": {"node": "rte1", "port": 2}, "z": {"node": "swc1", "port": 1}},
+                {"a": {"node": "swc1", "port": 2}, "z": {"node": "wsp1", "port": 2}},
+            ],
+        }
+        plan = identity.plan(mundo(), lab, entorno())
+        router = next(n for n in plan["nodes"] if n["role"] == "rte1")
+        lan1, lan2 = router["configure"]["dhcp_server"]
+        self.assertNotIn("leases", lan1)
+        puesto = next(n for n in plan["nodes"] if n["role"] == "wsp1")
+        self.assertEqual(len(lan2["leases"]), 1)
+        self.assertEqual(lan2["leases"][0]["address"], "10.50.2.50")
+        # La MAC es la de la pata que está en lan2, no la de la primera.
+        self.assertEqual(lan2["leases"][0]["mac"], puesto["interfaces"][1]["mac"])
+
+    def test_una_reserva_que_pisa_una_direccion_declarada_se_rechaza(self):
+        # svs1 ya declara 10.20.66.10: reservársela a wsp3 la entregaría dos veces.
+        lab = laboratorio("d_acme_dos_sedes")
+        wsp3 = next(n for n in lab["nodes"] if n["role"] == "wsp3")
+        wsp3["reserve"] = "10.20.66.10"
+        with self.assertRaisesRegex(identity.LabError, "ya es la dirección de 'svs1'"):
+            identity.plan(mundo(), lab, entorno())
+
+    def test_una_reserva_que_pisa_la_puerta_se_rechaza(self):
+        # 10.44.1.1 es la puerta de lan1 (la dirección de rte1): reservarla dejaría al
+        # puesto sin salida.
+        lab = laboratorio()
+        wsp1 = next(n for n in lab["nodes"] if n["role"] == "wsp1")
+        wsp1["reserve"] = "10.44.1.1"
+        with self.assertRaisesRegex(identity.LabError, "ya es la dirección de 'rte1'"):
+            identity.plan(mundo(), lab, entorno())
+
+    def test_dos_reservas_iguales_se_rechazan(self):
+        # wsp1 y wsp2 comparten ny_ventas: reservarles la misma dirección entregaría
+        # una sola a dos equipos.
+        lab = laboratorio("d_acme_dos_sedes")
+        wsp1 = next(n for n in lab["nodes"] if n["role"] == "wsp1")
+        wsp2 = next(n for n in lab["nodes"] if n["role"] == "wsp2")
+        wsp1["reserve"] = "10.20.55.50"
+        wsp2["reserve"] = "10.20.55.50"
+        with self.assertRaisesRegex(identity.LabError, "declarada dos veces"):
+            identity.plan(mundo(), lab, entorno())
+
     def test_los_recursos_se_ajustan_en_el_sitio_y_no_tirando_el_invitado(self):
         # Un invitado con otra memoria no se destruye: se le reescribe el config. Tirar
         # los veinticuatro equipos para cambiar ocho memorias era el precio de antes.

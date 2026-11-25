@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import copy
 import ipaddress
 import re
 
@@ -291,6 +292,7 @@ def validate(lab: dict, env: dict) -> None:
                 )
     _reject_stage_cycles(nodes)
     _validate_links(lab)
+    _validate_reservas(lab, by_name)
 
 
 def _validate_control(lab: dict, env: dict) -> None:
@@ -802,6 +804,56 @@ def _reject_stage_cycles(nodes: list) -> None:
         visit(role, [])
 
 
+def _validate_reservas(lab: dict, networks: dict) -> None:
+    """Una reserva no puede pisar una dirección que ya es de alguien.
+
+    El servidor DHCP va a conceder la dirección reservada a un nodo final, así que
+    tiene que estar libre: no puede ser la dirección fija de otro equipo ni la puerta
+    de la red, y dos nodos no pueden reservar la misma. Se comprueba sobre la
+    declaración entera, antes de emitir el plan, para que una errata se descubra al
+    calcular y no a mitad de escribir en el router.
+    """
+    fijas = {}
+
+    def anota(direccion, de_quien):
+        fijas.setdefault(str(ipaddress.ip_interface(direccion).ip), de_quien)
+
+    for node in lab["nodes"]:
+        role = node["role"]
+        if node.get("address") and node["address"] != "dhcp":
+            anota(node["address"], f"la dirección de {role!r}")
+        configure = node.get("configure") or {}
+        for pata in configure.get("addresses") or []:
+            anota(pata["address"], f"la dirección de {role!r}")
+        for srv in configure.get("dhcp_server") or []:
+            if srv.get("gateway"):
+                anota(srv["gateway"], f"la puerta que sirve {role!r}")
+    # La puerta derivada —la primera del rango— también es de alguien aunque ningún
+    # router la declare: reservarla dejaría al nodo sin salida.
+    for net in lab["networks"]:
+        cidr = ipaddress.ip_network(net["address"], strict=False)
+        fijas.setdefault(str(cidr.network_address + 1), f"la puerta de la red {net['name']!r}")
+
+    reservadas = {}
+    for node in lab["nodes"]:
+        reserva = node.get("reserve")
+        if not reserva:
+            continue
+        role = node["role"]
+        direccion = str(ipaddress.ip_address(str(reserva)))
+        if direccion in reservadas:
+            raise LabError(
+                f"la reserva {direccion} está declarada dos veces: {role!r} y "
+                f"{reservadas[direccion]!r} no pueden compartirla"
+            )
+        reservadas[direccion] = role
+        if direccion in fijas:
+            raise LabError(
+                f"la reserva {direccion} de {role!r} ya es {fijas[direccion]}: "
+                "una reserva tiene que estar libre"
+            )
+
+
 # ---------------------------------------------------------------------------
 # El plan
 # ---------------------------------------------------------------------------
@@ -1196,20 +1248,31 @@ def _reservar_direcciones(nodes: list[dict]) -> None:
     router que sirve su red. Se inyecta en el `configure.dhcp_server` del router para
     que `converge._dhcp_ops` la trate como cualquier otra diferencia declarada, sin
     que el laboratorio tenga que repetir la MAC ni el nombre del servidor.
+
+    La reserva cae en UNA de las redes del nodo —la que la contiene— y de ahí salen la
+    interfaz y su MAC: un puesto con dos patas no puede acabar reservado en el servidor
+    de la primera con la tarjeta de la segunda. Las colisiones con direcciones ya
+    declaradas las rechaza `_validate_reservas` antes de llegar aquí.
     """
-    vistas = set()
-    for endpoint in nodes:
-        direccion = endpoint.get("reserve")
+    for nodo in nodes:
+        direccion = nodo.get("reserve")
         if not direccion:
             continue
-        if direccion in vistas:
+        reservada = ipaddress.ip_address(direccion)
+        indice = next(
+            (i for i, net in enumerate(nodo["networks"])
+             if reservada in ipaddress.ip_network(net["address"], strict=False)),
+            None,
+        )
+        # `_validate_node` ya garantiza que la reserva cae en una red del nodo; el
+        # guardia está por si esa comprobación cambia, para no reservar en la red
+        # equivocada en silencio.
+        if indice is None:
             raise LabError(
-                f"la reserva {direccion} está declarada dos veces: cada nodo final "
-                "necesita una dirección distinta"
+                f"la reserva {direccion} de {nodo['role']!r} no cae en ninguna red del nodo"
             )
-        vistas.add(direccion)
-        red = endpoint["networks"][0]["name"]
-        mac = endpoint["interfaces"][0]["mac"]
+        red = nodo["networks"][indice]["name"]
+        mac = nodo["interfaces"][indice]["mac"]
         servidor = None
         for router in nodes:
             if router["type"] not in ("router", "firewall"):
@@ -1222,14 +1285,14 @@ def _reservar_direcciones(nodes: list[dict]) -> None:
                 break
         if servidor is None:
             raise LabError(
-                f"el nodo {endpoint['role']!r} reserva {direccion} en la red {red!r}, "
+                f"el nodo {nodo['role']!r} reserva {direccion} en la red {red!r}, "
                 "pero ningún router declara un servidor DHCP para esa red"
             )
         _router, item = servidor
         item.setdefault("leases", []).append({
             "address": direccion,
             "mac": mac,
-            "role": endpoint["role"],
+            "role": nodo["role"],
         })
 
 
@@ -1303,7 +1366,10 @@ def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
         "address": static or ("dhcp" if address == "dhcp" else None),
         "reserve": reservada,
         "networks": [{"name": n, "address": str(networks[n])} for n in node["networks"]],
-        "configure": node.get("configure") or {},
+        # El plan no comparte estructura con la declaración que recibe: si el motor
+        # añadiera la concesión al `dhcp_server` del laboratorio, el segundo plan de la
+        # misma declaración la volvería a validar y rechazaría su propia clave.
+        "configure": copy.deepcopy(node.get("configure") or {}),
     }
 
 
