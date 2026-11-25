@@ -409,6 +409,36 @@ class ElSwitch(unittest.TestCase):
         self.assertTrue(switch["mgmt_address"].startswith("10.30."))
 
 
+class ElVocabularioDeLosEquipos(unittest.TestCase):
+    def test_un_router_proveedor_se_nombra_por_su_funcion(self):
+        """`rtp1` es un router con función de proveedor; `rtq1` sigue siendo una errata.
+
+        Demuestra que la función `p` añadida al vocabulario pasa la misma puerta que
+        rechaza lo que no existe. Sin la prueba, la letra podía dejar de validarse —o
+        validarse cualquier otra— y el nombre del equipo, que viaja al hostname del
+        invitado y a las puntas de sus cables, dejaría de contar el tipo desplegado.
+        """
+
+        def renombrar(lab, de, a):
+            for nodo in lab["nodes"]:
+                if nodo["role"] == de:
+                    nodo["role"] = a
+                nodo["after"] = [a if rol == de else rol for rol in nodo.get("after") or []]
+            for cable in lab["links"]:
+                for punta in ("a", "z"):
+                    if cable[punta]["node"] == de:
+                        cable[punta]["node"] = a
+
+        lab = copy.deepcopy(laboratorio())
+        renombrar(lab, "rte1", "rtp1")
+        plan = identity.plan(mundo(), lab, entorno())
+        self.assertIn("rtp1", [n["name"] for n in plan["nodes"]])
+        # La misma puerta sigue parando la letra que no es una función de router.
+        renombrar(lab, "rtp1", "rtq1")
+        with self.assertRaisesRegex(identity.LabError, "no existe para un router"):
+            identity.plan(mundo(), lab, entorno())
+
+
 class Rechazos(unittest.TestCase):
     CASOS = [
         (lambda l: l.update(extra=1), "clave desconocida"),

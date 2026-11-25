@@ -10,7 +10,6 @@ import pathlib
 import re
 import sys
 import ipaddress
-import re
 import unittest
 
 import yaml
@@ -236,6 +235,88 @@ def cajas_y_equipos(svg):
     return areas, equipos
 
 
+def tramos_de_los_cables(svg):
+    """Cada cable del plano con sus dos puntas y los tramos rectos que dibuja.
+
+    Un cable se escribe con `polyline` cuando dobla y con `line` cuando va recto, así
+    que leer sólo uno de los dos deja cables sin mirar, y un cable que no se lee es un
+    cable que puede tachar cualquier cosa sin que nadie se entere.
+    """
+    salida = []
+    for m in re.finditer(r'<g class="cable" data-a="([^"]*)" data-pa="[^"]*" '
+                         r'data-z="([^"]*)" data-pz="[^"]*">(.*?)</g>', svg):
+        tramos = []
+        for recorrido in re.findall(r'points="([^"]*)"', m.group(3)):
+            puntos = [tuple(float(v) for v in par.split(",")) for par in recorrido.split()]
+            tramos += list(zip(puntos, puntos[1:]))
+        for x1, y1, x2, y2 in re.findall(
+                r'x1="([\d.-]+)" y1="([\d.-]+)" x2="([\d.-]+)" y2="([\d.-]+)"', m.group(3)):
+            tramos.append(((float(x1), float(y1)), (float(x2), float(y2))))
+        salida.append(((m.group(1), m.group(2)), tramos))
+    return salida
+
+
+def recorte(tramo, caja):
+    """La parte del tramo que cae dentro de una caja, como intervalo de sus parámetros.
+
+    Se recorta la recta contra el rectángulo en vez de muestrear puntos: un cable que
+    roza una esquina también es un cable que tacha lo que hay en ella, y el muestreo se
+    lo salta cuando el cruce es corto.
+    """
+    (ax, ay), (bx, by) = tramo
+    x0, y0, x1, y1 = caja
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-(bx - ax), ax - x0), (bx - ax, x1 - ax),
+                 (-(by - ay), ay - y0), (by - ay, y1 - ay)):
+        if p == 0:
+            if q < 0:
+                return None
+            continue
+        corte = q / p
+        if p < 0:
+            t0 = max(t0, corte)
+        else:
+            t1 = min(t1, corte)
+        if t0 > t1:
+            return None
+    return t0, t1
+
+
+def cajas_de_los_simbolos(svg, lab):
+    """La caja que ocupa el símbolo de cada equipo, por rol."""
+    tipos = {n["role"]: n["type"] for n in lab["nodes"]}
+    salida = {}
+    for m in re.finditer(r'<g data-rol="([^"]*)" data-x="([\d.-]+)" data-y="([\d.-]+)"', svg):
+        ancho, alto = plano.SIMBOLO[tipos[m.group(1)]]
+        x, y = float(m.group(2)), float(m.group(3))
+        salida[m.group(1)] = (x - ancho / 2, y - alto / 2, x + ancho / 2, y + alto / 2)
+    return salida
+
+
+def cajas_de_los_rotulos(svg):
+    """La caja del nombre de cada equipo y de cada área: el cuerpo grande del plano.
+
+    Sólo el nombre. Es lo que se usa para saber qué se está mirando, y una línea que lo
+    tacha deja el equipo sin identificar; las direcciones van en cuerpo menor y taparlas
+    estrecha el dato, no el nombre.
+    """
+    salida = []
+    for m in re.finditer(r'<text x="([\d.-]+)" y="([\d.-]+)"([^>]*)>([^<]*)</text>', svg):
+        x, y, attrs, texto = float(m.group(1)), float(m.group(2)), m.group(3), m.group(4)
+        tam = re.search(r'font-size="([\d.]+)"', attrs)
+        if not texto.strip() or tam is None or float(tam.group(1)) != 12.5:
+            continue
+        ancho = len(texto) * 12.5 * 0.52
+        if 'text-anchor="middle"' in attrs:
+            x0 = x - ancho / 2
+        elif 'text-anchor="end"' in attrs:
+            x0 = x - ancho
+        else:
+            x0 = x
+        salida.append((x0, y - 12.5 * 0.8, x0 + ancho, y + 12.5 * 0.25, texto))
+    return salida
+
+
 def routers_de_borde(lab):
     """Los equipos con una pata en la nube, con el título de la caja de su sede.
 
@@ -338,6 +419,35 @@ class TestConvenciones(unittest.TestCase):
             with self.subTest(laboratorio=lab):
                 self.assertEqual(len(altos), 1, f"redes de altos distintos: {sorted(altos)}")
                 self.assertEqual(len(anchos), 1, f"redes de anchos distintos: {sorted(anchos)}")
+
+
+class TestLosCablesNoTachanElPlano(unittest.TestCase):
+    def test_ningun_cable_atraviesa_un_simbolo_ajeno_ni_un_nombre(self):
+        """Un cable que cruza un símbolo o un nombre dibuja un enlace que no existe.
+
+        Demuestra que ningún cable pasa por encima del equipo de al lado ni tacha ningún
+        nombre. Lo segundo es lo que hacía la pata de la nube: al no tener borde propio
+        por arriba subía hasta el final del lienzo, atravesaba el switch que la sacaba y
+        su rótulo, y bajaba luego por la misma coordenada —una línea encima del nombre y
+        el plano deja de decir qué equipo es cuál—. El símbolo de la propia punta es el
+        único sitio por donde un cable pasa por dentro, y va tapado por el símbolo.
+        """
+        for lab in todos_los_laboratorios():
+            declaracion = laboratorio(lab)
+            svg = plano.plano(declaracion, "topologia")
+            simbolos = cajas_de_los_simbolos(svg, declaracion)
+            rotulos = cajas_de_los_rotulos(svg)
+            for (a, z), tramos in tramos_de_los_cables(svg):
+                with self.subTest(laboratorio=lab, cable=f"{a}-{z}"):
+                    for tramo in tramos:
+                        for rol, caja in simbolos.items():
+                            if rol in (a, z):
+                                continue
+                            self.assertIsNone(recorte(tramo, caja),
+                                              f"el cable {a}-{z} pasa por el símbolo de {rol}")
+                        for x0, y0, x1, y1, texto in rotulos:
+                            self.assertIsNone(recorte(tramo, (x0, y0, x1, y1)),
+                                              f"el cable {a}-{z} tacha el nombre {texto!r}")
 
 
 if __name__ == "__main__":
