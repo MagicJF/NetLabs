@@ -208,6 +208,18 @@ class ElInteriorLinux(unittest.TestCase):
         self.assertEqual(estado["files"]["/etc/x.conf"], "abc123")
         self.assertEqual(estado["files"]["/etc/y.conf"], "-")
 
+    def test_la_puerta_de_root_no_lleva_la_contrasena_en_el_comando(self):
+        argv = converge.linux_access_cmd("ssh-ed25519 AAAA prueba", "s3cr3t")
+        self.assertEqual(argv[:2], ["sh", "-c"])
+        self.assertNotIn("s3cr3t", argv[2])
+        self.assertIn('CAMBIO:$cambio', argv[2])
+        self.assertIn("PermitRootLogin yes", argv[2])
+        self.assertIn("ssh-ed25519 AAAA prueba", argv[2])
+
+    def test_la_puerta_se_niega_sin_contrasena(self):
+        with self.assertRaises(converge.LabError):
+            converge.linux_access_cmd("ssh-ed25519 AAAA prueba", "")
+
     def test_el_sondeo_pregunta_solo_por_las_fuentes_declaradas(self):
         # Mirar `/etc/apt/sources.list.d/*.list` leería del huésped fuentes que no son
         # del motor: una con credenciales en la URL viaja en base64, que no la esconde.
@@ -1052,7 +1064,7 @@ class ElRegistroEnLaVista(unittest.TestCase):
     """
 
     API = "http://127.0.0.1:8000/v1"
-    SECRETS = {"routeros_clave": "s3cr3t"}
+    SECRETS = {"routeros_clave": "s3cr3t", "linux_clave": "l1nux"}
 
     def equipo(self, role="rte1", address="10.30.0.101", usuario="admin"):
         return {
@@ -1082,15 +1094,35 @@ class ElRegistroEnLaVista(unittest.TestCase):
             "configure": {},
         }
 
-    def test_un_servidor_con_direccion_estatica_se_registra_sin_credenciales(self):
-        # Un nodo final no tiene la clave del RouterOS ni una pata de gestión: se
-        # registra por su dirección estática y sin campos de SSH inventados.
+    def test_un_servidor_con_direccion_estatica_se_registra_con_su_terminal(self):
+        # Un nodo final no tiene la clave del RouterOS ni una pata de gestión, pero
+        # sí una terminal: se registra por su dirección estática con la cuenta de
+        # root de los invitados Linux, para que la consola de la vista pueda abrirla.
         plan = converge.netxms_ops([self.servidor()], [], [], self.API, self.SECRETS)
         self.assertEqual(len(plan["ops"]), 1)
         cuerpo = json.loads(plan["ops"][0]["cuerpo"])
         self.assertEqual(cuerpo["ipAddress"], "10.20.66.10")
-        self.assertNotIn("sshPassword", cuerpo)
-        self.assertNotIn("sshLogin", cuerpo)
+        self.assertEqual(cuerpo["sshLogin"], "root")
+        self.assertEqual(cuerpo["sshPassword"], "l1nux")
+        self.assertEqual(cuerpo["sshPort"], 22)
+
+    def test_un_servidor_ya_registrado_sin_terminal_se_rehace(self):
+        # El API no deja poner credenciales a un nodo que ya existe, así que un nodo
+        # final registrado antes de que hubiera terminal se retira y se vuelve a dar
+        # de alta. Sin ese rehacer, su consola seguiría sin saber entrar.
+        encontrados = [{"id": 494, "name": "svs1", "ipAddress": {"address": "10.20.66.10"}}]
+        detalles = [{"id": 494, "sshLogin": "", "sshPassword": "", "sshPort": 22}]
+        plan = converge.netxms_ops([self.servidor()], encontrados, detalles, self.API, self.SECRETS)
+        self.assertEqual([o["effect"].split()[0] for o in plan["ops"]], ["rehacer", "registrar"])
+        self.assertIn("/494", plan["ops"][0]["cmd"][-1])
+        self.assertEqual(json.loads(plan["ops"][1]["cuerpo"])["sshLogin"], "root")
+
+    def test_un_servidor_ya_registrado_con_su_terminal_no_se_toca(self):
+        encontrados = [{"id": 494, "name": "svs1", "ipAddress": {"address": "10.20.66.10"}}]
+        detalles = [{"id": 494, "sshLogin": "root", "sshPassword": "l1nux", "sshPort": 22}]
+        plan = converge.netxms_ops([self.servidor()], encontrados, detalles, self.API, self.SECRETS)
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(plan["pendientes"], [])
 
     def test_un_nodo_final_por_dhcp_no_se_inventa_una_direccion(self):
         # Sin reserva no hay dirección que registrar: el mapa no puede dibujar un nodo

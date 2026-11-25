@@ -353,11 +353,16 @@ problema se resuelve sin instalar nada dentro: añadir la antena sería un agent
 laboratorio que puede caerse, un salto que explicar y menos realismo.
 
 **La terminal de la consola web.** NetXMS puede abrir una shell a un equipo desde el
-navegador. En esta fase se usa **sólo para los equipos de red**, y va por su **dirección de
-gestión** (la OOB): mismo camino que el resto, sin depender de las rutas del laboratorio.
-Extenderlo a los nodos finales es posible y no se descarta, pero no es requisito. Lo que hay
-que decir en voz alta: esa shell es **para una persona**, no para el motor — Ansible configura
-por su vía (§6) y no por la terminal de nadie.
+navegador. Se usa para **todos los equipos del laboratorio**: los de red van por su **dirección
+de gestión** (la OOB), y los puestos y servidores por la dirección estable de su interfaz, con
+la cuenta `root` del invitado Linux. El motor abre esa puerta al crear el invitado —le deja
+autorizada su clave pública para poder configurarlo— y, antes de registrarlo en la vista, le
+pone una clave de root y un `sshd` que la acepte; la contraseña es `linux_clave` de
+`secrets.yml`, una credencial del sitio, no del laboratorio. Así la consola de la vista abre su
+terminal igual que la de un RouterOS, sin depender de la clave del motor. La contraseña viaja
+por la entrada estándar y no queda escrita en ningún comando; el invitado guarda su huella, no
+la contraseña, para que el segundo `apply` no vuelva a tocarlo. Esa shell es **para una
+persona**, no para el motor: Ansible configura por su vía (§6) y no por la terminal de nadie.
 
 **Qué nodos finales entran en la vista.** Un equipo de red entra por su pata de gestión. Un
 servidor o un puesto no tiene pata de gestión: entra por la dirección de su interfaz, y sólo si
@@ -891,8 +896,7 @@ salida real del comando que lo prueba.
 
 **Lo que se deja para más adelante, con su porqué:** el **agente** de monitorización dentro de
 los nodos finales (daría CPU, memoria y procesos, a cambio de instalar y mantener una pieza más
-en cada invitado; hoy basta con saber si el nodo está vivo y cómo está su segmento), la
-**terminal** de la consola web para nodos finales (hoy sólo para equipos de red), y las
+en cada invitado; hoy basta con saber si el nodo está vivo y cómo está su segmento) y las
 **máquinas virtuales con cloud-init** (los contenedores cubren el caso, y el primer arranque de
 un router ya lo resuelve el agente: en este hipervisor la vía de metadatos está cerrada, §3.8).
 
