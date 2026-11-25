@@ -566,6 +566,21 @@ def _equipos_de(region: Region) -> list[str]:
     return dentro
 
 
+def _nube_de(punto: tuple[float, float], regiones: list[Region]) -> Region | None:
+    """La nube que contiene ese punto, si la hay.
+
+    Un cable que nace o muere dentro de la nube tiene que salir por su base —la única
+    frontera que la nube enseña— y no por el borde del lienzo: la nube se dibuja como
+    banda del techo y por fuera de ella no hay más que la raíz sintética, que no tiene
+    borde propio.
+    """
+    for region in regiones:
+        if (region.nube and region.x <= punto[0] <= region.x + region.ancho
+                and region.y <= punto[1] <= region.y + region.alto):
+            return region
+    return None
+
+
 def _marcar_pasillos(raiz: Region, cruces: dict[str, list[Region]]) -> None:
     """Marca las áreas que se dibujan como banda arriba, con lo demás debajo.
 
@@ -1042,9 +1057,23 @@ def _plano_anidado(lab: dict) -> str:
             return _linea(pa, pz, ta, tz, puerto_a, puerto_z)
         abajo = pz[1] > pa[1]
         caja = casa_z if abajo else casa_a
+        # Cuando una punta vive en la nube, la frontera que hay que rodear es la base de
+        # la nube y no el borde del lienzo: la nube es el techo del dibujo, y la raíz
+        # sintética que la envuelve no tiene borde propio, así que el corredor caía por
+        # encima de ella y el cable subía desde el switch atravesando su símbolo y su
+        # nombre para volver a bajar por la misma coordenada.
+        nube = _nube_de(pa, regiones) or _nube_de(pz, regiones)
+        if nube is not None:
+            caja = nube
         corredor = corredores.get(id(caja), 0)
         corredores[id(caja)] = corredor + 1
-        y = (caja.y - 10 - 7 * corredor) if abajo else (caja.y + caja.alto + 10 + 7 * corredor)
+        # Al bajar, el corredor va justo encima de la caja de destino; al salir de la
+        # nube, debajo de su base. Cada corredor se aparta del anterior para que dos
+        # cables no se dibujen como uno.
+        if nube is not None or not abajo:
+            y = caja.y + caja.alto + 10 + 7 * corredor
+        else:
+            y = caja.y - 10 - 7 * corredor
         salida = pa[1] + (ta[1] / 2 + 2) * (1 if abajo else -1)
         entrada = pz[1] - (tz[1] / 2 + 2) * (1 if abajo else -1)
         # Las bajadas de un mismo equipo salen por puntos distintos: si salieran todas
