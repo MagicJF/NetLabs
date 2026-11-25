@@ -1109,13 +1109,31 @@ class ElRegistroEnLaVista(unittest.TestCase):
     def test_un_servidor_ya_registrado_sin_terminal_se_rehace(self):
         # El API no deja poner credenciales a un nodo que ya existe, así que un nodo
         # final registrado antes de que hubiera terminal se retira y se vuelve a dar
-        # de alta. Sin ese rehacer, su consola seguiría sin saber entrar.
+        # de alta. Sin ese rehacer, su consola seguiría sin saber entrar. La marca
+        # del comentario demuestra que el registro es de este laboratorio: sin ella
+        # no se podría borrar (AGENTS.md §3.6).
         encontrados = [{"id": 494, "name": "svs1", "ipAddress": {"address": "10.20.66.10"}}]
-        detalles = [{"id": 494, "sshLogin": "", "sshPassword": "", "sshPort": 22}]
+        detalles = [{"id": 494, "comments": "netlabs lab=d_prueba role=svs1",
+                     "sshLogin": "", "sshPassword": "", "sshPort": 22}]
         plan = converge.netxms_ops([self.servidor()], encontrados, detalles, self.API, self.SECRETS)
         self.assertEqual([o["effect"].split()[0] for o in plan["ops"]], ["rehacer", "registrar"])
         self.assertIn("/494", plan["ops"][0]["cmd"][-1])
         self.assertEqual(json.loads(plan["ops"][1]["cuerpo"])["sshLogin"], "root")
+
+    def test_un_servidor_ajeno_con_otras_credenciales_no_se_rehace(self):
+        """La marca manda: sin ella, el registro no consta de este laboratorio.
+
+        Demuestra que un nodo final homónimo de otro laboratorio, que ocupa la misma
+        dirección y tiene otras credenciales, no se borra para rehacerlo: se perdería
+        su histórico. Se dice como pendiente y lo decide una persona.
+        """
+        encontrados = [{"id": 494, "name": "svs1", "ipAddress": {"address": "10.20.66.10"}}]
+        detalles = [{"id": 494, "comments": "netlabs lab=otro role=svs1",
+                     "sshLogin": "otro", "sshPassword": "ajena", "sshPort": 22}]
+        plan = converge.netxms_ops([self.servidor()], encontrados, detalles, self.API, self.SECRETS)
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(len(plan["pendientes"]), 1)
+        self.assertIn("no lleva la marca", plan["pendientes"][0])
 
     def test_un_servidor_ya_registrado_con_su_terminal_no_se_toca(self):
         encontrados = [{"id": 494, "name": "svs1", "ipAddress": {"address": "10.20.66.10"}}]

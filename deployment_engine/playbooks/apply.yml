@@ -229,6 +229,20 @@
         router: "{{ item }}"
         ros_user: "{{ (item.configure.users | default([{'name': 'admin'}]))[0].name }}"
 
+    # --- las rutas hacia las redes del laboratorio -------------------------
+    # Van después de que los routers tengan su dirección de gestión: el salto de
+    # una ruta es esa dirección, y una ruta hacia un salto que no responde no es
+    # una ruta. Y van antes del primer SSH a un nodo final: ese SSH sale del
+    # invitado de gestión y necesita la ruta para llegar a la red del laboratorio;
+    # sin ella, un laboratorio nuevo se paraba en la puerta antes de abrirla.
+    # Las pone el invitado de gestión, que es por donde entra el SSH del motor y
+    # donde vive lo que observa; `destroy` las retira.
+    - name: apply · las rutas hacia las redes del laboratorio
+      include_tasks: ../tasks/rutas.yml
+      vars:
+        rutas_deseadas: "{{ plan.rutas | default([]) }}"
+        espacios: "{{ lab.address_spaces | default([]) }}"
+
     # --- los puestos toman dirección --------------------------------------
     # Va antes de abrir la puerta de su terminal: un puesto con reserva puede
     # estar todavía con la dirección vieja, y la puerta se abre en la dirección
@@ -312,17 +326,6 @@
         objetivo: "{{ linux_nodo.mgmt_address }}"
         linux_descripcion: "{{ linux_nodo.name }}"
       when: linux_nodo.configure | default({}) | length > 0
-
-    # --- las rutas hacia las redes del laboratorio -------------------------
-    # Van después de que los routers tengan su dirección de gestión: el salto de
-    # una ruta es esa dirección, y una ruta hacia un salto que no responde no es
-    # una ruta. Las pone el invitado de gestión, que es por donde entra el SSH del
-    # motor y donde vive lo que observa; `destroy` las retira.
-    - name: apply · las rutas hacia las redes del laboratorio
-      include_tasks: ../tasks/rutas.yml
-      vars:
-        rutas_deseadas: "{{ plan.rutas | default([]) }}"
-        espacios: "{{ lab.address_spaces | default([]) }}"
 
     # --- el cruce ---------------------------------------------------------
     # Y se comprueba: una ruta puesta no es una red alcanzable. Si el router no

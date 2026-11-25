@@ -958,7 +958,7 @@ def linux_probe_cmd(node: dict) -> list:
     return _sh(linux_probe(node))
 
 
-def linux_access_cmd(public_key: str, password: str) -> list:
+def linux_access_cmd(clave_publica: str, contrasena: str) -> list:
     """El script que deja abierta la puerta de root de un invitado Linux.
 
     El invitado nace con la clave pública del motor ya autorizada —se la pasa
@@ -973,16 +973,16 @@ def linux_access_cmd(public_key: str, password: str) -> list:
     reinicie el servicio. El script imprime `CAMBIO:1` si tocó algo, para que la
     tarea pueda distinguir «ya estaba» de «lo he abierto».
     """
-    if not password:
+    if not contrasena:
         raise LabError(
             "no hay contraseña para los invitados Linux: declara `linux_clave` en secrets.yml"
         )
-    huella = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    huella = hashlib.sha256(contrasena.encode("utf-8")).hexdigest()
     config = "PermitRootLogin yes\nPasswordAuthentication yes"
     script = f"""set -eu
 cambio=0
 install -d -m 700 /root/.ssh
-clave={shlex.quote(public_key)}
+clave={shlex.quote(clave_publica)}
 touch /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
 if [ -n "$clave" ] && ! grep -qxF "$clave" /root/.ssh/authorized_keys; then
@@ -1605,6 +1605,21 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
             if (str(actual.get("sshLogin") or "") == usuario
                     and str(actual.get("sshPassword") or "") == clave
                     and int(actual.get("sshPort") or 0) == int(puerto)):
+                continue
+            # Compartir nombre y dirección no demuestra quién creó el registro: el
+            # asignador puede reutilizar la dirección para un puesto de otro
+            # laboratorio. La marca del comentario es la prueba; sin ella no se
+            # rehace, porque borraría el histórico de otro (AGENTS.md §3.6).
+            suyo_de_aqui = (marca_de(node)
+                            and marca_de(node) in str(actual.get("comments") or ""))
+            if not suyo_de_aqui:
+                pendientes.append(
+                    f"{nombre} ({direccion}): ya está en la vista con otras credenciales "
+                    f"(usuario {actual.get('sshLogin') or 'ninguno'}), y su registro no "
+                    "lleva la marca de este laboratorio: no consta que sea suyo y no se "
+                    "rehace para no borrar el histórico de otro. Si es un resto, "
+                    "retíralo a mano en la consola"
+                )
                 continue
             borrados.append({
                 "cmd": netxms_borrar_cmd(api, objeto["id"]),
