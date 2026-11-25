@@ -326,6 +326,7 @@ nodes:
     resources: {cores: 1, memory: 128, disk: 2}
     networks: [ny_ventas]
     address: dhcp
+    reserve: 10.20.55.50
 
   - role: wsp2
     type: workstation
@@ -334,6 +335,7 @@ nodes:
     resources: {cores: 1, memory: 128, disk: 2}
     networks: [ny_ventas]
     address: dhcp
+    reserve: 10.20.55.51
 
   - role: wsp3
     type: workstation
@@ -342,6 +344,7 @@ nodes:
     resources: {cores: 1, memory: 128, disk: 2}
     networks: [ny_ingenieria]
     address: dhcp
+    reserve: 10.20.66.50
 
   - role: svs1                    # el servidor de ingeniería, con dirección propia
     type: server
@@ -358,6 +361,7 @@ nodes:
     resources: {cores: 1, memory: 128, disk: 2}
     networks: [ny_marketing]
     address: dhcp
+    reserve: 10.20.77.50
 
   - role: wsp5
     type: workstation
@@ -366,6 +370,7 @@ nodes:
     resources: {cores: 1, memory: 128, disk: 2}
     networks: [tk_ventas]
     address: dhcp
+    reserve: 10.40.55.50
 
   - role: wsp6
     type: workstation
@@ -374,6 +379,7 @@ nodes:
     resources: {cores: 1, memory: 128, disk: 2}
     networks: [tk_ingenieria]
     address: dhcp
+    reserve: 10.40.66.50
 
   - role: wsp7
     type: workstation
@@ -382,6 +388,7 @@ nodes:
     resources: {cores: 1, memory: 128, disk: 2}
     networks: [tk_marketing]
     address: dhcp
+    reserve: 10.40.77.50
 
 links:
   # Internet: las dos sedes comparten el tramo público, no un cable entre routers.

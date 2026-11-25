@@ -362,15 +362,17 @@ por su vía (§6) y no por la terminal de nadie.
 **Qué nodos finales entran en la vista.** Un equipo de red entra por su pata de gestión. Un
 servidor o un puesto no tiene pata de gestión: entra por la dirección de su interfaz, y sólo si
 esa dirección es **estable**. Por eso un nodo final con dirección **estática** se registra y se
-dibuja en el mapa, mientras que uno con `address: dhcp` no se inventa una dirección que todavía
-no tiene. Para que un nodo DHCP aparezca hay dos caminos: darle una dirección estática (deja de
-ejercer de cliente DHCP) o **reservarle una dirección por MAC** en el router que sirve su red;
-la reserva convierte el DHCP en una dirección estable y el nodo se registraría igual que uno
-estático. **La reserva todavía no la crea el motor**: hoy habría que ponerla a mano en el
-router y el nodo seguiría sin `netxms_address`, así que en esta fase el camino soportado para
-un nodo DHCP es la dirección estática. NetXMS no adivina la dirección leyendo la tabla de
-leases: un lease puede cambiar y el nodo quedaría apuntando a una dirección que ya no es la
-suya.
+dibuja en el mapa, mientras que uno con `address: dhcp` y sin reserva no se inventa una
+dirección que todavía no tiene. Para que un nodo DHCP aparezca hay dos caminos: darle una
+dirección estática (deja de ejercer de cliente DHCP) o **reservarle una dirección por MAC** en el
+router que sirve su red;
+la reserva convierte el DHCP en una dirección estable y el nodo se registra igual que uno
+estático. El laboratorio la declara con `reserve: <ip>` en el nodo final; el motor deriva la
+MAC, crea la concesión fija en el servidor DHCP del router que sirve esa red y usa esa dirección
+para registrarlo y dibujarlo. NetXMS no adivina la dirección leyendo la tabla de leases: un
+lease puede cambiar y el nodo quedaría apuntando a una dirección que ya no es la suya. La
+reserva es del router, no del invitado: si se retira la declaración, el motor retira la
+concesión.
 
 **Dos laboratorios con los mismos nombres.** NetXMS admite dos nodos llamados `rta1`; lo que
 los distingue es su **dirección de gestión**, que sale del vmid y por tanto es única. El mapa
@@ -699,23 +701,27 @@ posicionales ni números mágicos, y el orden de las patas es el orden en que se
 lab: <letra>_<título>                    # la letra es la cabeza de cada cable y el nombre
                                          # es también el de la carpeta, el fichero y el pool
 
-address_spaces: [<cidr>, ...]            # addresses this lab may use; no other lab may
+address_spaces: [<cidr>, ...]            # los espacios que este laboratorio puede usar;
+                                         # ningún otro se puede solapar con ellos
 
-networks:                                # named networks of the lab
-  - name: <network-name>
+networks:                                # las redes con nombre del laboratorio
+  - name: <nombre-de-red>
     address: <cidr>
 
 nodes:
   - role: <equipo>                       # su nombre en todas partes: dos letras de tipo,
                                          # una de función y el ordinal (`swc2`)
     type: router | server | workstation | switch
-    stage: <integer>                     # coarse order: a stage waits for the previous one
-    after: [<role>, ...]                 # optional: fine order inside the same stage
+    stage: <entero>                      # orden grueso: una etapa espera a la anterior
+    after: [<rol>, ...]                  # opcional: orden fino dentro de la misma etapa
     resources: {cores, memory, disk}
-    image: <image, when it applies>
-    networks: [<network-name>, ...]      # order is the interface numbering: net0, net1...
-    address: <cidr | dhcp>               # dhcp = asks its network for one
-    configure:                           # optional: if absent, the engine does not go in
+    image: <imagen, cuando aplica>
+    networks: [<nombre-de-red>, ...]     # el orden numera las interfaces: net0, net1...
+    address: <cidr | dhcp>               # dhcp = pide una a su red
+    reserve: <ip>                        # opcional: la dirección fija que le da el DHCP
+                                         # (sólo con address: dhcp; el motor crea la
+                                         # concesión por MAC en el router que sirve su red)
+    configure:                           # opcional: si falta, el motor no entra
       <area>: { ... }
 ```
 
