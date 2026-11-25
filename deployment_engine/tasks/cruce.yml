@@ -40,9 +40,12 @@
   ansible.builtin.fail:
     msg: >-
       Desde el invitado de gestión no se llega a {{ cruce.prueba }} dentro de
-      {{ cruce.space }}. Se sondeó {{ que_se_sondeo }}. O falta la ruta {{ cruce.space }}
-      por {{ cruce.via }}, o el router no deja pasar el tráfico que viene de la red de
-      gestión. El laboratorio quedaría desplegado y no se vería: no se sigue.
+      {{ cruce.space }}. Se sondeó {{ que_se_sondeo }}. Tres causas: falta la ruta
+      {{ cruce.space }} por {{ cruce.via }} en el invitado de gestión; el router no deja
+      pasar el tráfico que viene de la red de gestión; o la pata del router no está en
+      esa red —los cables y sus puentes los pone el motor al crear los invitados, así que
+      rehacer un laboratorio sin volver a crearlo deja los cables viejos puestos y el
+      nuevo sin tender—. El laboratorio quedaría desplegado y no se vería: no se sigue.
       {{ interior.stderr | default('') | trim }}
   vars:
     # Lo que se sondeó y lo que eso demuestra, para que el fallo no prometa más de lo
