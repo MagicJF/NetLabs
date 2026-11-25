@@ -1,12 +1,14 @@
 # PROPÓSITO:   comprobar que un puesto tomó dirección del router, sin dormir a ciegas:
-#              se sondea su tabla de interfaces por la API con un tope.
+#              se sondea su tabla de interfaces por la API con un tope. Si el nodo declara
+#              una reserva, no basta con «tiene alguna dirección»: tiene que ser ESA.
 # INVARIANTES: el sondeo pasa por la puerta (`pve.yml`). Si el tope se agota, se para
 #              con el nombre del puesto: un laboratorio con un puesto mudo no es verde.
 #              «Tiene dirección» es una IPv4 fuera de `lo`, no la palabra `inet` en
 #              cualquier sitio: el bucle local siempre la tiene y el sondeo mentiría.
-#              Un puesto que arrancó antes de que el router sirviera DHCP se reinicia
-#              UNA vez; es la única reparación y está acotada, no un reintento infinito.
-# VER:         AGENTS.md §3.5, §5
+#              Un puesto que arrancó antes de que el router sirviera DHCP —o antes de que
+#              existiera su reserva— se reinicia UNA vez; es la única reparación y está
+#              acotada, no un reintento infinito.
+# VER:         AGENTS.md §3.5, §5; docs/diseno.md §3.4
 
 - name: "PVE · leer las interfaces de {{ guest.name }}"
   include_tasks: pve.yml
@@ -19,17 +21,24 @@
     pve_retries: 1
     pve_delay: 1
 
-- name: "PVE · reiniciar {{ guest.name }}: nació antes de que hubiera DHCP"
+- name: "PVE · anotar la dirección de {{ guest.name }}"
+  ansible.builtin.set_fact:
+    puesto_ips: >-
+      {{ pve_r.json.data | default([]) | rejectattr('name', 'equalto', 'lo')
+         | selectattr('inet', 'defined') | map(attribute='inet')
+         | map('regex_replace', '/.*$', '') | list }}
+    puesto_reserva: "{{ guest.reserve | default('', true) }}"
+
+- name: "PVE · reiniciar {{ guest.name }}: nació antes de que hubiera DHCP o de su reserva"
   include_tasks: pve.yml
   vars:
     pve_method: POST
     pve_path: "/nodes/{{ env.proxmox.node }}/{{ guest.guest }}/{{ guest.vmid }}/status/reboot"
-    pve_do: "reiniciar {{ guest.name }} para que vuelva a pedir dirección"
+    pve_do: "reiniciar {{ guest.name }} para que vuelva a pedir su dirección"
     pve_status: [200]
   when: >-
-    (pve_r.json.data | default([]) | rejectattr('name', 'equalto', 'lo')
-     | selectattr('inet', 'defined') | map(attribute='inet')
-     | select('search', '^[0-9]+\.') | list | length) == 0
+    (puesto_ips | length) == 0
+    or (puesto_reserva | length > 0 and puesto_reserva not in puesto_ips)
 
 - name: "PVE · esperar la dirección de {{ guest.name }} tras el reinicio"
   include_tasks: pve.yml
@@ -41,17 +50,27 @@
     pve_until: >-
       {{ (pve_r.json.data | default([]) | rejectattr('name', 'equalto', 'lo')
           | selectattr('inet', 'defined') | map(attribute='inet')
-          | select('search', '^[0-9]+\.') | list | length) > 0 }}
+          | map('regex_replace', '/.*$', '') | list | length) > 0
+         and (puesto_reserva | length == 0
+              or puesto_reserva in (pve_r.json.data | default([])
+                 | rejectattr('name', 'equalto', 'lo')
+                 | selectattr('inet', 'defined') | map(attribute='inet')
+                 | map('regex_replace', '/.*$', '') | list)) }}
     pve_retries: "{{ pve_lease_intentos | default(30) }}"
     pve_delay: 4
 
-- name: "{{ guest.name }} se quedó sin dirección"
+- name: "{{ guest.name }} se quedó sin su dirección"
   ansible.builtin.assert:
     that: >-
       (pve_r.json.data | default([]) | rejectattr('name', 'equalto', 'lo')
        | selectattr('inet', 'defined') | map(attribute='inet')
-       | select('search', '^[0-9]+\.') | list | length) > 0
+       | map('regex_replace', '/.*$', '') | list | length) > 0
+      and (puesto_reserva | length == 0
+           or puesto_reserva in (pve_r.json.data | default([])
+              | rejectattr('name', 'equalto', 'lo')
+              | selectattr('inet', 'defined') | map(attribute='inet')
+              | map('regex_replace', '/.*$', '') | list))
     fail_msg: >-
-      {{ guest.name }} ({{ guest.vmid }}) no tiene dirección después de esperar y de
-      reiniciarlo: el router no le sirvió una concesión. No se sigue con un laboratorio
-      donde un puesto no habla.
+      {{ guest.name }} ({{ guest.vmid }}) no tiene la dirección que le toca después de
+      esperar y de reiniciarlo: el router no le sirvió su reserva. No se sigue con un
+      laboratorio donde un puesto no habla por donde debe.

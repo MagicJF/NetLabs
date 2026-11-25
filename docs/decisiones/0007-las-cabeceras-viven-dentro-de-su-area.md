@@ -34,9 +34,9 @@ ya enseña el nombre y la IP del equipo.
   sitio natural y dejan de solaparse.
 - La información de patas e interfaces sigue disponible en el cable (`p1 ether1`) y en
   la ficha del equipo dentro de NetXMS, aunque no se dibuje en el mapa.
-- Los puestos de trabajo y servidores siguen sin dibujarse: no son equipos de red
-  registrados en la vista. Para incluirlos hará falta darles una dirección que NetXMS
-  pueda alcanzar y registrarlos como nodos; es una decisión aparte.
+- Los puestos de trabajo y servidores no se dibujaban en esta decisión porque no eran
+  equipos de red registrados en la vista. La 0008 los incorpora: un nodo final entra por su
+  dirección estática o por la que su router le reserva por MAC.
 
 Ver: `docs/diseno.md` §3.4, `deployment_engine/tools/mapa.py`,
 `deployment_engine/tests/test_mapa.py`.

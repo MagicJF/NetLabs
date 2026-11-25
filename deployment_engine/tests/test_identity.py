@@ -210,6 +210,41 @@ class ElPlan(unittest.TestCase):
         registro = next(s for s in plan["steps"] if s["op"] == "netxms_registro")
         self.assertIn({"role": puesto["role"], "address": "10.44.1.50"}, registro["equipos"])
 
+    def test_un_puesto_con_reserva_sigue_pidiendo_dhcp_pero_tiene_direccion(self):
+        # La reserva no convierte al puesto en estático: sigue pidiendo por DHCP, pero
+        # el router siempre le da la misma dirección. Esa dirección es la que la vista
+        # puede registrar y la que el mapa puede dibujar.
+        lab = laboratorio()
+        puesto = next(n for n in lab["nodes"] if n["type"] == "workstation")
+        puesto["reserve"] = "10.44.1.50"
+        plan = identity.plan(mundo(), lab, entorno())
+        built = next(n for n in plan["nodes"] if n["role"] == puesto["role"])
+        self.assertEqual(built["address"], "dhcp")
+        self.assertEqual(built["reserve"], "10.44.1.50")
+        self.assertEqual(built["netxms_address"], "10.44.1.50")
+        router = next(n for n in plan["nodes"] if n["role"] == "rte1")
+        reserva = next(l for d in router["configure"]["dhcp_server"] for l in d.get("leases", []))
+        self.assertEqual(reserva["address"], "10.44.1.50")
+        self.assertEqual(reserva["role"], puesto["role"])
+        self.assertEqual(reserva["mac"], built["interfaces"][0]["mac"])
+        registro = next(s for s in plan["steps"] if s["op"] == "netxms_registro")
+        self.assertIn({"role": puesto["role"], "address": "10.44.1.50"}, registro["equipos"])
+
+    def test_una_reserva_fuera_de_su_red_se_rechaza(self):
+        lab = laboratorio()
+        puesto = next(n for n in lab["nodes"] if n["type"] == "workstation")
+        puesto["reserve"] = "10.99.1.50"
+        with self.assertRaisesRegex(identity.LabError, "no cae en ninguna red"):
+            identity.plan(mundo(), lab, entorno())
+
+    def test_una_reserva_sin_dhcp_se_rechaza(self):
+        lab = laboratorio()
+        puesto = next(n for n in lab["nodes"] if n["type"] == "workstation")
+        puesto["address"] = "10.44.1.60/24"
+        puesto["reserve"] = "10.44.1.50"
+        with self.assertRaisesRegex(identity.LabError, "sólo acompaña a 'address: dhcp'"):
+            identity.plan(mundo(), lab, entorno())
+
     def test_los_recursos_se_ajustan_en_el_sitio_y_no_tirando_el_invitado(self):
         # Un invitado con otra memoria no se destruye: se le reescribe el config. Tirar
         # los veinticuatro equipos para cambiar ocho memorias era el precio de antes.

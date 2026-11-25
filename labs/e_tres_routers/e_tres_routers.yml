@@ -173,6 +173,7 @@ nodes:
     resources: {cores: 1, memory: 256, disk: 2}
     networks: [ventas]
     address: dhcp
+    reserve: 10.48.11.50
 
   - role: wsp4
     type: workstation
@@ -181,6 +182,7 @@ nodes:
     resources: {cores: 1, memory: 256, disk: 2}
     networks: [ventas]
     address: dhcp
+    reserve: 10.48.11.51
 
   - role: wsp2
     type: workstation
@@ -189,6 +191,7 @@ nodes:
     resources: {cores: 1, memory: 256, disk: 2}
     networks: [almacen]
     address: dhcp
+    reserve: 10.48.12.50
 
   - role: wsp5
     type: workstation
@@ -197,6 +200,7 @@ nodes:
     resources: {cores: 1, memory: 256, disk: 2}
     networks: [almacen]
     address: dhcp
+    reserve: 10.48.12.51
 
   - role: wsp3
     type: workstation
@@ -205,6 +209,7 @@ nodes:
     resources: {cores: 1, memory: 256, disk: 2}
     networks: [taller]
     address: dhcp
+    reserve: 10.48.13.50
 
   - role: wsp6
     type: workstation
@@ -213,6 +218,7 @@ nodes:
     resources: {cores: 1, memory: 256, disk: 2}
     networks: [taller]
     address: dhcp
+    reserve: 10.48.13.51
 
 # Doce cables: el núcleo con los tres routers, cada router con el switch de su
 # departamento y cada switch con sus dos puestos.

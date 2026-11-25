@@ -103,6 +103,59 @@ class LaDiferencia(unittest.TestCase):
         self.assertEqual(ops[0]["path"], "/rest/ip/service/*2")
 
 
+class LasReservasDeLosNodosFinales(unittest.TestCase):
+    def nodo(self):
+        return {
+            "role": "rte1", "name": "rte1", "type": "router",
+            "interfaces": [{"index": 0, "network": "lan1",
+                            "bridge": "b_rte1p1_wsp1p1"}],
+            "networks": [{"name": "lan1", "address": "10.44.1.0/24"}],
+            "configure": {"dhcp_server": [{
+                "network": "lan1", "pool": "10.44.1.100-10.44.1.199",
+                "gateway": "10.44.1.1",
+                "leases": [{"address": "10.44.1.50", "role": "wsp1",
+                            "mac": "BC:24:11:00:00:01"}],
+            }]},
+        }
+
+    def test_una_reserva_que_falta_se_crea_en_el_servidor(self):
+        ops = converge.ros_ops(self.nodo(), {"pools": [], "dhcp_servers": [],
+                                             "dhcp_networks": [], "dhcp_leases": []}, "clave")
+        leases = [o for o in ops if o["path"] == "/rest/ip/dhcp-server/lease"]
+        self.assertEqual(len(leases), 1)
+        self.assertEqual(leases[0]["method"], "PUT")
+        self.assertEqual(leases[0]["body"]["address"], "10.44.1.50")
+        self.assertEqual(leases[0]["body"]["mac-address"], "BC:24:11:00:00:01")
+        self.assertEqual(leases[0]["body"]["server"], "netlabs-lan1")
+        self.assertIn("reserva 10.44.1.50", leases[0]["effect"])
+
+    def test_una_reserva_que_ya_esta_no_se_reescribe(self):
+        current = {
+            "identity": {"name": "rte1"},
+            "pools": [{"name": "netlabs-lan1", "ranges": "10.44.1.100-10.44.1.199"}],
+            "dhcp_servers": [{"name": "netlabs-lan1", "interface": "ether1",
+                              "address-pool": "netlabs-lan1", ".id": "*1"}],
+            "dhcp_networks": [{"address": "10.44.1.0/24", "gateway": "10.44.1.1", ".id": "*2"}],
+            "dhcp_leases": [{"address": "10.44.1.50", "mac-address": "BC:24:11:00:00:01",
+                             "server": "netlabs-lan1", "comment": "netlabs-reserva-wsp1",
+                             ".id": "*3"}],
+        }
+        self.assertEqual(converge.ros_ops(self.nodo(), current, "clave"), [])
+
+    def test_una_reserva_que_sobra_se_retira(self):
+        current = {
+            "pools": [], "dhcp_servers": [], "dhcp_networks": [],
+            "dhcp_leases": [{"address": "10.44.1.99", "comment": "netlabs-reserva-wsp9",
+                             ".id": "*4"}],
+        }
+        nodo = self.nodo()
+        nodo["configure"]["dhcp_server"][0].pop("leases")
+        ops = converge.ros_ops(nodo, current, "clave")
+        borradas = [o for o in ops if o["path"] == "/rest/ip/dhcp-server/lease/*4"]
+        self.assertEqual(len(borradas), 1)
+        self.assertEqual(borradas[0]["method"], "DELETE")
+
+
 class ElInteriorLinux(unittest.TestCase):
     """Un nodo de control declara su interior: repos, paquetes, ficheros, servicios."""
 

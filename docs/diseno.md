@@ -362,15 +362,17 @@ por su vía (§6) y no por la terminal de nadie.
 **Qué nodos finales entran en la vista.** Un equipo de red entra por su pata de gestión. Un
 servidor o un puesto no tiene pata de gestión: entra por la dirección de su interfaz, y sólo si
 esa dirección es **estable**. Por eso un nodo final con dirección **estática** se registra y se
-dibuja en el mapa, mientras que uno con `address: dhcp` no se inventa una dirección que todavía
-no tiene. Para que un nodo DHCP aparezca hay dos caminos: darle una dirección estática (deja de
-ejercer de cliente DHCP) o **reservarle una dirección por MAC** en el router que sirve su red;
-la reserva convierte el DHCP en una dirección estable y el nodo se registraría igual que uno
-estático. **La reserva todavía no la crea el motor**: hoy habría que ponerla a mano en el
-router y el nodo seguiría sin `netxms_address`, así que en esta fase el camino soportado para
-un nodo DHCP es la dirección estática. NetXMS no adivina la dirección leyendo la tabla de
-leases: un lease puede cambiar y el nodo quedaría apuntando a una dirección que ya no es la
-suya.
+dibuja en el mapa, mientras que uno con `address: dhcp` y sin reserva no se inventa una
+dirección que todavía no tiene. Para que un nodo DHCP aparezca hay dos caminos: darle una
+dirección estática (deja de ejercer de cliente DHCP) o **reservarle una dirección por MAC** en el
+router que sirve su red;
+la reserva convierte el DHCP en una dirección estable y el nodo se registra igual que uno
+estático. El laboratorio la declara con `reserve: <ip>` en el nodo final; el motor deriva la
+MAC, crea la concesión fija en el servidor DHCP del router que sirve esa red y usa esa dirección
+para registrarlo y dibujarlo. NetXMS no adivina la dirección leyendo la tabla de leases: un
+lease puede cambiar y el nodo quedaría apuntando a una dirección que ya no es la suya. La
+reserva es del router, no del invitado: si se retira la declaración, el motor retira la
+concesión.
 
 **Dos laboratorios con los mismos nombres.** NetXMS admite dos nodos llamados `rta1`; lo que
 los distingue es su **dirección de gestión**, que sale del vmid y por tanto es única. El mapa
@@ -715,6 +717,9 @@ nodes:
     image: <image, when it applies>
     networks: [<network-name>, ...]      # order is the interface numbering: net0, net1...
     address: <cidr | dhcp>               # dhcp = asks its network for one
+    reserve: <ip>                        # optional: the fixed address DHCP gives it
+                                         # (only with address: dhcp; the engine creates
+                                         # the static lease by MAC on the serving router)
     configure:                           # optional: if absent, the engine does not go in
       <area>: { ... }
 ```

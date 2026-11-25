@@ -40,6 +40,9 @@ ROS_READS = (
     "/rest/snmp/community",
     "/rest/interface/bridge",
     "/rest/interface/bridge/port",
+    # Las concesiones fijas de los nodos finales: una reserva no se puede leer del
+    # invitado, vive en el servidor DHCP del router.
+    "/rest/ip/dhcp-server/lease",
 )
 
 PREFIX = "netlabs-"
@@ -505,7 +508,8 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
     pools = {p.get("name"): p for p in current.get("pools") or []}
     servidores = {s.get("name"): s for s in current.get("dhcp_servers") or []}
     redes = {r.get("address"): r for r in current.get("dhcp_networks") or []}
-    deseados_pool, deseados_srv, deseados_red = set(), set(), set()
+    concesiones = {str(l.get("comment") or ""): l for l in current.get("dhcp_leases") or []}
+    deseados_pool, deseados_srv, deseados_red, deseados_lease = set(), set(), set(), set()
 
     for item in declarados:
         iface = interface_of(node, item["network"])
@@ -548,6 +552,38 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
                         "body": {"gateway": gateway},
                         "effect": f"red servida {cidr} por {gateway}"})
 
+        for lease in item.get("leases") or []:
+            comentario = f"{PREFIX}reserva-{lease['role']}"
+            deseados_lease.add(comentario)
+            cuerpo = {
+                "address": str(lease["address"]),
+                "mac-address": str(lease["mac"]),
+                "server": nombre,
+                "comment": comentario,
+                "disabled": "no",
+            }
+            actual = concesiones.get(comentario)
+            if actual is None:
+                ops.append({"method": "PUT", "path": "/rest/ip/dhcp-server/lease",
+                            "body": cuerpo,
+                            "effect": f"reserva {lease['address']} para {lease['role']} "
+                                      f"({lease['mac']}) en {nombre}"})
+            else:
+                cambios = {}
+                if str(actual.get("address")) != cuerpo["address"]:
+                    cambios["address"] = cuerpo["address"]
+                if str(actual.get("mac-address") or "").lower() != cuerpo["mac-address"].lower():
+                    cambios["mac-address"] = cuerpo["mac-address"]
+                if actual.get("server") != nombre:
+                    cambios["server"] = nombre
+                if str(actual.get("disabled", "false")).lower() in ("true", "yes"):
+                    cambios["disabled"] = "no"
+                if cambios:
+                    ops.append({"method": "PATCH", "path": f"/rest/ip/dhcp-server/lease/{actual['.id']}",
+                                "body": cambios,
+                                "effect": f"reserva {lease['address']} para {lease['role']} "
+                                          f"({lease['mac']}) en {nombre}"})
+
     for nombre, pool in pools.items():
         if nombre.startswith(PREFIX) and nombre not in deseados_pool:
             ops.append({"method": "DELETE", "path": f"/rest/ip/pool/{pool['.id']}",
@@ -560,6 +596,11 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
         if cidr not in deseados_red and _is_declared_network(node, cidr):
             ops.append({"method": "DELETE", "path": f"/rest/ip/dhcp-server/network/{red['.id']}",
                         "effect": f"sobra la red servida {cidr}"})
+    for comentario, concesion in concesiones.items():
+        if comentario.startswith(f"{PREFIX}reserva-") and comentario not in deseados_lease:
+            ops.append({"method": "DELETE", "path": f"/rest/ip/dhcp-server/lease/{concesion['.id']}",
+                        "effect": f"sobra la reserva {concesion.get('address')} "
+                                  f"({concesion.get('comment')})"})
     return ops
 
 
@@ -1299,10 +1340,14 @@ def _direccion_de(node: dict) -> str:
 
     Un equipo de red se registra por su pata de gestión (`mgmt_address`), que no está
     en su topología. Un nodo final —servidor o puesto— no tiene pata de gestión: se
-    registra por la dirección de su única interfaz, y sólo si es estática. Un `dhcp`
-    no es una dirección: sin reserva previa no hay nada que registrar, y fingir una
-    dirección sería dibujar un nodo que no es.
+    registra por la dirección de su única interfaz cuando es estática, o por la que el
+    servidor DHCP le reservó. Un `dhcp` sin reserva no es una dirección: no hay nada
+    que registrar, y fingir una sería dibujar un nodo que no es.
     """
+    if node.get("netxms_address"):
+        return str(node["netxms_address"])
+    if node.get("reserve"):
+        return str(node["reserve"])
     if node.get("mgmt_address"):
         return str(node["mgmt_address"])
     if node.get("type") not in ("server", "workstation"):

@@ -66,7 +66,7 @@ LAB_KEYS = {"lab", "kind", "address_spaces", "networks", "nodes", "links"}
 # Un laboratorio de control no dibuja una topología: declara el servicio que
 # observa el resto. Su único nodo vive en la red de gestión y no tiene cables.
 KINDS = {"topology", "control"}
-NODE_KEYS = {"role", "type", "stage", "after", "resources", "image", "networks", "address", "configure"}
+NODE_KEYS = {"role", "type", "stage", "after", "resources", "image", "networks", "address", "reserve", "configure"}
 # `shape` sólo dice cómo se dibuja la red, nunca cómo se despliega: un puente es un
 # puente. Hoy hay una forma con nombre —`cloud`—, la del proveedor al que cada sede se
 # asoma por su cuenta; el resto de las redes son áreas del plano.
@@ -559,6 +559,43 @@ def _validate_node(node: dict, networks: dict, roles: set) -> None:
         if TYPES[kind]["network_device"] and len(nets) and ip.ip == networks[nets[0]].network_address + 1:
             pass  # la puerta de la primera red es legítima
 
+    reserve = node.get("reserve")
+    if reserve is not None:
+        # Una reserva es una dirección fija dentro de una red DHCP: el equipo sigue
+        # pidiendo dirección, pero el servidor siempre le da la misma. Sólo tiene
+        # sentido en un nodo final que pide por DHCP; en un equipo de red su dirección
+        # de gestión ya se deriva del vmid.
+        if TYPES[kind]["network_device"]:
+            raise LabError(
+                f"el nodo {role!r} es un equipo de red y no puede declarar 'reserve': "
+                "su dirección de gestión se deriva de su vmid"
+            )
+        if address != "dhcp":
+            raise LabError(
+                f"el nodo {role!r} declara 'reserve' y no pide la dirección por DHCP: "
+                "'reserve' sólo acompaña a 'address: dhcp'"
+            )
+        try:
+            reservada = ipaddress.ip_address(str(reserve))
+        except ValueError as exc:
+            raise LabError(
+                f"la reserva {reserve!r} de {role!r} no es una dirección: {exc}"
+            ) from exc
+        if reservada.version != 4:
+            raise LabError(f"la reserva {reserve!r} de {role!r} no es IPv4")
+        if not any(reservada in networks[n] for n in nets):
+            raise LabError(
+                f"la reserva {reserve} de {role!r} no cae en ninguna red que el nodo declare"
+            )
+        for n in nets:
+            red = networks[n]
+            if reservada in red and reservada not in (red.network_address, red.broadcast_address):
+                break
+        else:
+            raise LabError(
+                f"la reserva {reserve} de {role!r} es la dirección de red o de difusión"
+            )
+
     resources = node.get("resources") or {}
     if not isinstance(resources, dict):
         raise LabError(f"'resources' del nodo {role!r} tiene que ser un mapa")
@@ -927,6 +964,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
             f"{built['name']:<18} vmid {built['vmid']:<5} "
             f"{' '.join(i['label'] for i in built['interfaces'])}"
         )
+    _reservar_direcciones(nodes)
 
     # Las rutas hacia las redes del laboratorio: una por espacio declarado, con el
     # router como salto. Las pone el invitado de gestión —por donde entra el SSH
@@ -1151,6 +1189,50 @@ def cables(lab: dict) -> dict:
     return {"per_port": per_port, "links": links}
 
 
+def _reservar_direcciones(nodes: list[dict]) -> None:
+    """Convierte cada `reserve` de un nodo final en una concesión fija del router.
+
+    La reserva no es un objeto del invitado: es una entrada en el servidor DHCP del
+    router que sirve su red. Se inyecta en el `configure.dhcp_server` del router para
+    que `converge._dhcp_ops` la trate como cualquier otra diferencia declarada, sin
+    que el laboratorio tenga que repetir la MAC ni el nombre del servidor.
+    """
+    vistas = set()
+    for endpoint in nodes:
+        direccion = endpoint.get("reserve")
+        if not direccion:
+            continue
+        if direccion in vistas:
+            raise LabError(
+                f"la reserva {direccion} está declarada dos veces: cada nodo final "
+                "necesita una dirección distinta"
+            )
+        vistas.add(direccion)
+        red = endpoint["networks"][0]["name"]
+        mac = endpoint["interfaces"][0]["mac"]
+        servidor = None
+        for router in nodes:
+            if router["type"] not in ("router", "firewall"):
+                continue
+            for item in (router.get("configure") or {}).get("dhcp_server") or []:
+                if item.get("network") == red:
+                    servidor = (router, item)
+                    break
+            if servidor:
+                break
+        if servidor is None:
+            raise LabError(
+                f"el nodo {endpoint['role']!r} reserva {direccion} en la red {red!r}, "
+                "pero ningún router declara un servidor DHCP para esa red"
+            )
+        _router, item = servidor
+        item.setdefault("leases", []).append({
+            "address": direccion,
+            "mac": mac,
+            "role": endpoint["role"],
+        })
+
+
 def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
     kind = node["type"]
     code = TYPES[kind]["code"]
@@ -1183,6 +1265,9 @@ def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
 
     address = node.get("address")
     static = None if address in (None, "dhcp") else str(ipaddress.ip_interface(address))
+    reservada = None
+    if address == "dhcp" and node.get("reserve"):
+        reservada = str(ipaddress.ip_address(node["reserve"]))
     # Un puesto con dirección fija sale por la puerta que declara el router de su red;
     # si nadie la declara, la primera del rango. Se deriva, no se pide.
     if static and not TYPES[kind]["network_device"]:
@@ -1207,14 +1292,16 @@ def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
         "management": management,
         "mgmt_address": str(derive_management(vmid, env["management"]["address_space"])) if management else None,
         # La dirección con la que la vista registra este nodo: la de gestión para un
-        # equipo de red, la estática para un nodo final. Un `dhcp` no tiene ninguna
-        # todavía, y por eso no entra en el registro ni en el mapa.
+        # equipo de red, la estática o la reservada para un nodo final. Un `dhcp` sin
+        # reserva no tiene ninguna todavía, y por eso no entra en el registro ni en el
+        # mapa; con reserva sí, porque el servidor siempre le dará esa.
         "netxms_address": (
             str(derive_management(vmid, env["management"]["address_space"])) if management
             else (str(ipaddress.ip_interface(static).ip)
-                  if static and not TYPES[kind]["network_device"] else None)
+                  if static and not TYPES[kind]["network_device"] else reservada)
         ),
         "address": static or ("dhcp" if address == "dhcp" else None),
+        "reserve": reservada,
         "networks": [{"name": n, "address": str(networks[n])} for n in node["networks"]],
         "configure": node.get("configure") or {},
     }
