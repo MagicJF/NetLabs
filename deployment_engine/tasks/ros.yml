@@ -140,14 +140,14 @@
     url_username: "{{ ros_user }}"
     url_password: "{{ ros_clave }}"
     force_basic_auth: true
-    body_format: json
+    # Con `body_format: json` y sin cuerpo, el módulo manda el literal `null` como
+    # cuerpo del DELETE —comprobado leyendo la petición—, y RouterOS no contesta a un
+    # DELETE con cuerpo: la conexión se queda colgada hasta el tope y el apply se para
+    # con un «Connection failure: timed out» que no dice nada del laboratorio. El
+    # formato se pide sólo cuando hay cuerpo que mandar.
+    body_format: "{{ 'json' if ros_op.body is defined else omit }}"
     body: "{{ ros_op.body | default(omit) }}"
     status_code: [200, 201, 204]
-    # RouterOS no contesta un DELETE por la misma conexión con la que acaba de
-    # escribir: la petición se queda esperando hasta el tope y el apply se para. Una
-    # conexión por operación lo evita, y estas escrituras son pocas y cortas.
-    headers:
-      Connection: close
     timeout: 30
   # Las que esperan a que las demás hayan terminado no van aquí: van en el paso de
   # abajo. Ver el porqué en el comentario de ese paso.
@@ -186,14 +186,14 @@
     url_username: "{{ ros_user }}"
     url_password: "{{ ros_clave }}"
     force_basic_auth: true
-    body_format: json
+    # Con `body_format: json` y sin cuerpo, el módulo manda el literal `null` como
+    # cuerpo del DELETE —comprobado leyendo la petición—, y RouterOS no contesta a un
+    # DELETE con cuerpo: la conexión se queda colgada hasta el tope y el apply se para
+    # con un «Connection failure: timed out» que no dice nada del laboratorio. El
+    # formato se pide sólo cuando hay cuerpo que mandar.
+    body_format: "{{ 'json' if ros_op.body is defined else omit }}"
     body: "{{ ros_op.body | default(omit) }}"
     status_code: [200, 201, 204]
-    # RouterOS no contesta un DELETE por la misma conexión con la que acaba de
-    # escribir: la petición se queda esperando hasta el tope y el apply se para. Una
-    # conexión por operación lo evita, y estas escrituras son pocas y cortas.
-    headers:
-      Connection: close
     timeout: 30
   loop: "{{ ros_ops | selectattr('tras_restricciones', 'defined') | list }}"
   loop_control:
