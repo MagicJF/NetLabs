@@ -999,6 +999,37 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertEqual(cuerpo["sshPort"], 22)
         self.assertEqual(plan["pendientes"], [])
 
+    def servidor(self, address="10.20.66.10/24"):
+        return {
+            "role": "svs1", "name": "svs1", "type": "server",
+            "description": "netlabs lab=d_prueba role=svs1",
+            "interfaces": [{"index": 0, "network": "ny_ingenieria", "address": address}],
+            "configure": {},
+        }
+
+    def test_un_servidor_con_direccion_estatica_se_registra_sin_credenciales(self):
+        # Un nodo final no tiene la clave del RouterOS ni una pata de gestión: se
+        # registra por su dirección estática y sin campos de SSH inventados.
+        plan = converge.netxms_ops([self.servidor()], [], [], self.API, self.SECRETS)
+        self.assertEqual(len(plan["ops"]), 1)
+        cuerpo = json.loads(plan["ops"][0]["cuerpo"])
+        self.assertEqual(cuerpo["ipAddress"], "10.20.66.10")
+        self.assertNotIn("sshPassword", cuerpo)
+        self.assertNotIn("sshLogin", cuerpo)
+
+    def test_un_nodo_final_por_dhcp_no_se_inventa_una_direccion(self):
+        # Sin reserva no hay dirección que registrar: el mapa no puede dibujar un nodo
+        # en una dirección que aún no existe. Se queda fuera hasta que tenga una.
+        plan = converge.netxms_ops([self.servidor(address="dhcp")], [], [], self.API, self.SECRETS)
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(plan["pendientes"], [])
+
+    def test_el_mapa_encuentra_un_nodo_final_por_su_direccion_estatica(self):
+        censo = [{"id": 494, "name": "svs1", "ipAddress": {"address": "10.20.66.10"}}]
+        objetos, faltan = converge.netxms_objetos_de([self.servidor()], censo)
+        self.assertEqual(objetos, {"svs1": 494})
+        self.assertEqual(faltan, [])
+
     def test_un_equipo_que_ya_esta_como_debe_no_escribe_nada(self):
         # Idempotencia: un equipo que ya está con las credenciales puestas no produce
         # ninguna llamada, y por eso el segundo `apply` no escribe.

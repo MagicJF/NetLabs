@@ -1294,6 +1294,30 @@ def netxms_crear_cmd(api: str) -> list:
     return netxms_cmd(api, NETXMS_RUTA_CREAR)
 
 
+def _direccion_de(node: dict) -> str:
+    """La dirección con la que la vista conoce a este nodo, o vacío si aún no tiene.
+
+    Un equipo de red se registra por su pata de gestión (`mgmt_address`), que no está
+    en su topología. Un nodo final —servidor o puesto— no tiene pata de gestión: se
+    registra por la dirección de su única interfaz, y sólo si es estática. Un `dhcp`
+    no es una dirección: sin reserva previa no hay nada que registrar, y fingir una
+    dirección sería dibujar un nodo que no es.
+    """
+    if node.get("mgmt_address"):
+        return str(node["mgmt_address"])
+    if node.get("type") not in ("server", "workstation"):
+        return ""
+    for iface in node.get("interfaces") or []:
+        direccion = str(iface.get("address") or "").strip()
+        if not direccion or direccion == "dhcp":
+            continue
+        try:
+            return str(ipaddress.ip_interface(direccion).ip)
+        except ValueError:
+            continue
+    return ""
+
+
 def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | None,
                api: str, secrets: dict | None = None,
                puerto: int = NETXMS_PUERTO_SSH, vivas: list | None = None,
@@ -1347,8 +1371,8 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
     # registran (una estación de trabajo no se registra, pero su dirección es de aquí, y
     # un resto apuntando ahí es un resto de este laboratorio).
     direcciones_del_lab = ({str(d) for d in propias} if propias
-                           else {str(n.get("mgmt_address")) for n in nodes or []
-                                 if n.get("mgmt_address")})
+                           else {_direccion_de(n) for n in nodes or []
+                                 if _direccion_de(n)})
 
     def marca_de(node: dict) -> str:
         """La marca que el motor escribe en el comentario del equipo, si es suya.
@@ -1375,7 +1399,7 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
     pendientes: list[str] = []
     equipos: list[tuple[dict, list[dict], dict | None]] = []
     for node in nodes or []:
-        direccion = node.get("mgmt_address")
+        direccion = _direccion_de(node)
         if not direccion:
             continue
         nombre = node.get("name") or node.get("role")
@@ -1428,10 +1452,15 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
 
     altas: list[dict] = []
     for node, _candidatos, objeto in equipos:
-        direccion = node.get("mgmt_address")
+        direccion = _direccion_de(node)
         nombre = node.get("name") or node.get("role")
-        usuario = _declared_user(node) or "admin"
-        clave = ros_clave(node, secrets or {})
+        # Un nodo final no tiene la clave del RouterOS: se registra para que la vista
+        # lo dibuje y lo sondee por ICMP, sin inventarle una credencial de SSH que no
+        # tiene. Su terminal se abre con la clave de los equipos Linux cuando se
+        # configure; el mapa no depende de ello.
+        es_final = node.get("type") in ("server", "workstation")
+        usuario = None if es_final else (_declared_user(node) or "admin")
+        clave = None if es_final else ros_clave(node, secrets or {})
         if objeto is None:
             # El API contesta 409 si la dirección ya es de otro equipo. Se mira antes,
             # para decirlo con su nombre y su id en vez de dejar que el play se pare a
@@ -1455,18 +1484,28 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
                 "class": "Node",
                 "name": nombre,
                 "ipAddress": str(direccion),
-                "sshLogin": usuario,
-                "sshPassword": clave,
-                "sshPort": int(puerto),
                 # La marca de propiedad: sin ella, mañana no se puede demostrar que este
                 # registro lo creó este laboratorio y su histórico no se puede retirar.
                 "comments": node.get("description") or "",
             }
+            if not es_final:
+                cuerpo.update({
+                    "sshLogin": usuario,
+                    "sshPassword": clave,
+                    "sshPort": int(puerto),
+                })
             altas.append({
                 "cmd": netxms_crear_cmd(api),
                 "cuerpo": json.dumps(cuerpo),
-                "effect": f"registrar {nombre} ({direccion}) en la vista, como {usuario}",
+                "effect": (f"registrar {nombre} ({direccion}) en la vista"
+                           + ("" if es_final else f", como {usuario}")),
             })
+            continue
+
+        # Un nodo final ya registrado no tiene credenciales que comprobar: está en la
+        # vista y el mapa lo dibuja. Si cambia de dirección, la primera pasada lo habrá
+        # retirado o lo habrá dejado como pendiente según las reglas de propiedad.
+        if es_final:
             continue
 
         actual = leidos.get(int(objeto["id"])) or {}
@@ -1494,8 +1533,8 @@ def netxms_ids(nodes: list[dict], encontrados: list | None) -> list:
     # el nombre de un equipo del laboratorio aunque apunten a otra dirección, porque su
     # ficha es la única prueba de quién los creó —la marca del comentario— y sin ella un
     # resto no se puede retirar sin arriesgar el histórico de otro laboratorio.
-    claves = {(str(n.get("name") or n.get("role")), str(n["mgmt_address"]))
-              for n in nodes or [] if n.get("mgmt_address")}
+    claves = {(str(n.get("name") or n.get("role")), _direccion_de(n))
+              for n in nodes or [] if _direccion_de(n)}
     nombres = {str(n.get("name") or n.get("role")) for n in nodes or []}
     ids = []
     for objeto in encontrados or []:
@@ -1573,7 +1612,7 @@ def netxms_objetos_de(nodes: list[dict], censo: list | None) -> tuple[dict, list
     objetos, faltan = {}, []
     for node in nodes or []:
         nombre = str(node.get("name") or node.get("role") or "")
-        direccion = str(node.get("mgmt_address") or "")
+        direccion = _direccion_de(node)
         if not nombre or not direccion:
             continue
         cual = next((o for o in censo or []

@@ -196,6 +196,20 @@ class ElPlan(unittest.TestCase):
                 self.assertIsNone(node["mgmt_address"])
                 self.assertTrue(all(i["network"] is not None for i in node["interfaces"]))
 
+    def test_un_puesto_estatico_lleva_su_direccion_a_la_vista(self):
+        # Un nodo final no tiene pata de gestión, pero sí una dirección estática: esa
+        # es la que se registra y la que permite dibujarlo en el mapa.
+        lab = laboratorio()
+        for node in lab["nodes"]:
+            if node["type"] == "workstation":
+                node["address"] = "10.44.1.50/24"
+                break
+        plan = identity.plan(mundo(), lab, entorno())
+        puesto = next(n for n in plan["nodes"] if n["type"] == "workstation" and n["address"] != "dhcp")
+        self.assertEqual(puesto["netxms_address"], "10.44.1.50")
+        registro = next(s for s in plan["steps"] if s["op"] == "netxms_registro")
+        self.assertIn({"role": puesto["role"], "address": "10.44.1.50"}, registro["equipos"])
+
     def test_los_recursos_se_ajustan_en_el_sitio_y_no_tirando_el_invitado(self):
         # Un invitado con otra memoria no se destruye: se le reescribe el config. Tirar
         # los veinticuatro equipos para cambiar ocho memorias era el precio de antes.
