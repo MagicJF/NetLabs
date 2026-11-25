@@ -18,11 +18,12 @@
 #              área por el que no pase ningún cable ni se apoye ningún equipo. La
 #              colocación es de este módulo, y por eso se puede comprobar por programa
 #              (test_mapa) en vez de a ojo.
-#              Cada equipo lleva la **etiqueta grande** de la vista —nombre e IP—, no un
-#              cartel de texto con sus patas: ese cartel no aportaba y se comía el sitio
-#              de las cabeceras. Cada cable sí lleva sus **dos puertos** —`p1 ether1`— y su
-#              nombre queda guardado en la configuración del enlace, sin dibujarse encima
-#              del cable.
+#              Cada equipo se dibuja con su **icono** —el que la vista le da por su clase—,
+#              no con la etiqueta grande de nombre e IP ni con un cartel de texto con sus
+#              patas: con veintiséis equipos, una ficha por equipo tapa el dibujo y los
+#              cables que pasan por debajo. Cada cable sí lleva sus **dos puertos**
+#              —`p1 ether1`— y su nombre queda guardado en la configuración del enlace, sin
+#              dibujarse encima del cable.
 # LÍMITES:     el dibujo es el del plano, con su lienzo y sus posiciones: este módulo no
 #              recalcula geometría ni inventa áreas, y el rótulo de un área se busca siempre
 #              dentro de ella; si no cabe, se centra, pero nunca se va a la caja de al lado.
@@ -57,18 +58,22 @@ AZUL_PIZARRA = 0x573B1F        # rgb(31, 59, 87): el cable, oscuro sobre el gris
 TRAZO_CABLE = 2                # la vista pone 4 por defecto: con 2 el cable tapa menos
 ESTILO_CABLE = 1               # continua, como el plano
 ENRUTADO_CABLE = 1             # recto, como el plano
-ETIQUETA_GRANDE = 2            # la vista llama así a la ficha con nombre, IP y MAC
+MODO_ICONO = 0                 # sólo el icono del equipo, sin ficha al lado (la vista: 0 icono, 1 etiqueta, 2 ficha grande)
 
 # Lo que el mapa pide de sí mismo: el color y el trazo de sus cables y cómo se ven sus
 # equipos. Sin esto la vista los dibuja con su criterio —un gris ancho y translúcido que se
 # pierde en el fondo, y un icono sin dirección— y no hay forma de pedirlo desde fuera.
+# El modo de dibujo es el número que la vista llama `MapObjectDisplayMode`: 0 icono, 1
+# etiqueta pequeña, 2 etiqueta grande, 3 estado, 4 plano de planta (leído de su código, no
+# supuesto). Se pide el **icono**: cada equipo ocupa su hueco del plano y nada más, que con
+# veintiséis equipos una ficha por equipo tapa el dibujo y los cables que pasan por debajo.
 AJUSTES_DEL_MAPA = {
     "defaultLinkColorSource": 0,          # color propio, no el del estado del enlace
     "defaultLinkColor": AZUL_PIZARRA,
     "defaultLinkWidth": TRAZO_CABLE,
     "defaultLinkStyle": ESTILO_CABLE,
     "defaultLinkRouting": ENRUTADO_CABLE,
-    "objectDisplayMode": ETIQUETA_GRANDE,  # nombre e IP junto al icono, no sólo el icono
+    "objectDisplayMode": MODO_ICONO,      # el icono del equipo, sin ficha al lado
 }
 
 # Cuánto ocupa un rótulo. La vista mide el texto con la fuente que le digo, así que aquí

@@ -208,6 +208,15 @@ class ElMapaDelLaboratorio(unittest.TestCase):
         # El trazo es más fino que el que la vista pone por defecto (0 = el suyo).
         self.assertLess(mapa.TRAZO_CABLE, 4)
 
+    def test_los_equipos_se_dibujan_como_iconos(self):
+        """Una ficha de nombre e IP por equipo tapa el dibujo y los cables que pasan debajo."""
+        lab = laboratorio()
+        svg = plano.plano(lab, "topologia")
+        cuerpo = json.loads(mapa.cuerpo(mapa.contenido(lab, svg, con_vista(lab))))
+        self.assertEqual(cuerpo["objectDisplayMode"], mapa.MODO_ICONO)
+        # Los números son los de la vista (`MapObjectDisplayMode`), no se eligen a ojo.
+        self.assertEqual(mapa.MODO_ICONO, 0, "0 es el icono; 2 es la ficha grande")
+
     def test_el_mapa_se_reescribe_si_cambia_el_color_o_el_trazo_de_los_cables(self):
         lab = laboratorio()
         svg = plano.plano(lab, "topologia")
