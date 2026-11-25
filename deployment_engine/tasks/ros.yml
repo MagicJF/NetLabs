@@ -143,6 +143,11 @@
     body_format: json
     body: "{{ ros_op.body | default(omit) }}"
     status_code: [200, 201, 204]
+    # RouterOS no contesta un DELETE por la misma conexión con la que acaba de
+    # escribir: la petición se queda esperando hasta el tope y el apply se para. Una
+    # conexión por operación lo evita, y estas escrituras son pocas y cortas.
+    headers:
+      Connection: close
     timeout: 30
   # Las que esperan a que las demás hayan terminado no van aquí: van en el paso de
   # abajo. Ver el porqué en el comentario de ese paso.
@@ -159,6 +164,14 @@
   # de verdad. El módulo `uri` no lo marca por su cuenta y el `changed` del apply
   # tiene que decir la verdad: si escribió, cambió.
   changed_when: ros_op.method != 'GET'
+  # Un DELETE a RouterOS se aplica pero su respuesta no siempre vuelve: la petición
+  # muere en el tope y el `uri` devuelve -1. El borrado sí ocurrió —se comprueba
+  # abajo, releyendo—, así que no se da por fallo aquí; lo que no quede aplicado lo
+  # canta la comprobación de después.
+  register: ros_escritura
+  failed_when: >-
+    (ros_escritura.status | default(0)) not in [200, 201, 204] and
+    not (ros_escritura.status | default(0) == -1 and ros_op.method == 'DELETE')
 
 # El encendido de SNMP, en su propio paso y sólo después de que el anterior haya
 # terminado entero. No basta con ponerlo el último de la lista: una llamada que falla
@@ -176,6 +189,11 @@
     body_format: json
     body: "{{ ros_op.body | default(omit) }}"
     status_code: [200, 201, 204]
+    # RouterOS no contesta un DELETE por la misma conexión con la que acaba de
+    # escribir: la petición se queda esperando hasta el tope y el apply se para. Una
+    # conexión por operación lo evita, y estas escrituras son pocas y cortas.
+    headers:
+      Connection: close
     timeout: 30
   loop: "{{ ros_ops | selectattr('tras_restricciones', 'defined') | list }}"
   loop_control:
@@ -183,6 +201,60 @@
     label: "{{ ros_op.effect }}"
   no_log: true
   changed_when: ros_op.method != 'GET'
+  register: ros_escritura_tardia
+  failed_when: >-
+    (ros_escritura_tardia.status | default(0)) not in [200, 201, 204] and
+    not (ros_escritura_tardia.status | default(0) == -1 and ros_op.method == 'DELETE')
+
+# Y se lee de vuelta para no dar por bueno lo que no se puede comprobar: si una
+# escritura se perdió —o el borrado no llegó a ocurrir—, la diferencia seguirá ahí y
+# el apply se para con su nombre y apellidos en vez de decir que fue bien.
+- name: "RouterOS · releer el interior de {{ router.name }} tras escribir"
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_lectura }}"
+    method: GET
+    url_username: "{{ ros_user }}"
+    url_password: "{{ ros_clave }}"
+    force_basic_auth: true
+    status_code: [200]
+    timeout: 30
+  loop: "{{ router | netlabs_ros_reads }}"
+  loop_control:
+    loop_var: ros_lectura
+    label: "{{ ros_lectura }}"
+  register: ros_relecturas
+  changed_when: false
+
+- name: "RouterOS · lo que se dijo y no quedó en {{ router.name }}"
+  ansible.builtin.set_fact:
+    ros_resto: >-
+      {{ router | netlabs_ros_ops(dict(ros_claves_post | zip(
+           ros_relecturas.results | map(attribute='json') | list)), ros_clave, secrets,
+           env.management.address_space) }}
+  vars:
+    ros_claves_post:
+      - identity
+      - addresses
+      - routes
+      - pools
+      - dhcp_servers
+      - dhcp_networks
+      - services
+      - users
+      - snmp
+      - snmp_community
+      - bridges
+      - bridge_ports
+      - dhcp_leases
+
+- name: "RouterOS · dar el cambio por bueno sólo si de verdad está en {{ router.name }}"
+  ansible.builtin.assert:
+    that:
+      - ros_resto | length == 0
+    fail_msg: >-
+      {{ router.name }} contestó a las escrituras pero la diferencia sigue ahí:
+      {{ ros_resto | map(attribute='effect') | list | join('; ') }}. El motor no da por
+      bueno un cambio que no puede leer de vuelta.
 
 - name: "RouterOS · comprobar que lo declarado está de verdad en {{ router.name }}"
   ansible.builtin.uri:
