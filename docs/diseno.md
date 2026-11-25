@@ -365,9 +365,12 @@ esa dirección es **estable**. Por eso un nodo final con dirección **estática*
 dibuja en el mapa, mientras que uno con `address: dhcp` no se inventa una dirección que todavía
 no tiene. Para que un nodo DHCP aparezca hay dos caminos: darle una dirección estática (deja de
 ejercer de cliente DHCP) o **reservarle una dirección por MAC** en el router que sirve su red;
-la reserva convierte el DHCP en una dirección estable y el nodo se registra igual que uno
-estático. NetXMS no adivina la dirección leyendo la tabla de leases: un lease puede cambiar y
-el nodo quedaría apuntando a una dirección que ya no es la suya.
+la reserva convierte el DHCP en una dirección estable y el nodo se registraría igual que uno
+estático. **La reserva todavía no la crea el motor**: hoy habría que ponerla a mano en el
+router y el nodo seguiría sin `netxms_address`, así que en esta fase el camino soportado para
+un nodo DHCP es la dirección estática. NetXMS no adivina la dirección leyendo la tabla de
+leases: un lease puede cambiar y el nodo quedaría apuntando a una dirección que ya no es la
+suya.
 
 **Dos laboratorios con los mismos nombres.** NetXMS admite dos nodos llamados `rta1`; lo que
 los distingue es su **dirección de gestión**, que sale del vmid y por tanto es única. El mapa

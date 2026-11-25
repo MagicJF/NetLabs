@@ -252,9 +252,13 @@
         vivas: "{{ invitados_ahora | netlabs_direcciones_vivas(env.management.address_space) }}"
         # Y las de los invitados de este laboratorio: las de sus equipos de red no bastan,
         # porque una estación de trabajo tampoco se registra y su dirección es de aquí.
+        # Los nodos finales con dirección estática también son de este laboratorio, y su
+        # dirección no está en el espacio de gestión: si se cambia una por otra, sin ellas
+        # el registro no reconocería el resto anterior y apply se pararía.
         propias: >-
-          {{ invitados_ahora | selectattr('pool', 'equalto', plan.pool) | list
-             | netlabs_direcciones_vivas(env.management.address_space) }}
+          {{ (invitados_ahora | selectattr('pool', 'equalto', plan.pool) | list
+              | netlabs_direcciones_vivas(env.management.address_space))
+             + (plan.nodes | selectattr('netxms_address') | map(attribute='netxms_address') | list) }}
       when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
 
     # --- el mapa del laboratorio en lo que observa el sitio -----------------
