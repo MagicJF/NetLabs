@@ -322,6 +322,20 @@ class ElPlan(unittest.TestCase):
         with self.assertRaisesRegex(identity.LabError, "ya es la dirección de 'rte1'"):
             identity.plan(mundo(), lab, entorno())
 
+    def test_una_reserva_en_la_primera_direccion_cuando_la_puerta_es_otra(self):
+        # La primera del rango no es la puerta por defecto: si el router declara otra
+        # (aquí .254), la dirección .1 está libre y se puede reservar.
+        lab = laboratorio()
+        rte1 = next(n for n in lab["nodes"] if n["role"] == "rte1")
+        rte1["address"] = "10.44.1.254/24"
+        rte1["configure"]["addresses"][0]["address"] = "10.44.1.254/24"
+        rte1["configure"]["dhcp_server"][0]["gateway"] = "10.44.1.254"
+        wsp1 = next(n for n in lab["nodes"] if n["role"] == "wsp1")
+        wsp1["reserve"] = "10.44.1.1"
+        plan = identity.plan(mundo(), lab, entorno())
+        built = next(n for n in plan["nodes"] if n["role"] == "wsp1")
+        self.assertEqual(built["reserve"], "10.44.1.1")
+
     def test_dos_reservas_iguales_se_rechazan(self):
         # wsp1 y wsp2 comparten ny_ventas: reservarles la misma dirección entregaría
         # una sola a dos equipos.

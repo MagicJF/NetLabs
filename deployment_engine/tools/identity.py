@@ -828,11 +828,12 @@ def _validate_reservas(lab: dict, networks: dict) -> None:
         for srv in configure.get("dhcp_server") or []:
             if srv.get("gateway"):
                 anota(srv["gateway"], f"la puerta que sirve {role!r}")
-    # La puerta derivada —la primera del rango— también es de alguien aunque ningún
-    # router la declare: reservarla dejaría al nodo sin salida.
+    # La puerta de cada red —la que el router declara en ella o, si nadie la declara,
+    # la primera del rango— también es de alguien: reservarla dejaría al nodo sin
+    # salida. Sólo se añade la derivada cuando de verdad es la que se va a usar; con
+    # otra puerta declarada, la primera del rango está libre.
     for net in lab["networks"]:
-        cidr = ipaddress.ip_network(net["address"], strict=False)
-        fijas.setdefault(str(cidr.network_address + 1), f"la puerta de la red {net['name']!r}")
+        fijas.setdefault(_gateway_for(lab, net["name"]), f"la puerta de la red {net['name']!r}")
 
     reservadas = {}
     for node in lab["nodes"]:
