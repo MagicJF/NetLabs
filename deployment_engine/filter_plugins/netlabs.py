@@ -169,6 +169,7 @@ class FilterModule:
             "netlabs_linux_ops": lambda node, current, credenciales=None: converge.linux_ops(node, current, credenciales),
             "netlabs_linux_probe": lambda node: converge.linux_probe(node),
             "netlabs_linux_probe_cmd": lambda node: converge.linux_probe_cmd(node),
+            "netlabs_linux_access_cmd": lambda publica, clave: converge.linux_access_cmd(publica, clave),
             "netlabs_linux_state": lambda text: converge.linux_state(text),
             "netlabs_rutas_ops": lambda actuales, deseadas, espacios: converge.rutas_ops(
                 actuales, deseadas, espacios),

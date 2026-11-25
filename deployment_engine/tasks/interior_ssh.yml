@@ -42,7 +42,13 @@
   # comprobar que el segundo apply no escribe: si `changed` no es cero, quedó
   # una decisión tomada por accidente. Sin delimitadores: son condiciones, no
   # plantillas (con `{{ }}` Ansible las deja de aceptar).
-  changed_when: interior_escribe | default(false) | bool
+  # Una tarea que escribe puede, aun así, no haber cambiado nada en el invitado
+  # —ya estaba como debía—; quien la pide lo declara con `interior_cambia_salida`
+  # y entonces manda la marca `CAMBIO:1` que imprimió el propio script.
+  changed_when: >-
+    (interior_escribe | default(false) | bool)
+    and (not (interior_cambia_salida | default(false) | bool)
+         or 'CAMBIO:1' in (interior.stdout | default('')))
   # Una puerta que se niega a fallar deja de ser una puerta: por defecto un
   # comando que sale con error para la tarea. Quien sondea —y necesita decidir
   # él qué hacer con el silencio— lo baja a propósito (`interior_falla: false`)

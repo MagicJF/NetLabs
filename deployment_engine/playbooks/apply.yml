@@ -18,6 +18,7 @@
     secrets: "{{ lookup('file', raiz ~ '/secrets.yml') | from_yaml }}"
     lab: "{{ lookup('file', raiz ~ '/labs/' ~ netlabs_lab ~ '/' ~ netlabs_lab ~ '.yml') | from_yaml }}"
     clave: "{{ env.management.tunnel.key | expanduser }}"
+    publica: "{{ lookup('file', (env.management.tunnel.key | expanduser) ~ '.pub') }}"
     puerto: "{{ env.management.tunnel.local_ssh_port }}"
     crear: "{{ plan.steps | selectattr('op', 'equalto', 'guest_create') | map(attribute='guest.vmid') | list }}"
   tasks:
@@ -157,6 +158,7 @@
       loop_control: {label: "{{ item.name }}"}
       vars:
         guest: "{{ item }}"
+        ssh_public_key: "{{ publica }}"
       when: item.vmid in nuevos
 
     # Los recursos, en el sitio: no hay globo de memoria, así que el invitado se para
@@ -227,6 +229,48 @@
         router: "{{ item }}"
         ros_user: "{{ (item.configure.users | default([{'name': 'admin'}]))[0].name }}"
 
+    # --- las rutas hacia las redes del laboratorio -------------------------
+    # Van después de que los routers tengan su dirección de gestión: el salto de
+    # una ruta es esa dirección, y una ruta hacia un salto que no responde no es
+    # una ruta. Y van antes del primer SSH a un nodo final: ese SSH sale del
+    # invitado de gestión y necesita la ruta para llegar a la red del laboratorio;
+    # sin ella, un laboratorio nuevo se paraba en la puerta antes de abrirla.
+    # Las pone el invitado de gestión, que es por donde entra el SSH del motor y
+    # donde vive lo que observa; `destroy` las retira.
+    - name: apply · las rutas hacia las redes del laboratorio
+      include_tasks: ../tasks/rutas.yml
+      vars:
+        rutas_deseadas: "{{ plan.rutas | default([]) }}"
+        espacios: "{{ lab.address_spaces | default([]) }}"
+
+    # --- los puestos toman dirección --------------------------------------
+    # Va antes de abrir la puerta de su terminal: un puesto con reserva puede
+    # estar todavía con la dirección vieja, y la puerta se abre en la dirección
+    # que tiene que tener, no en la que tuvo.
+    - name: "apply · la dirección de cada puesto"
+      include_tasks: ../tasks/check_lease.yml
+      vars:
+        guest: "{{ puesto }}"
+      loop: "{{ plan.nodes | rejectattr('management') | rejectattr('control', 'defined') | list }}"
+      loop_control: {loop_var: puesto, label: "{{ puesto.name }}"}
+
+    # --- la puerta de los invitados Linux ---------------------------------
+    # Los puestos y servidores nacen con la clave pública del motor autorizada, y
+    # aquí se les deja además una clave de root y un sshd que la acepte: es lo que
+    # convierte su nodo de la vista en una terminal que se abre sola, igual que la
+    # de un RouterOS. Se hace antes de registrarlos porque el API de la vista sólo
+    # acepta las credenciales al crear el nodo; un nodo final sin ellas habría que
+    # rehacerlo después.
+    - name: "apply · la puerta de los invitados Linux"
+      include_tasks: ../tasks/linux_access.yml
+      loop: "{{ plan.nodes }}"
+      loop_control: {loop_var: linux_nodo, label: "{{ linux_nodo.name }}"}
+      vars:
+        objetivo: "{{ linux_nodo.netxms_address }}"
+      when:
+        - linux_nodo.type in ['server', 'workstation']
+        - linux_nodo.netxms_address | default('') | length > 0
+
     # --- el registro de los equipos en lo que observa el sitio -------------
     # Va después del interior del router y no antes: la credencial que se registra es
     # la que el router ya tiene puesta (la pone su REST), no una que valdrá más tarde.
@@ -282,28 +326,6 @@
         objetivo: "{{ linux_nodo.mgmt_address }}"
         linux_descripcion: "{{ linux_nodo.name }}"
       when: linux_nodo.configure | default({}) | length > 0
-
-    # --- los puestos toman dirección --------------------------------------
-    - name: "apply · la dirección de cada puesto"
-      include_tasks: ../tasks/check_lease.yml
-      vars:
-        guest: "{{ puesto }}"
-      loop: "{{ plan.nodes | rejectattr('management') | rejectattr('control', 'defined') | list }}"
-      # El nombre del bucle no puede ser `item`: el fichero incluido usa `item` y
-      # éste lo pisaría. Y el nombre de la tarea no puede citar `item` antes de
-      # existir: ansible lo intenta y deja un error de plantilla en el título.
-      loop_control: {loop_var: puesto, label: "{{ puesto.name }}"}
-
-    # --- las rutas hacia las redes del laboratorio -------------------------
-    # Van después de que los routers tengan su dirección de gestión: el salto de
-    # una ruta es esa dirección, y una ruta hacia un salto que no responde no es
-    # una ruta. Las pone el invitado de gestión, que es por donde entra el SSH del
-    # motor y donde vive lo que observa; `destroy` las retira.
-    - name: apply · las rutas hacia las redes del laboratorio
-      include_tasks: ../tasks/rutas.yml
-      vars:
-        rutas_deseadas: "{{ plan.rutas | default([]) }}"
-        espacios: "{{ lab.address_spaces | default([]) }}"
 
     # --- el cruce ---------------------------------------------------------
     # Y se comprueba: una ruta puesta no es una red alcanzable. Si el router no

@@ -1,0 +1,43 @@
+# PROPÓSITO:   abrir la puerta de root de un invitado Linux para que la consola de
+#              la vista pueda abrir su terminal como abre la de un RouterOS.
+# INVARIANTES: se entra con la clave pública que el motor dejó autorizada al crear
+#              el invitado; la contraseña viaja por la entrada estándar y nunca
+#              aparece en la línea de órdenes.
+#              Un invitado que nació antes de esta puerta no tiene esa clave: se
+#              detecta y se dice cómo prepararlo sin borrar su disco, en vez de
+#              parar sin explicar por qué.
+#              La segunda pasada no escribe: el script compara su marca y contesta
+#              `CAMBIO:0`.
+# VER:         docs/diseno.md §3.4, §4.3; docs/decisiones/0009
+
+- name: "SSH · abrir la puerta de {{ linux_nodo.name }}"
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "abrir la puerta de {{ linux_nodo.name }}"
+    interior_salto: true
+    interior_escribe: true
+    interior_cambia_salida: true
+    interior_secreto: "{{ secrets.linux_clave }}"
+    interior_imprime: false
+    # Quien sondea decide qué hacer con el silencio: aquí no se para en la puerta,
+    # se para abajo con el motivo escrito. Un invitado anterior a esta puerta no
+    # tiene la clave del motor, y el SSH se niega sin decir qué hacer.
+    interior_falla: false
+    comando: "{{ publica | netlabs_linux_access_cmd(secrets.linux_clave) }}"
+
+# El script de arriba no puede añadir la clave que le falta para entrar: para
+# ejecutarlo hace falta entrar. Así que se detecta el caso y se dice cómo prepararlo
+# desde fuera, conservando el disco y la configuración del invitado.
+- name: "SSH · {{ linux_nodo.name }} no admite la clave del motor"
+  ansible.builtin.fail:
+    msg: >-
+      No se pudo entrar en {{ linux_nodo.name }} ({{ objetivo }}) con la clave pública
+      del motor: {{ interior.stderr | default('(sin salida)') | trim }}
+      Si el error es de autenticación, el invitado nació antes de que el motor
+      autorizara su clave y no la tiene en /root/.ssh/authorized_keys. Añádela desde
+      la consola del hipervisor o con cualquier acceso que ya tengas —su disco y su
+      configuración se conservan—: es la clave pública del túnel del motor
+      (`{{ env.management.tunnel.key | expanduser }}.pub`). Después vuelve a ejecutar
+      `./netlabs apply`. Si el error no es de autenticación, comprueba que el invitado
+      está en pie y que su dirección es la que declara el laboratorio.
+  when: interior.rc | default(1) | int != 0

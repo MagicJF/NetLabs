@@ -958,6 +958,60 @@ def linux_probe_cmd(node: dict) -> list:
     return _sh(linux_probe(node))
 
 
+def linux_access_cmd(clave_publica: str, contrasena: str) -> list:
+    """El script que deja abierta la puerta de root de un invitado Linux.
+
+    El invitado nace con la clave pública del motor ya autorizada —se la pasa
+    `create_guest` al crearlo—, pero esa clave sirve para que el motor entre, no
+    para que entre una persona desde la consola de la vista. Para eso hace falta
+    una clave de root y un sshd que acepte contraseña; las dos cosas se escriben
+    aquí, una sola vez.
+
+    La contraseña no viaja en el comando: entra por la entrada estándar y se lee
+    sólo cuando la huella del marcador no coincide. El marcador guarda la huella,
+    nunca la contraseña, y es lo que hace que el segundo `apply` no escriba ni
+    reinicie el servicio. El script imprime `CAMBIO:1` si tocó algo, para que la
+    tarea pueda distinguir «ya estaba» de «lo he abierto».
+    """
+    if not contrasena:
+        raise LabError(
+            "no hay contraseña para los invitados Linux: declara `linux_clave` en secrets.yml"
+        )
+    huella = hashlib.sha256(contrasena.encode("utf-8")).hexdigest()
+    config = "PermitRootLogin yes\nPasswordAuthentication yes"
+    script = f"""set -eu
+cambio=0
+install -d -m 700 /root/.ssh
+clave={shlex.quote(clave_publica)}
+touch /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+if [ -n "$clave" ] && ! grep -qxF "$clave" /root/.ssh/authorized_keys; then
+  printf '%s\\n' "$clave" >> /root/.ssh/authorized_keys
+  cambio=1
+fi
+if [ "$(cat /etc/netlabs-ssh 2>/dev/null || true)" != {shlex.quote(huella)} ]; then
+  IFS= read -r clave_root || true
+  if [ -n "$clave_root" ]; then
+    printf 'root:%s\\n' "$clave_root" | chpasswd
+    printf '%s\\n' {shlex.quote(huella)} > /etc/netlabs-ssh
+    chmod 600 /etc/netlabs-ssh
+    cambio=1
+  fi
+fi
+config={shlex.quote(config)}
+if [ "$(cat /etc/ssh/sshd_config.d/90-netlabs.conf 2>/dev/null || true)" != "$config" ]; then
+  printf '%s' "$config" > /etc/ssh/sshd_config.d/90-netlabs.conf
+  chmod 644 /etc/ssh/sshd_config.d/90-netlabs.conf
+  cambio=1
+fi
+if [ "$cambio" = 1 ]; then
+  systemctl restart ssh 2>/dev/null || service ssh restart
+fi
+echo "CAMBIO:$cambio"
+"""
+    return _sh(script)
+
+
 def _credencial(credenciales: dict, nombre: str) -> str:
     """El valor de una credencial declarada en `secrets.yml`.
 
@@ -1380,6 +1434,23 @@ def _direccion_de(node: dict) -> str:
     return ""
 
 
+def linux_clave(_node: dict, secrets: dict | None = None) -> str:
+    """La contraseña de root que el motor deja a los invitados Linux.
+
+    Es una credencial del sitio, no del laboratorio: el laboratorio no lleva
+    escritas claves, igual que no lleva la del RouterOS. Sin ella no se puede
+    abrir una terminal desde la vista, así que su ausencia es un error y no un
+    nodo a medias.
+    """
+    valor = (secrets or {}).get("linux_clave")
+    if not isinstance(valor, str) or not valor:
+        raise LabError(
+            "no hay `linux_clave` en secrets.yml: es la contraseña con la que se abre "
+            "la terminal de los invitados Linux desde la vista"
+        )
+    return valor
+
+
 def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | None,
                api: str, secrets: dict | None = None,
                puerto: int = NETXMS_PUERTO_SSH, vivas: list | None = None,
@@ -1516,14 +1587,50 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
     for node, _candidatos, objeto in equipos:
         direccion = _direccion_de(node)
         nombre = node.get("name") or node.get("role")
-        # Un nodo final no tiene la clave del RouterOS: se registra para que la vista
-        # lo dibuje y lo sondee por ICMP, sin inventarle una credencial de SSH que no
-        # tiene. Su terminal se abre con la clave de los equipos Linux cuando se
-        # configure; el mapa no depende de ello.
+        # Un nodo final no habla RouterOS: su terminal se abre con la cuenta de los
+        # invitados Linux. Hasta ahora se registraba sin credenciales y la consola
+        # no sabía abrirle nada; ahora se registra con root y la clave del sitio,
+        # igual que un equipo de red se registra con la suya.
         es_final = node.get("type") in ("server", "workstation")
-        usuario = None if es_final else (_declared_user(node) or "admin")
-        clave = None if es_final else ros_clave(node, secrets or {})
-        if objeto is None:
+        usuario = "root" if es_final else (_declared_user(node) or "admin")
+        clave = linux_clave(node, secrets) if es_final else ros_clave(node, secrets or {})
+        # Un nodo final que ya está registrado sin credenciales (o con otras) no se
+        # puede arreglar con PATCH: el API de esta versión las ignora. Se rehace una
+        # vez —se retira y se vuelve a dar de alta— para que su terminal abra sola;
+        # su histórico de ping es lo único que se pierde y se repuebla en el sondeo.
+        rehacer = (objeto is not None and es_final
+                   and int(objeto.get("id") or 0) in retirados)
+        if objeto is not None and es_final and not rehacer:
+            actual = leidos.get(int(objeto["id"])) or {}
+            if (str(actual.get("sshLogin") or "") == usuario
+                    and str(actual.get("sshPassword") or "") == clave
+                    and int(actual.get("sshPort") or 0) == int(puerto)):
+                continue
+            # Compartir nombre y dirección no demuestra quién creó el registro: el
+            # asignador puede reutilizar la dirección para un puesto de otro
+            # laboratorio. La marca del comentario es la prueba; sin ella no se
+            # rehace, porque borraría el histórico de otro (AGENTS.md §3.6).
+            suyo_de_aqui = (marca_de(node)
+                            and marca_de(node) in str(actual.get("comments") or ""))
+            if not suyo_de_aqui:
+                pendientes.append(
+                    f"{nombre} ({direccion}): ya está en la vista con otras credenciales "
+                    f"(usuario {actual.get('sshLogin') or 'ninguno'}), y su registro no "
+                    "lleva la marca de este laboratorio: no consta que sea suyo y no se "
+                    "rehace para no borrar el histórico de otro. Si es un resto, "
+                    "retíralo a mano en la consola"
+                )
+                continue
+            borrados.append({
+                "cmd": netxms_borrar_cmd(api, objeto["id"]),
+                "cuerpo": "",
+                "effect": (f"rehacer {nombre} ({direccion}) para que su terminal "
+                           f"abra como {usuario}"),
+            })
+            retirados.add(int(objeto["id"]))
+            rehacer = True
+
+        if objeto is None or rehacer:
             # El API contesta 409 si la dirección ya es de otro equipo. Se mira antes,
             # para decirlo con su nombre y su id en vez de dejar que el play se pare a
             # mitad con un cuerpo de error; y se para igual, porque un alta obligatoria
@@ -1549,27 +1656,21 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
                 # La marca de propiedad: sin ella, mañana no se puede demostrar que este
                 # registro lo creó este laboratorio y su histórico no se puede retirar.
                 "comments": node.get("description") or "",
+                "sshLogin": usuario,
+                "sshPassword": clave,
+                "sshPort": int(puerto),
             }
-            if not es_final:
-                cuerpo.update({
-                    "sshLogin": usuario,
-                    "sshPassword": clave,
-                    "sshPort": int(puerto),
-                })
             altas.append({
                 "cmd": netxms_crear_cmd(api),
                 "cuerpo": json.dumps(cuerpo),
-                "effect": (f"registrar {nombre} ({direccion}) en la vista"
-                           + ("" if es_final else f", como {usuario}")),
+                "effect": f"registrar {nombre} ({direccion}) en la vista, como {usuario}",
             })
             continue
 
-        # Un nodo final ya registrado no tiene credenciales que comprobar: está en la
-        # vista y el mapa lo dibuja. Si cambia de dirección, la primera pasada lo habrá
-        # retirado o lo habrá dejado como pendiente según las reglas de propiedad.
-        if es_final:
-            continue
-
+        # Un equipo de red ya registrado con otras credenciales no se rehace: borrarlo
+        # perdería lo recolectado y su identidad; se dice para que lo cambie una
+        # persona. Los nodos finales sí se rehacen arriba, porque su terminal es el
+        # único uso de esas credenciales.
         actual = leidos.get(int(objeto["id"])) or {}
         if (str(actual.get("sshLogin") or "") == usuario
                 and str(actual.get("sshPassword") or "") == clave
