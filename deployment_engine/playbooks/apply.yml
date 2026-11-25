@@ -246,7 +246,7 @@
     - name: apply · el registro de los equipos en lo que observa el sitio
       include_tasks: ../tasks/netxms.yml
       vars:
-        equipos: "{{ plan.nodes | selectattr('management') | list }}"
+        equipos: "{{ plan.nodes | selectattr('netxms_address') | list }}"
         # Las direcciones que hoy tiene algún invitado del clúster: separan un resto de
         # un despliegue anterior de un equipo de otro laboratorio que se llame igual.
         vivas: "{{ invitados_ahora | netlabs_direcciones_vivas(env.management.address_space) }}"
@@ -264,7 +264,7 @@
     - name: apply · el mapa del laboratorio en lo que observa el sitio
       include_tasks: ../tasks/netxms_mapa.yml
       vars:
-        equipos: "{{ plan.nodes | selectattr('management') | list }}"
+        equipos: "{{ plan.nodes | selectattr('netxms_address') | list }}"
       when: plan.steps | selectattr('op', 'equalto', 'netxms_mapa') | list | length > 0
 
     # --- el interior de los nodos de control, por SSH ----------------------

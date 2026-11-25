@@ -1074,17 +1074,17 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     # a decir que hay trabajo y el apply escribe sólo la diferencia. Es una vía del
     # motor —la quinta— y tiene su propio paso porque no es converger un interior ni
     # poner una ruta: es hablar con un servicio del sitio.
-    equipos = [n for n in nodes if n["management"]]
+    equipos = [n for n in nodes if n.get("netxms_address")]
     if equipos:
         steps.append({
             "op": "netxms_registro",
-            "equipos": [{"role": n["role"], "address": n["mgmt_address"]} for n in equipos],
+            "equipos": [{"role": n["role"], "address": n["netxms_address"]} for n in equipos],
         })
         effects.append(
-            "registrar en lo que observa el sitio los equipos del laboratorio que falten, "
-            "con su usuario y su clave, y retirar los que apunten a una máquina que ya "
-            "no es la suya: "
-            + ", ".join(f"{n['name']} ({n['mgmt_address']})" for n in equipos)
+            "registrar en lo que observa el sitio los equipos y nodos finales del laboratorio "
+            "que falten, con su usuario y su clave cuando la tengan, y retirar los que apunten "
+            "a una máquina que ya no es la suya: "
+            + ", ".join(f"{n['name']} ({n['netxms_address']})" for n in equipos)
         )
         # Y el mapa: la vista dibuja su topología sola —cada equipo donde le parece, que
         # no se parece a nada de lo que dibuja el plano—, así que se le manda uno a
@@ -1206,6 +1206,14 @@ def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
         "interfaces": interfaces,
         "management": management,
         "mgmt_address": str(derive_management(vmid, env["management"]["address_space"])) if management else None,
+        # La dirección con la que la vista registra este nodo: la de gestión para un
+        # equipo de red, la estática para un nodo final. Un `dhcp` no tiene ninguna
+        # todavía, y por eso no entra en el registro ni en el mapa.
+        "netxms_address": (
+            str(derive_management(vmid, env["management"]["address_space"])) if management
+            else (str(ipaddress.ip_interface(static).ip)
+                  if static and not TYPES[kind]["network_device"] else None)
+        ),
         "address": static or ("dhcp" if address == "dhcp" else None),
         "networks": [{"name": n, "address": str(networks[n])} for n in node["networks"]],
         "configure": node.get("configure") or {},
