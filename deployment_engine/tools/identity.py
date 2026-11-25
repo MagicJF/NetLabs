@@ -830,8 +830,8 @@ def _validate_reservas(lab: dict, networks: dict) -> None:
                 anota(srv["gateway"], f"la puerta que sirve {role!r}")
     # La puerta de cada red —la que el router declara en ella o, si nadie la declara,
     # la primera del rango— también es de alguien: reservarla dejaría al nodo sin
-    # salida. Sólo se añade la derivada cuando de verdad es la que se va a usar; con
-    # otra puerta declarada, la primera del rango está libre.
+    # salida. Es la misma derivación que el servidor DHCP anuncia, así que una reserva
+    # no puede caer en la puerta que de verdad se sirve.
     for net in lab["networks"]:
         fijas.setdefault(_gateway_for(lab, net["name"]), f"la puerta de la red {net['name']!r}")
 

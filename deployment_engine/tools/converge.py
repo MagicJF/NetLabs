@@ -515,7 +515,7 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
         iface = interface_of(node, item["network"])
         nombre = f"{PREFIX}{item['network']}"
         red = item.get("network")
-        gateway = item.get("gateway") or _first_host(node, red)
+        gateway = _gateway_served(node, red, item)
         rango = str(item["pool"])
         deseados_pool.add(nombre)
         deseados_srv.add(nombre)
@@ -602,6 +602,23 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
                         "effect": f"sobra la reserva {concesion.get('address')} "
                                   f"({concesion.get('comment')})"})
     return ops
+
+
+def _gateway_served(node: dict, network: str, item: dict) -> str:
+    """La puerta que el servidor anuncia: la suya o la del router en esa red.
+
+    Si el servidor no repite la puerta, la primera del rango no sirve cuando el
+    router vive en otra dirección: el cliente saldría por una dirección que no
+    enruta. Se usa la que el router declara en esa red, la misma que el plan
+    deriva para las patas estáticas; sólo si tampoco la declara se cae a la
+    primera del rango.
+    """
+    if item.get("gateway"):
+        return item["gateway"]
+    for pata in (node.get("configure") or {}).get("addresses") or []:
+        if pata.get("network") == network:
+            return str(ipaddress.ip_interface(pata["address"]).ip)
+    return _first_host(node, network)
 
 
 def _first_host(node: dict, network: str) -> str:

@@ -156,6 +156,28 @@ class LasReservasDeLosNodosFinales(unittest.TestCase):
         self.assertEqual(borradas[0]["method"], "DELETE")
 
 
+class LaPuertaQueAnunciaElServidor(unittest.TestCase):
+    def test_la_puerta_es_la_del_router_aunque_el_servidor_no_la_repita(self):
+        # El router vive en .254 y su servidor DHCP no repite la puerta. Anunciar
+        # .1 por defecto entregaría como salida una dirección que no enruta: el
+        # cliente no puede salir por la dirección de otro. La puerta se deriva de
+        # la dirección que el router declara en esa red.
+        nodo = {
+            "role": "rte1", "name": "rte1", "type": "router",
+            "interfaces": [{"index": 0, "network": "lan1", "bridge": "b_rte1p1_wsp1p1"}],
+            "networks": [{"name": "lan1", "address": "10.44.1.0/24"}],
+            "configure": {
+                "addresses": [{"network": "lan1", "address": "10.44.1.254/24"}],
+                "dhcp_server": [{"network": "lan1",
+                                 "pool": "10.44.1.100-10.44.1.199"}],
+            },
+        }
+        ops = converge.ros_ops(nodo, {"pools": [], "dhcp_servers": [],
+                                      "dhcp_networks": [], "dhcp_leases": []}, "clave")
+        red = next(o for o in ops if o["path"] == "/rest/ip/dhcp-server/network")
+        self.assertEqual(red["body"]["gateway"], "10.44.1.254")
+
+
 class ElInteriorLinux(unittest.TestCase):
     """Un nodo de control declara su interior: repos, paquetes, ficheros, servicios."""
 
