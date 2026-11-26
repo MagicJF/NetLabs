@@ -315,6 +315,16 @@
         equipos: "{{ plan.nodes | selectattr('netxms_address') | list }}"
       when: plan.steps | selectattr('op', 'equalto', 'netxms_mapa') | list | length > 0
 
+    # --- el marcador limpio en lo que observa el sitio ---------------------
+    # Lo último que toca la vista: el registro da de alta y el mapa dibuja, y ninguna de
+    # las dos resuelve las alarmas que la vista levantó por el camino —una MAC que cambió
+    # al volver a crear un invitado se queda viva para siempre y deja el equipo en
+    # amarillo en el propio mapa—. Se dan por resueltas al final, con el laboratorio ya
+    # convergido. Si el mal sigue, la vista las vuelve a levantar sola.
+    - name: apply · el marcador limpio en lo que observa el sitio
+      include_tasks: ../tasks/netxms_marcador.yml
+      when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
+
     # --- el interior de los nodos de control, por SSH ----------------------
     # Un nodo de control no tiene router ni DHCP: su interior se converge por SSH
     # con la misma puerta que usa el resto del motor. Sólo se escribe la diferencia.

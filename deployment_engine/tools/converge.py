@@ -1745,6 +1745,47 @@ def netxms_mapa_escribir_cmd(api: str, id_mapa) -> list:
     return netxms_cmd(api, f"/objects/{int(id_mapa)}/map", metodo="PUT")
 
 
+# --- el marcador limpio -----------------------------------------------------
+# La vista no resuelve sola sus alarmas. Una que saltó **una vez** —una MAC que cambió al
+# volver a crear los invitados, una MAC que dos nodos compartieron un instante— se queda
+# viva para siempre, y con ella el equipo en amarillo: el mapa enseña un mal que ya no
+# está. Aquí se dan por resueltas las de los equipos de este laboratorio al converger. Si
+# el mal sigue de verdad, la vista la vuelve a levantar en su siguiente vuelta: resolver no
+# es esconder, es dejar de repetir lo que ya pasó.
+
+NETXMS_RUTA_ALARMAS = "/alarms"
+NETXMS_ALARMA_VIVA = 0            # la vista: 0 viva, 1 reconocida, 2 resuelta
+NETXMS_AVISO = 1                  # severidad: por debajo de aviso no hay nada que mirar
+
+
+def netxms_alarmas_cmd(api: str) -> list:
+    """El registro de alarmas de la vista, entero.
+
+    El listado no filtra por equipo —`?objectId=` lo ignora, comprobado—, así que se pide
+    todo y se separa aquí, por el `source` que cada alarma sí trae.
+    """
+    return netxms_cmd(api, NETXMS_RUTA_ALARMAS, metodo="GET")
+
+
+def netxms_alarma_resolver_cmd(api: str, id_alarma) -> list:
+    """Dar por resuelta una alarma. Es lo que la vista acepta: `DELETE` contesta 405."""
+    return netxms_cmd(api, f"{NETXMS_RUTA_ALARMAS}/{int(id_alarma)}/resolve", metodo="POST")
+
+
+def netxms_alarmas_propias(alarmas: list | None, ids: list | None) -> list:
+    """Las alarmas vivas y con algo que decir de los equipos de ESTE laboratorio.
+
+    Sólo las de sus equipos (`source`, que es el número del objeto): las de otro
+    laboratorio no se tocan. Y sólo de aviso para arriba: por debajo está el ruido que la
+    vista apunta sola —un paquete instalado— y eso no se resuelve ni hace falta.
+    """
+    mios = {int(i) for i in ids or []}
+    return [a for a in (alarmas or [])
+            if int(a.get("source") or 0) in mios
+            and int(a.get("state") or 0) == NETXMS_ALARMA_VIVA
+            and int(a.get("severity") or 0) >= NETXMS_AVISO]
+
+
 def netxms_raiz_de_mapas(raices: list | None) -> int | None:
     """El número de la raíz de mapas, que no se supone: se lee de la vista."""
     for objeto in raices or []:
