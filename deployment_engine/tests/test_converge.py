@@ -1531,6 +1531,31 @@ class ElMarcadorLimpio(unittest.TestCase):
         self.assertEqual(converge.netxms_alarmas_propias([], self.MIOS), [])
         self.assertEqual(converge.netxms_alarmas_propias(None, self.MIOS), [])
 
+    NODOS = [{"role": "rta1", "name": "rta1", "mgmt_address": "10.30.0.101"}]
+
+    def test_el_homonimo_de_otro_laboratorio_no_entra_en_la_limpieza(self):
+        """Dos `rta1` con distinta dirección: sólo el de aquí se resuelve.
+
+        Demuestra el caso que se lleva por delante el marcador de otro laboratorio: el
+        nombre es del laboratorio, no de la vista, así que dos laboratorios pueden tener
+        cada uno su `rta1` apuntando a máquinas distintas. Los números propios se emparejan
+        por nombre Y dirección, y con ellos la alarma del homónimo queda fuera. La lectura
+        de fichas sigue viendo los dos, que es lo que hace falta para saber quién creó el
+        resto.
+        """
+        censo = [
+            {"id": 526, "name": "rta1", "ipAddress": {"address": "10.30.0.101"}},  # de este
+            {"id": 901, "name": "rta1", "ipAddress": {"address": "10.40.0.101"}},  # homónimo
+        ]
+        propios = converge.netxms_propios_de(self.NODOS, censo)
+        self.assertEqual(propios, [526])
+        propias = converge.netxms_alarmas_propias(
+            [self.alarma(526), self.alarma(901, id=2)], propios)
+        self.assertEqual([a["id"] for a in propias], [1])
+        # La ficha del homónimo se sigue leyendo en el registro: sin ella no se sabe quién
+        # lo creó y un resto no se puede retirar sin arriesgar el histórico de otro.
+        self.assertEqual(converge.netxms_ids(self.NODOS, censo), [526, 901])
+
 
 if __name__ == "__main__":
     unittest.main()

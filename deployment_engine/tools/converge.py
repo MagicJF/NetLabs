@@ -1829,6 +1829,21 @@ def netxms_objetos_de(nodes: list[dict], censo: list | None) -> tuple[dict, list
     return objetos, sorted(faltan)
 
 
+def netxms_propios_de(nodes: list[dict], censo: list | None) -> list:
+    """Los números de los equipos de ESTE laboratorio en la vista, por nombre **y** dirección.
+
+    `netxms_ids` devuelve también los homónimos que llevan el nombre de un equipo de aquí
+    apuntando a otra máquina: la ficha de ésos hace falta para saber quién los creó, porque
+    sin la marca no se puede retirar un resto sin arriesgar el histórico de otro
+    laboratorio. Pero un homónimo es de otro y sus alarmas no se miran: con sus números, el
+    marcador daría por resueltas las de un laboratorio ajeno. Aquí sólo quedan los que están
+    con la dirección que este laboratorio les deriva, que es el mismo emparejamiento con el
+    que el mapa los dibuja.
+    """
+    objetos, _ = netxms_objetos_de(nodes, censo)
+    return sorted({int(numero) for numero in objetos.values()})
+
+
 def netxms_interfaces_de(nodes: list[dict], censo: list | None, fichas: list | None,
                          interfaces: list | None) -> dict:
     """Qué número tiene en la vista cada interfaz de cada equipo del laboratorio.

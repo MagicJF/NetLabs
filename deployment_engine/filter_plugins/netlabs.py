@@ -202,6 +202,8 @@ class FilterModule:
             "netlabs_netxms_alarmas_cmd": lambda api: converge.netxms_alarmas_cmd(api),
             "netlabs_netxms_alarmas_propias": lambda alarmas, ids:
                 converge.netxms_alarmas_propias(alarmas, ids),
+            "netlabs_netxms_propios": lambda nodes, censo:
+                converge.netxms_propios_de(nodes, censo),
             "netlabs_netxms_alarma_resolver_cmd": lambda api, id_alarma:
                 converge.netxms_alarma_resolver_cmd(api, id_alarma),
             "netlabs_netxms_interfaces_cuerpo": lambda api=None: converge.netxms_interfaces_cuerpo(),
