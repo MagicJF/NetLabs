@@ -981,10 +981,94 @@ def _plano_anidado(lab: dict) -> str:
     for rol_a, puerto_a, _z, _pz in cables:
         salidas.setdefault(rol_a, []).append(puerto_a)
 
+    # --- lo que un cable no puede tachar --------------------------------------
+    # El plano se comprueba leyendo sus formas: un cable que pasa por encima de un
+    # símbolo ajeno o de un nombre deja el dibujo mintiendo —dice que ese equipo está
+    # en medio de la línea—, y hay rutas que lo evitan. Para poder elegir una hay que
+    # saber antes dónde va cada cosa: el nombre de cada equipo se coloca como lo
+    # colocará su etiqueta, y el rótulo de cada área está en su cabecera.
+    cables_planos = [(pa, pz) for pa, _, pz, _ in cables]
+    rotulos: list[tuple[float, float, float, float]] = []
+    for region in regiones:
+        if region.sintetica:
+            continue
+        x0, y0 = region.x + 16, region.y + 21
+        rotulos.append((x0, y0 - 12.5 * 0.8, x0 + len(region.titulo) * 12.5 * 0.52,
+                        y0 + 12.5 * 0.25))
+    simbolos: dict[str, tuple[float, float, float, float]] = {}
+    for region in regiones:
+        for rol, (cx, cy) in region.dentro.items():
+            ancho, alto = SIMBOLO[tipos[rol]]
+            simbolos[rol] = (cx - ancho / 2, cy - alto / 2, cx + ancho / 2, cy + alto / 2)
+
+    # --- dónde va cada nombre --------------------------------------------------
+    # El lado que más aire tiene se elige mirando las conexiones del equipo, y con eso
+    # solo no basta: una etiqueta de router son tres renglones —nombre y sus dos
+    # direcciones—, y el vecino tiene el suyo al lado. Se colocan una a una sabiendo
+    # qué hay ya puesto, y sólo cuando ningún lado queda libre se respeta el que pedía
+    # el aire. Es lo que evita que la dirección de un router acabe escrita encima del
+    # nombre del puesto del departamento de al lado.
+    lados: dict[str, str] = {}
+    deslices: dict[str, tuple[float, float]] = {}
+    nombres: dict[str, tuple[float, float, float, float]] = {}
+    ocupado: list[tuple[float, float, float, float]] = (list(simbolos.values())
+                                                        + list(rotulos))
+    for region in regiones:
+        for rol, (cx, cy) in region.dentro.items():
+            lineas = _que_dice(por_nodo[rol])
+            # En qué orden se prueban los lados: primero el que pide el aire, y luego
+            # los demás de arriba abajo, que es el orden en que se leen.
+            pide = _lado(rol, punto_de, cables_planos,
+                         caja=region if not region.sintetica else None,
+                         ancho_etiqueta=_ancho_etiqueta(lineas))
+            # Cada lado se prueba tal cual y luego apartándose a un lado y a otro: con
+            # los vecinos tan cerca, lo que no cabe centrado cabe un poco desviado, y
+            # eso es mejor que cambiar el nombre de costado. Los pasos van de uno en
+            # uno para que la etiqueta quede lo más cerca posible de su equipo.
+            candidatos: list[tuple[str, tuple[float, float]]] = []
+            for lado in [pide] + [l for l in ("abajo", "derecha", "izquierda", "arriba")
+                                  if l != pide]:
+                for paso in (0, 6, -6, 12, -12, 18, -18, 24, -24):
+                    aparte = ((paso, 0.0) if lado in ("abajo", "arriba")
+                              else (0.0, paso))
+                    candidatos.append((lado, aparte))
+            elegido, desliz = pide, (0.0, 0.0)
+            bloque = _caja_de_la_etiqueta(cx, cy, lineas, pide, tipos[rol])
+            for lado, aparte in candidatos:
+                prueba = _caja_de_la_etiqueta(cx, cy, lineas, lado, tipos[rol], aparte)
+                if region.sintetica or _dentro_de(prueba, region):
+                    if all(not _se_tocan(prueba, caja) for caja in ocupado):
+                        elegido, desliz, bloque = lado, aparte, prueba
+                        break
+            lados[rol] = elegido
+            deslices[rol] = desliz
+            nombres[rol] = _caja_del_nombre(cx, cy, lineas, elegido, tipos[rol], desliz)
+            ocupado.append(bloque)
+
+    def estorban(rol_a: str, rol_z: str) -> list[tuple[float, float, float, float]]:
+        """Lo que hay en el plano y no es el símbolo de las dos puntas del cable.
+
+        Los símbolos de los extremos no estorban —el cable nace en ellos—, pero sus
+        nombres sí: un cable que cruza el nombre de su propio switch lo deja sin
+        identificar igual que si cruzara el de cualquier otro. Y el rótulo de un
+        área, también: es lo que dice de qué red es cada caja.
+        """
+        fuera = list(rotulos)
+        for rol, caja in simbolos.items():
+            if rol not in (rol_a, rol_z):
+                fuera.append(caja)
+        fuera += list(nombres.values())
+        return fuera
+
     def cable_entre(rol_a, puerto_a, rol_z, puerto_z) -> str:
         pa, pz = punto_de(rol_a), punto_de(rol_z)
         ta, tz = SIMBOLO[tipos[rol_a]], SIMBOLO[tipos[rol_z]]
         casa_a, casa_z = casa_de[rol_a], casa_de[rol_z]
+        # Cada cable de un mismo equipo sale por un punto distinto: compartiendo salida,
+        # varios cables se dibujan como uno solo que se ramifica, y el plano diría que
+        # hay un bus donde hay un cable por cliente.
+        suyos = sorted(salidas.get(rol_a) or [puerto_a])
+        desvio = (suyos.index(puerto_a) - (len(suyos) - 1) / 2) * 13
         if casa_a is casa_z:
             casa = casa_a
             # Si el cable va en recta y hay otro equipo del área en medio, la recta lo
@@ -999,29 +1083,41 @@ def _plano_anidado(lab: dict) -> str:
                             if x0 - 20 <= q[0] <= x1 + 20 and y0 - 20 <= q[1] <= y1 + 20]
                 if en_medio:
                     centro = casa.dentro.get(casa.enchufe) if casa.enchufe else None
+                    # El carril natural de un área con switch es el hueco que queda
+                    # entre sus dos columnas —los clientes a un lado y él al otro—:
+                    # por ahí llega el cable a cualquier cliente sin pasar por encima
+                    # de los que están en medio. Los demás carriles son los rodeos de
+                    # siempre, por si el hueco bueno resulta ser otro. Cada cable lleva
+                    # su propio carril, apartado del de sus hermanos.
+                    carriles = [(pa[0] + pz[0]) / 2 + desvio]
                     if abs(pa[0] - pz[0]) < abs(pa[1] - pz[1]):
-                        # vertical: se aparta en horizontal, hacia fuera del switch
                         lado = -1 if (centro and centro[0] < pa[0]) else 1
-                        desvio = lado * 40
-                        if not (casa.x + 25 < pa[0] + desvio < casa.x + casa.ancho - 25):
-                            desvio = -desvio
-                        px = min(max(pa[0] + desvio, casa.x + 25),
-                                 casa.x + casa.ancho - 25)
-                        return "".join([
-                            _codo([(pa[0], pa[1]), (px, pa[1]), (px, pz[1]), (pz[0], pz[1])]),
-                            _puerto(px, pa[1] + 12, puerto_a, arriba=False),
-                            _puerto(px, pz[1] - 12, puerto_z, arriba=True),
-                        ])
-                    # horizontal: se aparta por debajo, que el techo lo ocupa la cabecera
-                    py = min(pa[1] + 40, casa.y + casa.alto - 26)
-                    # Cada rótulo va hacia el otro extremo del tramo y por debajo de la
-                    # línea: con el equipo `a` a la derecha, el desplazamiento fijo lo
-                    # sacaba del cable, y encima de la línea caía sobre su propio nombre.
-                    hacia = 12 if pz[0] > pa[0] else -12
+                        carriles += [pa[0] + 40 * lado + desvio, pa[0] - 40 * lado + desvio]
+                    else:
+                        carriles += [pa[0] - 40 + desvio, pa[0] + 40 + desvio]
+                    carriles.append(pa[0] + desvio)
+
+                    def dentro_del_area(x: float) -> float:
+                        """El carril, sin salirse por los costados del área."""
+                        return min(max(x, casa.x + 25), casa.x + casa.ancho - 25)
+
+                    candidatos = [
+                        [(pa[0], pa[1]), (dentro_del_area(x), pa[1]),
+                         (dentro_del_area(x), pz[1]), (pz[0], pz[1])]
+                        for x in carriles]
+                    # Y por último los rodeos de siempre: por debajo, que el techo lo
+                    # ocupa la cabecera, y por encima.
+                    for py in (min(pa[1] + 40 + desvio, casa.y + casa.alto - 26),
+                               max(pa[1] - 40 + desvio, casa.y + casa.cabecera + MARGEN_ARRIBA)):
+                        candidatos.append([(pa[0], pa[1]), (pa[0], py),
+                                           (pz[0], py), (pz[0], pz[1])])
+                    pliego = estorban(rol_a, rol_z)
+                    puntos = next((c for c in candidatos if _libre(c, pliego)),
+                                  candidatos[0])
                     return "".join([
-                        _codo([(pa[0], pa[1]), (pa[0], py), (pz[0], py), (pz[0], pz[1])]),
-                        _puerto(pa[0] + hacia, py, puerto_a, arriba=True),
-                        _puerto(pz[0] - hacia, py, puerto_z, arriba=False),
+                        _codo(puntos),
+                        _puerto(puntos[1][0], puntos[1][1] + 12, puerto_a, arriba=False),
+                        _puerto(puntos[-2][0], puntos[-2][1] - 12, puerto_z, arriba=True),
                     ])
             # Dos equipos de la misma área pero en plantas distintas —el switch de
             # núcleo arriba y un router en el borde de un departamento— se unen por el
@@ -1036,22 +1132,42 @@ def _plano_anidado(lab: dict) -> str:
                 # Cada cable baja por su propio carril y sale del switch por su altura:
                 # compartiendo carril, tres cables se dibujan como uno solo que se
                 # ramifica, y un plano dice que hay tres enlaces, no un bus.
-                suyos = sorted(salidas.get(rol_a) or [puerto_a])
-                centro = (len(suyos) - 1) / 2
-                desvio = (suyos.index(puerto_a) - centro) * 13
                 lane += desvio
                 # Se sale por el lado que mira al pasillo: por el otro, el puerto se
                 # escribe encima del nombre del propio switch.
                 salida_x = (pa[0] + ta[0] / 2 + 3 if casa.corredor == "derecha"
                             else pa[0] - ta[0] / 2 - 3)
                 y_salida = pa[1] + desvio
-                return "".join([
-                    _codo([(pa[0], pa[1]), (salida_x, pa[1]),
-                           (salida_x + 12, y_salida), (lane, y_salida),
-                           (lane, pz[1]), (pz[0], pz[1])]),
-                    _puerto(salida_x + 6, y_salida, puerto_a, arriba=False),
-                    _puerto(lane, pz[1] - 4, puerto_z, arriba=True),
-                ])
+                puntos = [(pa[0], pa[1]), (salida_x, pa[1]),
+                          (salida_x + 12, y_salida), (lane, y_salida),
+                          (lane, pz[1]), (pz[0], pz[1])]
+                puertos = [_puerto(salida_x + 6, y_salida, puerto_a, arriba=False),
+                           _puerto(lane, pz[1] - 4, puerto_z, arriba=True)]
+                pliego = estorban(rol_a, rol_z)
+                if not _libre(puntos, pliego):
+                    # Con los departamentos de una sede dibujados uno al lado del otro,
+                    # los routers de ambos quedan a la misma altura y el pasillo lateral
+                    # pasa justo por encima del hermano. Se baja por un carril libre —la
+                    # vertical del propio switch, la del router, o el hueco que queda
+                    # entre dos áreas— y se entra al router de costado.
+                    hermanas = sorted(casa.hijas, key=lambda r: r.x)
+                    huecos = [pa[0], pz[0], casa.x + 18, casa.x + casa.ancho - 18]
+                    huecos += [(una.x + una.ancho + otra.x) / 2
+                               for una, otra in zip(hermanas, hermanas[1:])]
+                    for hueco in huecos:
+                        prueba = [(pa[0], pa[1]), (hueco + desvio, pa[1]),
+                                  (hueco + desvio, pz[1]), (pz[0], pz[1])]
+                        prueba = [p for i, p in enumerate(prueba)
+                                  if i == 0 or p != prueba[i - 1]]
+                        if _libre(prueba, pliego):
+                            puntos = prueba
+                            puertos = [
+                                _puerto(prueba[1][0], prueba[1][1] + 12, puerto_a,
+                                        arriba=False),
+                                _puerto(prueba[-2][0], prueba[-2][1] - 4, puerto_z,
+                                        arriba=True)]
+                            break
+                return "".join([_codo(puntos), *puertos])
             return _linea(pa, pz, ta, tz, puerto_a, puerto_z)
         if abs(pz[1] - pa[1]) < 40:
             return _linea(pa, pz, ta, tz, puerto_a, puerto_z)
@@ -1156,16 +1272,13 @@ def _plano_anidado(lab: dict) -> str:
                 piezas.append(_pata_de_area((px, py), pata, SIMBOLO[tipos[rol]]))
 
     textos: list[str] = []
-    cables_planos = [(a, z) for a, _, z, _ in cables]
     puntos: list[tuple[float, float]] = [(0.0, 0.0), (raiz.ancho, raiz.alto)]
     for region in regiones:
         for rol, (cx, cy) in region.dentro.items():
             piezas.append(_simbolo(tipos[rol], cx, cy, rol=rol))
             lineas = _que_dice(por_nodo[rol])
-            textos.append(_etiqueta(cx, cy, lineas, clase=tipos[rol],
-                                    lado=_lado(rol, punto_de, cables_planos,
-                                               caja=region if not region.sintetica else None,
-                                               ancho_etiqueta=_ancho_etiqueta(lineas))))
+            textos.append(_etiqueta(cx, cy, lineas, clase=tipos[rol], lado=lados[rol],
+                                    desliz=deslices[rol]))
             # El nombre va al costado del símbolo y puede salirse del área: el lienzo
             # tiene que contarlo, o la última letra se corta en el borde del dibujo.
             puntos += [(cx - 96, cy - 34), (cx + 96, cy + 66)]
@@ -1332,6 +1445,115 @@ def _codo(puntos: list[tuple[float, float]]) -> str:
     trazo = " ".join(f"{x:.1f},{y:.1f}" for x, y in puntos)
     return (f'<polyline points="{trazo}" fill="none" stroke="{LINEA}" '
             f'stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>')
+
+
+def _cruza(tramo: tuple[tuple[float, float], tuple[float, float]],
+           caja: tuple[float, float, float, float]) -> bool:
+    """Si un tramo recto pasa por dentro de una caja, aunque sólo sea por una esquina.
+
+    Se recorta la recta contra el rectángulo en vez de muestrear puntos: un cable que
+    roza una esquina también tacha lo que hay en ella, y el muestreo se lo salta
+    cuando el cruce es corto.
+    """
+    (ax, ay), (bx, by) = tramo
+    x0, y0, x1, y1 = caja
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-(bx - ax), ax - x0), (bx - ax, x1 - ax),
+                 (-(by - ay), ay - y0), (by - ay, y1 - ay)):
+        if p == 0:
+            if q < 0:
+                return False
+            continue
+        corte = q / p
+        if p < 0:
+            t0 = max(t0, corte)
+        else:
+            t1 = min(t1, corte)
+        if t0 > t1:
+            return False
+    return True
+
+
+def _libre(puntos: list[tuple[float, float]],
+           prohibidas: list[tuple[float, float, float, float]]) -> bool:
+    """Si un recorrido en ángulo recto no tacha nada de lo que hay en la lista."""
+    return all(not _cruza((puntos[i], puntos[i + 1]), caja)
+               for i in range(len(puntos) - 1) for caja in prohibidas)
+
+
+def _caja_del_nombre(cx: float, cy: float, lineas: list[str], lado: str,
+                     tipo: str,
+                     desliz: tuple[float, float] = (0.0, 0.0)
+                     ) -> tuple[float, float, float, float]:
+    """La caja del nombre de un equipo, medida igual que la escribe `_etiqueta`.
+
+    Un cable que pasa por encima de un nombre deja al equipo sin identificar —el
+    plano dice que hay una línea donde hay un rótulo—, así que para poder apartarlo
+    hay que saber de antemano dónde va a caer ese nombre. Se mide aquí con la misma
+    geometría y el mismo ancho aproximado que usa el dibujo.
+    """
+    cajas = _cajas_de_la_etiqueta(cx, cy, lineas, lado, tipo, desliz)
+    return cajas[0]
+
+
+def _cajas_de_la_etiqueta(cx: float, cy: float, lineas: list[str], lado: str,
+                          tipo: str,
+                          desliz: tuple[float, float] = (0.0, 0.0)
+                          ) -> list[tuple[float, float, float, float]]:
+    """La caja de cada renglón de una etiqueta, renglón a renglón.
+
+    El nombre va en cuerpo grande y las direcciones en pequeño, cada una en su línea:
+    se miden por separado para poder decir que una etiqueta cabe donde no cabe otra.
+    `desliz` aparta la etiqueta de su sitio sin despegarla del símbolo, que es como se
+    resuelven los últimos centímetros de un plano.
+    """
+    ancho, alto = SIMBOLO.get(tipo) or (40, 40)
+    corrimiento_x, corrimiento_y = desliz
+    salida = []
+    for i, texto in enumerate(lineas):
+        tam = 12.5 if i == 0 else 10.5
+        largo = len(texto) * tam * 0.52
+        if lado == "derecha":
+            x0, y = cx + ancho / 2 + 9, cy + 4 + (i - (len(lineas) - 1) / 2) * 12
+        elif lado == "izquierda":
+            x0, y = cx - ancho / 2 - 9 - largo, cy + 4 + (i - (len(lineas) - 1) / 2) * 12
+        elif lado == "arriba":
+            x0 = cx - largo / 2
+            y = cy - alto / 2 - 16 - (len(lineas) - 1 - i) * 12
+        else:
+            x0 = cx - largo / 2
+            y = cy + alto / 2 + 13 + i * 12
+        x0, y = x0 + corrimiento_x, y + corrimiento_y
+        salida.append((x0, y - tam * 0.8, x0 + largo, y + tam * 0.25))
+    return salida
+
+
+def _caja_de_la_etiqueta(cx: float, cy: float, lineas: list[str], lado: str,
+                         tipo: str,
+                         desliz: tuple[float, float] = (0.0, 0.0)
+                         ) -> tuple[float, float, float, float]:
+    """Todo lo que ocupa una etiqueta: de su primer renglón al último.
+
+    Se coloca por bloques y no por líneas: dos etiquetas se estorban si se toca
+    cualquiera de sus renglones, aunque los nombres queden lejos.
+    """
+    cajas = _cajas_de_la_etiqueta(cx, cy, lineas, lado, tipo, desliz)
+    return (min(c[0] for c in cajas), min(c[1] for c in cajas),
+            max(c[2] for c in cajas), max(c[3] for c in cajas))
+
+
+def _se_tocan(una: tuple[float, float, float, float],
+              otra: tuple[float, float, float, float]) -> bool:
+    """Si dos cajas se pisan."""
+    return (una[0] < otra[2] and otra[0] < una[2]
+            and una[1] < otra[3] and otra[1] < una[3])
+
+
+def _dentro_de(caja: tuple[float, float, float, float], region: "Region") -> bool:
+    """Si una caja cabe entera dentro de un área."""
+    return (caja[0] >= region.x and caja[1] >= region.y
+            and caja[2] <= region.x + region.ancho
+            and caja[3] <= region.y + region.alto)
 
 
 def plano(lab: dict, modo: str = "topologia") -> str:
@@ -1622,14 +1844,17 @@ def plano(lab: dict, modo: str = "topologia") -> str:
 
 
 def _etiqueta(cx: float, cy: float, lineas: list[str], clase: str = "equipo",
-              lado: str = "abajo") -> str:
+              lado: str = "abajo", desliz: tuple[float, float] = (0.0, 0.0)) -> str:
     """El nombre del equipo junto a su símbolo, y sus direcciones si las tiene.
 
     `lado` no es capricho: un nombre centrado bajo el símbolo queda tachado por el
     cable que sale de él hacia abajo, así que ahí el nombre se pone al costado. El
-    halo blanco remata el trabajo cuando una línea roza una letra.
+    halo blanco remata el trabajo cuando una línea roza una letra. `desliz` es el
+    último centímetro: aparta la etiqueta de su sitio —sin despegarla del símbolo—
+    cuando el sitio justo lo ocupa el nombre del vecino.
     """
     ancho, alto = SIMBOLO.get(clase) or (40, 40)
+    corrimiento_x, corrimiento_y = desliz
     partes = []
     for i, texto in enumerate(lineas):
         tam = 12.5 if i == 0 else 10.5
@@ -1649,6 +1874,7 @@ def _etiqueta(cx: float, cy: float, lineas: list[str], clase: str = "equipo",
         else:
             x, ancla = cx, "middle"
             y = cy + alto / 2 + 13 + i * 12
+        x, y = x + corrimiento_x, y + corrimiento_y
         partes.append(f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="{ancla}" '
                       f'font-family="{FUENTE}" font-size="{tam}" font-weight="{peso}" '
                       f'fill="{color}" stroke="#ffffff" stroke-width="3.5" '
