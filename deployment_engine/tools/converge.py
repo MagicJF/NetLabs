@@ -20,7 +20,7 @@ import json
 import os
 import shlex
 
-from identity import LabError, ROS_SECRET, TYPES
+from identity import LabError, ROS_SECRET, TYPES, lab_from_comment
 
 import mapa
 import plano
@@ -1745,6 +1745,125 @@ def netxms_mapa_escribir_cmd(api: str, id_mapa) -> list:
     return netxms_cmd(api, f"/objects/{int(id_mapa)}/map", metodo="PUT")
 
 
+# --- lo que el laboratorio deja en la vista ---------------------------------
+# `destroy` desmonta lo que el laboratorio declaró, y la vista es uno de los sitios donde
+# lo declarado dejó rastro: sus equipos registrados y su mapa. Un laboratorio destruido no
+# puede seguir apareciendo en la consola —equipos que ya no existen, en rojo, y un mapa que
+# enseña una red que se apagó—, porque entonces «destruido» no se distingue de «desplegado».
+#
+# Ni aquí ni en Proxmox se borra «lo que sobra» ni «lo que está caído»: eso se llevaría por
+# delante el de otro laboratorio que hoy no está desplegado. Se borra **lo que lleva la
+# marca** que el motor escribe al dar de alta cada cosa (`netlabs lab=<lab>`), y el mapa por
+# su nombre, que es el del laboratorio y la raíz no admite dos iguales.
+
+NETXMS_MARCA = "netlabs lab="
+
+
+def netxms_marca_de(lab: str) -> str:
+    """La marca de propiedad de este laboratorio, tal y como se escribe al registrar."""
+    return f"{NETXMS_MARCA}{lab}"
+
+
+def netxms_lab_de_marca(comentario: str) -> str:
+    """El laboratorio que nombra la marca de un comentario; vacío si no lleva ninguna.
+
+    Se lee el valor **entero** de `lab=`, hasta el espacio, y se compara por igualdad, no
+    como subcadena: `netlabs lab=x_uno` es prefijo de `netlabs lab=x_uno_dos`, y tomarlos
+    por el mismo haría que destruir el primero se llevara por delante el histórico del
+    segundo, sin comprobar nombre ni dirección (AGENTS.md §3.6). Se reutiliza el reconocedor
+    de la identidad (`identity.lab_from_comment`), que ya valida ese patrón: el nombre de un
+    laboratorio se escribe una sola vez.
+    """
+    return lab_from_comment(comentario or "") or ""
+
+
+def netxms_restos_de(nodos: list | dict | None, lab: str, equipos: list | None = None,
+                     espacios: list | None = None) -> dict:
+    """Qué equipos de la vista son de este laboratorio, y cuáles lo parecen sin serlo.
+
+    Los primeros son los que llevan la marca de este laboratorio en su comentario: de ésos
+    consta que los registró el motor y se retiran con él. Los segundos son los que se
+    llaman como un equipo del laboratorio y **además** tienen su dirección en un espacio que
+    el laboratorio declaraba —donde estaría de verdad un resto suyo— pero no llevan su
+    marca: no se tocan, se dicen, para que una persona decida. Un nombre no demuestra quién
+    creó un registro y el asignador reutiliza direcciones (AGENTS.md §3.6); por eso el
+    nombre solo no basta para señalar a nadie: hace falta que la dirección caiga en las
+    redes que este laboratorio declaraba.
+
+    Se le pasa lo que devuelve `/objects/details`, no el censo: el censo —`/objects/search`—
+    **no trae los comentarios**, y sin ellos no hay marca que leer. Acepta el sobre tal cual
+    (`{"objects": [...]}`) o la lista de objetos.
+    """
+    if isinstance(nodos, dict):
+        nodos = nodos.get("objects") or []
+    nombres = {str(n) for n in (equipos or [])}
+    suyos, dudosos = [], []
+    for nodo in nodos or []:
+        comentario = str(nodo.get("comments") or "")
+        ficha = {
+            "id": int(nodo["id"]),
+            "name": str(nodo.get("name") or ""),
+            "address": str((nodo.get("ipAddress") or {}).get("address") or ""),
+        }
+        if netxms_lab_de_marca(comentario) == lab:
+            suyos.append(ficha)
+        elif ficha["name"] in nombres and _es_del_laboratorio(ficha["address"], espacios):
+            dudosos.append(ficha)
+    return {"suyos": suyos, "dudosos": dudosos}
+
+
+def _es_del_laboratorio(direccion: str, espacios: list | None) -> bool:
+    """¿Cae esta dirección en alguna de las redes que el laboratorio declaraba?
+
+    Sin espacios declarados no se señala a nadie: señalar por el nombre solo llevaría a
+    decir que los equipos de otros laboratorios —que comparten nombres— son restos.
+    """
+    if not direccion or not espacios:
+        return False
+    try:
+        red = ipaddress.ip_network(direccion + "/32", strict=False)
+    except ValueError:
+        return False
+    return _en_mis_espacios(red, espacios)
+
+
+def netxms_mapa_del_lab(hijos: list | None, lab: str, nombre: str | None = None) -> dict:
+    """El mapa de este laboratorio entre los que cuelgan de la raíz de mapas.
+
+    Se reconoce por su nombre —el del laboratorio— y devuelve `{"id", "nombre", "ajeno"}`:
+    `id` vale 0 si no hay ninguno, y `ajeno` dice que el que se llama así lleva la marca de
+    **otro** laboratorio; entonces no es suyo y no se retira: se para y se dice.
+    """
+    nombre = str(nombre or lab)
+    for objeto in hijos or []:
+        if str(objeto.get("class") or "") != NETXMS_CLASE_MAPA:
+            continue
+        if str(objeto.get("name") or "") != nombre:
+            continue
+        marca = str(objeto.get("comments") or "")
+        # `ajeno` es «lleva la marca EXPLÍCITA de OTRO laboratorio»: una nota suelta
+        # —«revisar el lunes»— no demuestra que el mapa sea de otro y no puede bloquear
+        # el propio, que se llama como el laboratorio y la raíz no admite dos iguales.
+        lab_del_mapa = netxms_lab_de_marca(marca)
+        return {"id": int(objeto["id"]), "nombre": nombre,
+                "ajeno": bool(lab_del_mapa) and lab_del_mapa != lab}
+    return {"id": 0, "nombre": nombre, "ajeno": False}
+
+
+def netxms_mapa_crear_cuerpo(lab: str, raiz) -> str:
+    """El cuerpo con el que nace el mapa del laboratorio, con su marca de propiedad.
+
+    La misma marca que llevan los equipos: es lo que deja demostrar mañana que este mapa lo
+    creó este laboratorio y que se puede retirar sin rozar el de otro.
+    """
+    return json.dumps({
+        "class": NETXMS_CLASE_MAPA,
+        "parentId": int(raiz),
+        "name": lab,
+        "comments": netxms_marca_de(lab),
+    })
+
+
 # --- el marcador limpio -----------------------------------------------------
 # La vista no resuelve sola sus alarmas. Una que saltó **una vez** —una MAC que cambió al
 # volver a crear los invitados, una MAC que dos nodos compartieron un instante— se queda
@@ -1790,15 +1909,6 @@ def netxms_raiz_de_mapas(raices: list | None) -> int | None:
     """El número de la raíz de mapas, que no se supone: se lee de la vista."""
     for objeto in raices or []:
         if str(objeto.get("class") or "") == NETXMS_CLASE_RAICES_DE_MAPA:
-            return int(objeto["id"])
-    return None
-
-
-def netxms_mapa_de(hijos: list | None, nombre: str) -> int | None:
-    """El mapa del laboratorio, si ya está dado de alta."""
-    for objeto in hijos or []:
-        if (str(objeto.get("class") or "") == NETXMS_CLASE_MAPA
-                and str(objeto.get("name") or "") == str(nombre)):
             return int(objeto["id"])
     return None
 

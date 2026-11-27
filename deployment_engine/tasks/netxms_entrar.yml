@@ -1,0 +1,81 @@
+# PROPÓSITO:   la puerta de la vista: comprobar que el sitio declara su servicio de gestión,
+#              resolver con qué se entra y abrir sesión, dejando el testigo listo para quien
+#              venga detrás. Lo comparten las dos conversaciones con el API —registrar los
+#              equipos del laboratorio (`netxms.yml`) y retirarlos al destruirlo
+#              (`netxms_retirar.yml`)—: la puerta es una, y no se escribe dos veces.
+# INVARIANTES: se llama con `curl` desde DENTRO del invitado de gestión —su API sólo escucha
+#              ahí, y el túnel del motor aterriza ahí— por la puerta de siempre
+#              (interior_ssh.yml: SSH a su dirección, sin salto).
+#              Ni el usuario, ni la clave, ni el testigo de la sesión se imprimen
+#              (`no_log`), así que el informe queda sin credenciales.
+#              Deja hecho: `netxms_api`, `netxms_usuario`, `netxms_clave`, `netxms_testigo`.
+# LÍMITES:     no registra ni retira nada —eso lo hacen quienes la incluyen, `netxms.yml` y
+#              `netxms_retirar.yml`— ni decide con qué se entra: la credencial es del sitio
+#              (`netlabs.yml` → `management.api`, `secrets.yml`) y sin ella se para. No
+#              comprueba que el API esté en pie: si no contesta, el fallo es de quien entra.
+# VER:         docs/diseno.md §2.8, §3.4, §7
+
+- name: netxms · el sitio declara dónde está el API de su servicio de gestión
+  ansible.builtin.fail:
+    msg: >-
+      `netlabs.yml` no declara `management.api`: es la dirección del API del servicio de
+      gestión **tal y como se ve desde dentro de su invitado** (ahí aterriza el túnel del
+      motor), y sin ella no hay forma de hablar con la vista. Pon algo como
+      `api: http://127.0.0.1:8000/v1` dentro de `management`.
+  when: (env.management.api | default('')) | length == 0
+
+- name: netxms · el sitio declara la credencial de su servicio de gestión
+  ansible.builtin.fail:
+    msg: >-
+      `secrets.yml` no tiene `credenciales.{{ env.management.guest }}`: la credencial del
+      servicio de gestión se nombra por el nombre del invitado que lo declara
+      (`netlabs.yml` → `management.guest`) y su valor vive en `secrets.yml`, nunca en el
+      laboratorio ni en el motor.
+  when: secrets.credenciales[env.management.guest] is not defined
+
+# El usuario y la clave del API, resueltos una vez. No se imprimen: son la credencial
+# de administración del servicio.
+- name: netxms · de dónde se entra y con qué
+  ansible.builtin.set_fact:
+    netxms_api: "{{ env.management.api }}"
+    netxms_usuario: >-
+      {{ secrets.credenciales[env.management.guest].usuario
+         if secrets.credenciales[env.management.guest] is mapping else 'admin' }}
+    netxms_clave: >-
+      {{ secrets.credenciales[env.management.guest].clave
+         if secrets.credenciales[env.management.guest] is mapping
+         else secrets.credenciales[env.management.guest] }}
+  no_log: true
+
+# --- entrar ----------------------------------------------------------------
+# El cuerpo del login —usuario y clave— entra por la entrada estándar, nunca por la
+# línea de órdenes. La respuesta trae el testigo de la sesión: no se imprime.
+- name: netxms · entrar por el API del servicio de gestión
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · entrar por el API"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_usuario | netlabs_netxms_login_cuerpo(netxms_clave) }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_login_cmd }}"
+
+- name: netxms · la respuesta del API
+  ansible.builtin.set_fact:
+    netxms_respuesta: "{{ interior.stdout | default('{}', true) | from_json }}"
+  no_log: true
+
+- name: netxms · el testigo de la sesión
+  ansible.builtin.set_fact:
+    netxms_testigo: "{{ netxms_respuesta.token | default('', true) }}"
+  no_log: true
+
+- name: netxms · el API no dejó entrar
+  ansible.builtin.fail:
+    msg: >-
+      El API del servicio de gestión ({{ netxms_api }}) no devolvió una sesión:
+      {{ interior.stdout | default('(sin respuesta)', true) | trim }}. El usuario y la
+      clave salen de `secrets.yml` (`credenciales.{{ env.management.guest }}`), y el
+      servicio tiene que estar en pie: `./netlabs apply a_bootstrap`.
+  when: netxms_testigo | length == 0

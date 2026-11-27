@@ -1,11 +1,19 @@
 # PROPÓSITO:   `destroy`: retirar lo que el laboratorio declaró y lleva su marca.
 #              Nada más. Lo que no está declarado es de otro y no se toca.
+#              Se retira de TODOS los sitios donde lo declarado dejó rastro: el
+#              hipervisor (invitados, puentes, pool), el invitado de gestión (las rutas
+#              hacia sus redes) y la vista (sus equipos y su mapa). Un destroy que deja
+#              equipos en rojo y un mapa de una red apagada no distingue «destruido» de
+#              «desplegado».
 # INVARIANTES: se borra por pool y por marca (`netlabs lab=<lab>`), nunca "todo lo
 #              parado" ni "lo que sobra".
 #              Las rutas hacia sus redes se retiran de la misma marca: son las que
 #              caen dentro de los espacios que el laboratorio declaraba.
+#              La vista se desmonta ANTES de tocar el hipervisor: si no se puede, el
+#              laboratorio queda entero en vez de quedar medio destruido.
 #              Si algo no se puede borrar, se para y se dice qué quedó.
-# VER:         docs/diseno.md §7; AGENTS.md §3.6
+# VER:         docs/diseno.md §7; docs/decisiones/0014-el-destroy-tambien-desmonta-la-vista.md;
+#              AGENTS.md §3.6
 
 - name: netlabs · destroy
   hosts: localhost
@@ -52,6 +60,13 @@
         that: >-
           suyos | selectattr('pool', 'ne', pool) | list | length == 0
         fail_msg: "El filtro de propiedad está mal: se ha colado un invitado ajeno."
+
+    # --- la vista ----------------------------------------------------------
+    # Lo primero, y a propósito: si la vista no se puede desmontar, el destroy se para
+    # antes de tocar Proxmox y el laboratorio queda entero y coherente —no medio
+    # destruido—. Lo último que se toca, lo primero que se comprueba.
+    - name: destroy · retirar el laboratorio de la vista
+      include_tasks: ../tasks/netxms_retirar.yml
 
     # --- invitados ---------------------------------------------------------
     # Un invitado por pasada, en su propio fichero: parar, esperar a que pare,
@@ -123,12 +138,18 @@
           - (world.invitados | selectattr('pool', 'equalto', pool) | list | length) == 0
           - (world.bridges | selectattr('comments', 'search', marca) | list | length) == 0
           - pool not in (world.pools | default([]))
+          - (netxms_quedan | default([]) | length) == 0
+          - (netxms_mapa_queda.id | default(0) | int) == 0
         fail_msg: >-
           Después de destruir queda algo del laboratorio {{ lab.lab }}:
           invitados {{ world.invitados | selectattr('pool', 'equalto', pool) | map(attribute='name') | list }},
           puentes {{ world.bridges | selectattr('comments', 'search', marca) | map(attribute='iface') | list }},
-          pool {{ pool }} {{ 'presente' if pool in (world.pools | default([])) else 'ausente' }}.
+          pool {{ pool }} {{ 'presente' if pool in (world.pools | default([])) else 'ausente' }},
+          equipos en la vista {{ netxms_quedan | default([]) | map(attribute='name') | list }}
+          y su mapa {{ 'todavía presente' if (netxms_mapa_queda.id | default(0) | int) != 0 else 'ausente' }}.
 
     - name: destroy · limpio
       ansible.builtin.debug:
-        msg: "No queda nada de {{ lab.lab }}: ni invitados, ni puentes, ni pool."
+        msg: >-
+          No queda nada de {{ lab.lab }}: ni invitados, ni puentes, ni pool en Proxmox,
+          ni equipos ni mapa en la vista.

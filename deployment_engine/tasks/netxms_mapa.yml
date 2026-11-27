@@ -70,8 +70,19 @@
 
 - name: netxms · el mapa de este laboratorio, si ya está
   ansible.builtin.set_fact:
+    netxms_mapa: >-
+      {{ netxms_mapas_ya | netlabs_netxms_mapa_del_lab(lab.lab) }}
     netxms_mapa_id: >-
-      {{ netxms_mapas_ya | netlabs_netxms_mapa_de(lab.lab) | default('', true) }}
+      {{ (netxms_mapas_ya | netlabs_netxms_mapa_del_lab(lab.lab)).id | default('', true) }}
+
+- name: netxms · ese mapa no es de este laboratorio
+  ansible.builtin.fail:
+    msg: >-
+      Entre los mapas de la vista hay uno que se llama `{{ lab.lab }}` pero lleva la marca
+      de otro laboratorio. La raíz de mapas no admite dos nombres iguales, así que mientras
+      ese objeto exista no se puede dar de alta el mapa de éste sin pisar el suyo. Retíralo
+      a mano en la consola si de verdad es un resto.
+  when: netxms_mapa.ajeno | default(false) | bool
 
 # El mapa se nombra como el laboratorio: es su dibujo, y así una segunda pasada lo
 # encuentra en vez de dejar una copia por cada despliegue.
@@ -83,7 +94,9 @@
     interior_salto: false
     objetivo: 127.0.0.1
     interior_escribe: true
-    interior_secreto: "{{ netxms_testigo }}\n{{ {'class': 'NetworkMap', 'parentId': netxms_mapa_raiz, 'name': lab.lab} | to_json }}"
+    # La marca de propiedad viaja con el mapa, igual que con cada equipo: es lo que
+    # mañana deja demostrar quién lo creó y retirarlo sin rozar el de otro.
+    interior_secreto: "{{ netxms_testigo }}\n{{ lab.lab | netlabs_netxms_mapa_crear_cuerpo(netxms_mapa_raiz) }}"
     interior_imprime: false
     comando: "{{ netxms_api | netlabs_netxms_mapa_crear_cmd }}"
 
