@@ -269,7 +269,11 @@
         objetivo: "{{ linux_nodo.netxms_address }}"
       when:
         - linux_nodo.type in ['server', 'workstation']
-        - linux_nodo.netxms_address | default('') | length > 0
+        # `default('', true)` y no `default('')`: el puesto que nace sin dirección propia la
+        # lleva declarada como nula, no ausente, y un `default` a secas no sustituye un nulo.
+        # Con la lista de siempre —puesto DHCP sin reserva— la expresión reventaba el apply
+        # entero en vez de saltarse esta puerta.
+        - linux_nodo.netxms_address | default('', true) | length > 0
 
     # --- el registro de los equipos en lo que observa el sitio -------------
     # Va después del interior del router y no antes: la credencial que se registra es
@@ -321,8 +325,14 @@
     # al volver a crear un invitado se queda viva para siempre y deja el equipo en
     # amarillo en el propio mapa—. Se dan por resueltas al final, con el laboratorio ya
     # convergido. Si el mal sigue, la vista las vuelve a levantar sola.
+    # Los equipos van declarados aquí como en el mapa: la limpieza empareja los suyos por
+    # nombre Y dirección (`netxms_propios_de`), y sin la lista no sabría de quién son las
+    # alarmas que mira. Con `netxms_ids` a secas entrarían los homónimos de otro
+    # laboratorio, y sus alarmas se darían por resueltas desde aquí.
     - name: apply · el marcador limpio en lo que observa el sitio
       include_tasks: ../tasks/netxms_marcador.yml
+      vars:
+        equipos: "{{ plan.nodes | selectattr('netxms_address') | list }}"
       when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
 
     # --- el interior de los nodos de control, por SSH ----------------------
