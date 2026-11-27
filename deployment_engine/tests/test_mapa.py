@@ -260,24 +260,88 @@ class ElMapaDelLaboratorio(unittest.TestCase):
         sello = mapa.huella(deseado)
         movido = json.loads(json.dumps(deseado))
         movido["elements"][0]["posX"] = movido["elements"][0]["posX"] + 40
-        escribir, motivo = mapa.hay_que_escribir(movido, deseado, sello)
-        self.assertFalse(escribir, "el mapa ajustado a mano se ha reescrito")
-        self.assertEqual(motivo, "ajustado a mano")
+        escribir = mapa.que_escribir(movido, deseado, sello)
+        self.assertFalse(escribir["dibujo"], "el mapa ajustado a mano se ha reescrito")
+        self.assertFalse(escribir["huella"], "se ha sellado un dibujo que no es del motor")
+        self.assertEqual(escribir["motivo"], "ajustado a mano")
 
     def test_sin_ajuste_el_mapa_sigue_al_plano(self):
         """La huella guardada distingue «lo tocó una persona» de «cambió el plano»."""
         lab = laboratorio()
         svg = plano.plano(lab, "topologia")
         deseado = mapa.contenido(lab, svg, con_vista_toda(lab))
-        self.assertTrue(mapa.hay_que_escribir(None, deseado)[0], "sin mapa no se escribe")
-        escribir, motivo = mapa.hay_que_escribir(deseado, deseado, mapa.huella(deseado))
-        self.assertFalse(escribir)
-        self.assertEqual(motivo, "ya es el del plano")
+        escribir = mapa.que_escribir(None, deseado)
+        self.assertTrue(escribir["dibujo"], "sin mapa no se escribe")
+        self.assertTrue(escribir["huella"], "el mapa que nace se queda sin su huella")
+        escribir = mapa.que_escribir(deseado, deseado, mapa.huella(deseado))
+        self.assertFalse(escribir["dibujo"])
+        self.assertFalse(escribir["huella"])
+        self.assertEqual(escribir["motivo"], "ya es el del plano")
         otro = json.loads(json.dumps(deseado))
         otro["elements"][0]["posX"] = otro["elements"][0]["posX"] + 40
-        escribir, motivo = mapa.hay_que_escribir(deseado, otro, mapa.huella(deseado))
-        self.assertTrue(escribir, "el plano ha cambiado y no se escribe")
-        self.assertEqual(motivo, "el plano ha cambiado")
+        escribir = mapa.que_escribir(deseado, otro, mapa.huella(deseado))
+        self.assertTrue(escribir["dibujo"], "el plano ha cambiado y no se escribe")
+        self.assertTrue(escribir["huella"], "el dibujo nuevo se queda con la huella vieja")
+        self.assertEqual(escribir["motivo"], "el plano ha cambiado")
+
+    def test_un_mapa_que_ya_es_el_del_plano_sin_huella_recibe_solo_su_huella(self):
+        """Un mapa de antes de la huella ya no se queda sin proteger.
+
+        Demuestra que un mapa antiguo que ya coincide con el plano recibe su primera huella:
+        antes sólo se sellaba junto con un cambio del dibujo, así que la pasada siguiente al
+        actualizar el motor salía sin operaciones y el primer ajuste manual que viniera
+        después se borraba como si el mapa siguiera siendo antiguo.
+        """
+        lab = laboratorio()
+        svg = plano.plano(lab, "topologia")
+        deseado = mapa.contenido(lab, svg, con_vista_toda(lab))
+        escribir = mapa.que_escribir(deseado, deseado, "")
+        self.assertFalse(escribir["dibujo"], "se ha reescrito un mapa que ya es el del plano")
+        self.assertTrue(escribir["huella"], "el mapa sigue sin su huella")
+        self.assertEqual(escribir["motivo"], "faltaba la huella")
+
+    def test_una_escritura_cortada_entre_el_dibujo_y_la_huella_no_congela_el_mapa(self):
+        """El dibujo y su huella van en dos peticiones: un corte entre ellas es reparable.
+
+        Demuestra que un `apply` interrumpido después de escribir el dibujo no se lee como
+        un ajuste a mano: el dibujo ya es el del plano, así que se vuelve a dejar sólo la
+        huella en vez de dar el mapa por ajeno y no tocarlo nunca más.
+        """
+        lab = laboratorio()
+        svg = plano.plano(lab, "topologia")
+        deseado = mapa.contenido(lab, svg, con_vista_toda(lab))
+        escribir = mapa.que_escribir(deseado, deseado, mapa.huella(deseado) + "vieja")
+        self.assertFalse(escribir["dibujo"], "un corte se ha leído como un ajuste a mano")
+        self.assertTrue(escribir["huella"], "el mapa se queda con la huella vieja")
+        self.assertEqual(escribir["motivo"], "la huella no cuadraba")
+        # Y lo que sí es un ajuste a mano se sigue sin tocar, aunque el corte se parezca.
+        otro = json.loads(json.dumps(deseado))
+        otro["links"][0]["color"] = 0xFF0000
+        escribir = mapa.que_escribir(otro, deseado, mapa.huella(deseado))
+        self.assertFalse(escribir["dibujo"])
+        self.assertFalse(escribir["huella"])
+        self.assertEqual(escribir["motivo"], "ajustado a mano")
+
+    def test_el_color_de_un_cable_cuenta_en_la_huella_y_en_la_comparacion(self):
+        """El color propio de un enlace es un ajuste: cambiarlo protege el mapa.
+
+        Demuestra que `colorSource`, `color` y `colorProvider` —los tres que `contenido`
+        escribe en cada enlace— entran en la huella y en la comparación con el plano: sin
+        ellos, cambiar el color de un cable a mano dejaba la huella cuadrando y el siguiente
+        cambio del plano borraba ese ajuste.
+        """
+        lab = laboratorio()
+        svg = plano.plano(lab, "topologia")
+        deseado = mapa.contenido(lab, svg, con_vista_toda(lab))
+        for clave, valor in (("color", 0xFF0000), ("colorSource", 1), ("colorProvider", "manual")):
+            otro = json.loads(json.dumps(deseado))
+            otro["links"][0][clave] = valor
+            with self.subTest(clave=clave):
+                self.assertNotEqual(mapa.huella(otro), mapa.huella(deseado), clave)
+                self.assertFalse(mapa.esta_al_dia(otro, deseado), clave)
+        # Y el color que el plano escribe no hace reescribir el mapa en cada pasada: lo que
+        # se lee de vuelta —el cuerpo que viaja al API— sigue coincidiendo con lo deseado.
+        self.assertTrue(mapa.esta_al_dia(json.loads(mapa.cuerpo(deseado)), deseado))
 
     def test_ningun_equipo_se_queda_debajo_de_un_rotulo_de_area(self):
         """Un icono encima de la cabecera de su red la tapa: eso sí que no se lee.

@@ -588,22 +588,35 @@ def huella(mapa: dict | None) -> str:
     return hashlib.sha1(json.dumps(contenido, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def hay_que_escribir(actual: dict | None, deseado: dict,
-                     huella_guardada: str = "") -> tuple[bool, str]:
-    """¿Se escribe el mapa? Y si no, por qué.
+def que_escribir(actual: dict | None, deseado: dict, huella_guardada: str = "") -> dict:
+    """Qué hay que escribir del mapa —el dibujo, su huella o nada— y por qué.
 
     Manda quien lo ha ajustado a mano: si lo que la vista tiene dibujado no es lo que el
     motor escribió la última vez —su huella viaja en el comentario del mapa—, no se toca,
     porque el `PUT` reemplaza el dibujo entero y se llevaría por delante el trabajo de
     una persona. El reparto del plano se aplica mientras nadie lo haya hecho suyo.
+
+    Devuelve `{"dibujo", "huella", "motivo"}`. Los dos primeros no siempre van juntos, y
+    de ahí que la decisión no sea un sí o un no: **el dibujo y su huella se escriben en
+    dos peticiones**, así que cualquier corte entre ellas deja el dibujo nuevo con la
+    huella vieja —y creer que eso es un ajuste a mano dejaría el mapa congelado—. Por eso,
+    cuando el dibujo ya es el del plano, no se reescribe: sólo se pone su huella. Y sin
+    huella —un mapa de antes de esta regla— pasa lo mismo: está bien dibujado y le falta
+    la marca del motor, que es lo único que falta para protegerlo.
     """
     if not actual:
-        return True, "no hay mapa todavía"
-    if huella_guardada and huella(actual) != huella_guardada:
-        return False, "ajustado a mano"
-    if esta_al_dia(actual, deseado):
-        return False, "ya es el del plano"
-    return True, "el plano ha cambiado"
+        return {"dibujo": True, "huella": True, "motivo": "no hay mapa todavía"}
+    al_dia = esta_al_dia(actual, deseado)
+    cuadra = bool(huella_guardada) and huella(actual) == huella_guardada
+    if al_dia:
+        if cuadra:
+            return {"dibujo": False, "huella": False, "motivo": "ya es el del plano"}
+        return {"dibujo": False, "huella": True,
+                "motivo": "la huella no cuadraba" if huella_guardada else "faltaba la huella"}
+    if cuadra or not huella_guardada:
+        # Sin huella no se puede acusar a nadie de haber tocado lo que nadie tocó.
+        return {"dibujo": True, "huella": True, "motivo": "el plano ha cambiado"}
+    return {"dibujo": False, "huella": False, "motivo": "ajustado a mano"}
 
 
 def esta_al_dia(actual: dict | None, deseado: dict) -> bool:
@@ -675,7 +688,14 @@ def _resumen_cableado(mapa: dict) -> list:
                           str(enlace.get("connectorName1") or "")),
                          (str(otra), int(enlace.get("interface2") or 0),
                           str(enlace.get("connectorName2") or ""))))
-        lazos.add((tuple(puntas), str(enlace.get("name") or ""), _nombre_del_cable(enlace)))
+        # El color propio del cable es un ajuste como los demás: `contenido` escribe
+        # `colorSource`, `color` y `colorProvider`, y alguien puede cambiarlos desde la
+        # consola. Fuera de la huella, un cambio de color dejaba la huella cuadrando —el
+        # siguiente cambio del plano lo borraba— y no se veía ni en la comparación con el
+        # deseado, que es la otra mitad de la decisión.
+        lazos.add((tuple(puntas), str(enlace.get("name") or ""), _nombre_del_cable(enlace),
+                   int(enlace.get("colorSource") or 0), int(enlace.get("color") or 0),
+                   str(enlace.get("colorProvider") or "")))
     return sorted(lazos)
 
 

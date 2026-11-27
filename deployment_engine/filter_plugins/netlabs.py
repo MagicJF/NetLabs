@@ -215,5 +215,6 @@ class FilterModule:
             "netlabs_netxms_interfaces_cuerpo": lambda api=None: converge.netxms_interfaces_cuerpo(),
             "netlabs_netxms_mapa_ops": lambda lab, nodes, encontrados, actual, api, id_mapa,
                 fichas=None, interfaces=None, comentarios="": converge.netxms_mapa_ops(
-                    lab, nodes, encontrados, actual, api, id_mapa, fichas, interfaces),
+                    lab, nodes, encontrados, actual, api, id_mapa, fichas, interfaces,
+                    comentarios=comentarios),
         }
