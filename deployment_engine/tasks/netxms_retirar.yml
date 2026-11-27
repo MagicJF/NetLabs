@@ -14,6 +14,11 @@
 #              interior_ssh.yml), ni la clave ni el testigo se imprimen.
 #              Lo que se borra se lee de vuelta: la comprobación que cuenta es la de
 #              después, no la del plan.
+# LÍMITES:     no registra ni dibuja nada —eso es `netxms.yml` y `netxms_mapa.yml`, y va
+#              antes— ni sale de la vista: no toca invitados, puentes ni rutas, que son de
+#              sus propias capas. No decide qué es un resto: retira lo que lleva la marca de
+#              este laboratorio y lo que lo parece sin serlo lo dice, para que lo decida una
+#              persona. Y no borra la vista entera: sólo lo que este laboratorio dejó.
 # VER:         docs/diseno.md §3.4, §7; docs/decisiones/0014-el-destroy-tambien-desmonta-la-vista.md
 
 - name: netxms · entrar por el API del servicio de gestión
@@ -192,6 +197,10 @@
     netxms_fichas_tras: >-
       {{ {} if netxms_censo_ids_tras | length == 0
          else interior.stdout | default('{}', true) | from_json }}
+  # La ficha trae `sshPassword`: esta relectura abarca TODOS los equipos que quedan —también
+  # los de otros laboratorios—, y con la salida detallada de Ansible esas claves acabarían en
+  # logs/. Se calla la tarea, como la lectura equivalente de `netlabs apply` (`netxms.yml`).
+  no_log: true
 
 - name: netxms · releer los mapas de la raíz tras la retirada
   include_tasks: interior_ssh.yml

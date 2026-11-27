@@ -9,6 +9,10 @@
 #              Ni el usuario, ni la clave, ni el testigo de la sesión se imprimen
 #              (`no_log`), así que el informe queda sin credenciales.
 #              Deja hecho: `netxms_api`, `netxms_usuario`, `netxms_clave`, `netxms_testigo`.
+# LÍMITES:     no registra ni retira nada —eso lo hacen quienes la incluyen, `netxms.yml` y
+#              `netxms_retirar.yml`— ni decide con qué se entra: la credencial es del sitio
+#              (`netlabs.yml` → `management.api`, `secrets.yml`) y sin ella se para. No
+#              comprueba que el API esté en pie: si no contesta, el fallo es de quien entra.
 # VER:         docs/diseno.md §2.8, §3.4, §7
 
 - name: netxms · el sitio declara dónde está el API de su servicio de gestión
