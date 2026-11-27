@@ -214,6 +214,6 @@ class FilterModule:
                 converge.netxms_alarma_resolver_cmd(api, id_alarma),
             "netlabs_netxms_interfaces_cuerpo": lambda api=None: converge.netxms_interfaces_cuerpo(),
             "netlabs_netxms_mapa_ops": lambda lab, nodes, encontrados, actual, api, id_mapa,
-                fichas=None, interfaces=None: converge.netxms_mapa_ops(
+                fichas=None, interfaces=None, comentarios="": converge.netxms_mapa_ops(
                     lab, nodes, encontrados, actual, api, id_mapa, fichas, interfaces),
         }

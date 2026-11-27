@@ -35,6 +35,7 @@
 #              docs/decisiones/0004-el-mapa-de-la-vista-lo-coloca-el-plano.md y
 #              docs/decisiones/0005-el-mapa-dice-lo-que-dice-el-yaml.md
 
+import hashlib
 import json
 import xml.etree.ElementTree as ET
 
@@ -566,6 +567,43 @@ def _config_ordenada(elemento: dict) -> str:
         return json.dumps(json.loads(crudo), sort_keys=True, ensure_ascii=False)
     except ValueError:
         return crudo
+
+
+def huella(mapa: dict | None) -> str:
+    """El dibujo reducido a un número, para saber si alguien lo ha tocado.
+
+    Se calcula sobre lo que se ve —posiciones, tamaños, textos, cables y ajustes— y no
+    sobre el texto del JSON: el orden de las claves es cosa de la vista y no inventa un
+    cambio. La huella viaja en el comentario del mapa, que es donde el motor deja dicho
+    lo que escribió la última vez.
+    """
+    if not mapa:
+        return ""
+    contenido = {
+        "lienzo": [mapa.get("width"), mapa.get("height")],
+        "elementos": sorted(_resumen_elemento(e) for e in mapa.get("elements") or []),
+        "cables": _resumen_cableado(mapa),
+        "ajustes": resumen_ajustes(mapa),
+    }
+    return hashlib.sha1(json.dumps(contenido, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def hay_que_escribir(actual: dict | None, deseado: dict,
+                     huella_guardada: str = "") -> tuple[bool, str]:
+    """¿Se escribe el mapa? Y si no, por qué.
+
+    Manda quien lo ha ajustado a mano: si lo que la vista tiene dibujado no es lo que el
+    motor escribió la última vez —su huella viaja en el comentario del mapa—, no se toca,
+    porque el `PUT` reemplaza el dibujo entero y se llevaría por delante el trabajo de
+    una persona. El reparto del plano se aplica mientras nadie lo haya hecho suyo.
+    """
+    if not actual:
+        return True, "no hay mapa todavía"
+    if huella_guardada and huella(actual) != huella_guardada:
+        return False, "ajustado a mano"
+    if esta_al_dia(actual, deseado):
+        return False, "ya es el del plano"
+    return True, "el plano ha cambiado"
 
 
 def esta_al_dia(actual: dict | None, deseado: dict) -> bool:

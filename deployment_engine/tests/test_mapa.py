@@ -252,6 +252,33 @@ class ElMapaDelLaboratorio(unittest.TestCase):
         caja["TextBox"] = json.dumps(dentro)
         self.assertFalse(mapa.esta_al_dia(otro, contenido))
 
+    def test_un_mapa_ajustado_a_mano_no_se_pisa(self):
+        """Manda quien lo ha movido: el reparto del plano no borra su trabajo."""
+        lab = laboratorio()
+        svg = plano.plano(lab, "topologia")
+        deseado = mapa.contenido(lab, svg, con_vista_toda(lab))
+        sello = mapa.huella(deseado)
+        movido = json.loads(json.dumps(deseado))
+        movido["elements"][0]["posX"] = movido["elements"][0]["posX"] + 40
+        escribir, motivo = mapa.hay_que_escribir(movido, deseado, sello)
+        self.assertFalse(escribir, "el mapa ajustado a mano se ha reescrito")
+        self.assertEqual(motivo, "ajustado a mano")
+
+    def test_sin_ajuste_el_mapa_sigue_al_plano(self):
+        """La huella guardada distingue «lo tocó una persona» de «cambió el plano»."""
+        lab = laboratorio()
+        svg = plano.plano(lab, "topologia")
+        deseado = mapa.contenido(lab, svg, con_vista_toda(lab))
+        self.assertTrue(mapa.hay_que_escribir(None, deseado)[0], "sin mapa no se escribe")
+        escribir, motivo = mapa.hay_que_escribir(deseado, deseado, mapa.huella(deseado))
+        self.assertFalse(escribir)
+        self.assertEqual(motivo, "ya es el del plano")
+        otro = json.loads(json.dumps(deseado))
+        otro["elements"][0]["posX"] = otro["elements"][0]["posX"] + 40
+        escribir, motivo = mapa.hay_que_escribir(deseado, otro, mapa.huella(deseado))
+        self.assertTrue(escribir, "el plano ha cambiado y no se escribe")
+        self.assertEqual(motivo, "el plano ha cambiado")
+
     def test_ningun_equipo_se_queda_debajo_de_un_rotulo_de_area(self):
         """Un icono encima de la cabecera de su red la tapa: eso sí que no se lee.
 

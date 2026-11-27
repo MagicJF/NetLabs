@@ -193,7 +193,8 @@
     netxms_mapa_plan: >-
       {{ lab | netlabs_netxms_mapa_ops(equipos, netxms_censo,
          interior.stdout | default('{}', true) | from_json, netxms_api, netxms_mapa_id,
-         netxms_fichas | default([], true), netxms_interfaces | default([], true)) }}
+         netxms_fichas | default([], true), netxms_interfaces | default([], true),
+         netxms_mapa.comments | default('', true)) }}
 
 - name: netxms · colocar el mapa del laboratorio como el plano
   include_tasks: interior_ssh.yml
@@ -220,7 +221,7 @@
       los pone el plano, con {{ netxms_mapa_plan.interfaces }} interfaces puestas en sus
       puntas y {{ netxms_mapa_plan.rotulos }} etiquetas —la ficha de cada equipo con sus
       patas y sus direcciones, y el nombre y el bloque de cada zona—.{% if
-      netxms_mapa_plan.ops | length == 0 %} Ya está como el plano.{% endif %}
+      netxms_mapa_plan.ops | length == 0 %} {{ netxms_mapa_plan.motivo }}.{% endif %}
 
 # Un equipo de red que la vista no conozca no se puede dibujar: se dice con su nombre,
 # porque un mapa al que le falta un router sin decirlo es un mapa que miente.

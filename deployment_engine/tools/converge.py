@@ -1764,6 +1764,21 @@ def netxms_marca_de(lab: str) -> str:
     return f"{NETXMS_MARCA}{lab}"
 
 
+HUELLA_EN_EL_MAPA = "plano="
+
+
+def netxms_huella_guardada(comentarios: str) -> str:
+    """La huella del plano que el motor dejó escrita en el mapa, si dejó alguna.
+
+    Se busca como palabra entera y no como trozo: una huella copiada a mano en medio de
+    otra cosa no es la marca del motor, y creer que sí dejaría el mapa congelado.
+    """
+    for trozo in str(comentarios or "").split():
+        if trozo.startswith(HUELLA_EN_EL_MAPA):
+            return trozo[len(HUELLA_EN_EL_MAPA):]
+    return ""
+
+
 def netxms_restos_de(nodos: list | dict | None, lab: str, equipos: list | None = None,
                      espacios: list | None = None) -> dict:
     """Qué equipos de la vista son de este laboratorio, y cuáles lo parecen sin serlo.
@@ -1980,7 +1995,8 @@ def netxms_interfaces_de(nodes: list[dict], censo: list | None, fichas: list | N
 
 def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: dict | None,
                     api: str, id_mapa, fichas: list | None = None,
-                    interfaces: list | None = None, svg: str | None = None) -> dict:
+                    interfaces: list | None = None, svg: str | None = None,
+                    comentarios: str = "") -> dict:
     """Lo que hay que escribir para que el mapa de la vista sea el plano del laboratorio.
 
     Sólo se escribe si el mapa que hay no es ya el que el plano pide: la segunda pasada no
@@ -2009,15 +2025,23 @@ def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: di
     rotulos = sum(1 for e in deseado["elements"] if int(e.get("type") or 0) == mapa.ELEMENTO_TEXTO)
     cuenta = {"equipos": len(objetos), "interfaces": cuantas, "cables": len(deseado["links"]),
               "areas": cajas, "rotulos": rotulos}
-    if mapa.esta_al_dia(actual, deseado):
-        return {"ops": [], "pendientes": faltan, **cuenta}
+    escribir, motivo = mapa.hay_que_escribir(actual, deseado,
+                                            netxms_huella_guardada(comentarios))
+    if not escribir:
+        return {"ops": [], "pendientes": faltan, "motivo": motivo, **cuenta}
     return {
+        "motivo": motivo,
         "ops": [{
             "cmd": netxms_mapa_escribir_cmd(api, id_mapa),
             "cuerpo": mapa.cuerpo(deseado),
             "effect": (f"colocar el mapa {lab.get('lab')} como el plano: "
                        f"{len(objetos)} equipos, {len(deseado['links'])} cables y "
                        f"{cajas} áreas"),
+        }, {
+            "cmd": netxms_cmd(api, f"/objects/{int(id_mapa)}", "PUT"),
+            "cuerpo": json.dumps({"comments": f"{netxms_marca_de(str(lab.get('lab') or ''))} "
+                                             f"{HUELLA_EN_EL_MAPA}{mapa.huella(deseado)}"}),
+            "effect": "dejar en el mapa la huella de lo que el motor escribió",
         }],
         "pendientes": faltan, **cuenta,
     }

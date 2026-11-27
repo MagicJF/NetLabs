@@ -546,7 +546,11 @@ def _entre(una: Region, otra: Region) -> tuple[float, float]:
     x0, x1 = max(una.x, otra.x), min(una.x + una.ancho, otra.x + otra.ancho)
     y0, y1 = max(una.y, otra.y), min(una.y + una.alto, otra.y + otra.alto)
     if una.y + una.alto <= otra.y or otra.y + otra.alto <= una.y:
-        # Una encima de otra: el corte es horizontal, en el aire que las separa.
+        # Una encima de otra —el caso de la nube y su sede—: el corte va en el borde de
+        # la que NO es nube, para que el símbolo quede a caballo de esa frontera, media
+        # caja dentro de la sede. En mitad del aire no pisa ninguna de las dos y el
+        # router parece un equipo suelto en el pasillo, que es justo lo contrario de lo
+        # que significa: la puerta entre las dos.
         arriba, abajo = sorted((una, otra), key=lambda r: r.y)
         corte = (arriba.y + arriba.alto + abajo.y) / 2
         if x1 > x0:
