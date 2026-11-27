@@ -193,7 +193,13 @@ class FilterModule:
             "netlabs_netxms_hijos_cmd": lambda api, id_objeto:
                 converge.netxms_hijos_cmd(api, id_objeto),
             "netlabs_netxms_raiz_de_mapas": lambda raices: converge.netxms_raiz_de_mapas(raices),
-            "netlabs_netxms_mapa_de": lambda hijos, nombre: converge.netxms_mapa_de(hijos, nombre),
+            "netlabs_netxms_mapa_del_lab": lambda hijos, lab, nombre=None:
+                converge.netxms_mapa_del_lab(hijos, lab, nombre),
+            "netlabs_netxms_mapa_crear_cuerpo": lambda lab, raiz:
+                converge.netxms_mapa_crear_cuerpo(lab, raiz),
+            "netlabs_netxms_marca_de": lambda lab: converge.netxms_marca_de(lab),
+            "netlabs_netxms_restos_de": lambda nodos, lab, equipos=None, espacios=None:
+                converge.netxms_restos_de(nodos, lab, equipos, espacios),
             "netlabs_netxms_mapa_crear_cmd": lambda api: converge.netxms_mapa_crear_cmd(api),
             "netlabs_netxms_mapa_leer_cmd": lambda api, id_mapa:
                 converge.netxms_mapa_leer_cmd(api, id_mapa),

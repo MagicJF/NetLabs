@@ -110,7 +110,9 @@ acepta. Lo persistente no se destruye desde la herramienta.
 
 Las **comprobaciones del repositorio** no son un verbo: son la verificación que corre en CI
 (§11). `apply` termina **demostrando servicio** —no sólo que los recursos existen— y
-`destroy` informa de lo que retiró.
+`destroy` desmonta lo que el laboratorio dejó en cada sitio donde lo dejó —el hipervisor, el
+invitado de gestión y la vista— y **comprueba que no queda nada**: lo que se retiró se lee de
+vuelta.
 
 *Evita:* scripts sueltos que hacen «casi lo mismo» y se separan con el tiempo; y la ambigüedad
 de dos verbos que parecen mirar lo mismo.
@@ -804,8 +806,13 @@ hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.
 - **Nodos finales:** alcanzables por las rutas derivadas hacia las redes del laboratorio; se
   vigilan por ICMP y aparecen como hojas del segmento de su router. Sin agente en esta fase.
 - Un laboratorio desplegado aparece **porque lo declarado basta** para saber a quién alcanzar.
-- Al destruir un laboratorio, sus equipos desaparecen de la vista viva y **el histórico se
-  conserva**: la observación es persistente, el laboratorio es efímero.
+- Al destruir un laboratorio **no queda nada suyo en la vista**: sus equipos registrados y su
+  mapa se retiran con lo demás, por la marca que llevan (ADR 0014). Lo que es persistente es el
+  **servicio** —su base, su configuración y el histórico de todo lo demás—, no el rastro de un
+  laboratorio efímero: un `destroy` que dejara equipos en rojo y el mapa de una red apagada
+  haría que «destruido» y «desplegado» se vieran igual en la consola.
+- La vista se desmonta **antes** de tocar el hipervisor: si no se puede, el laboratorio queda
+  entero en vez de quedar medio destruido.
 - NetXMS no configura nodos: lo que se configure se configura por la vía normal de cada uno.
 
 ---

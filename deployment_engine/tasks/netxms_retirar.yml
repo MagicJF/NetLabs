@@ -1,0 +1,228 @@
+# PROPÓSITO:   la vista también se desmonta: `destroy` retira de NetXMS lo que el
+#              laboratorio dejó —sus equipos registrados y su mapa— para que un
+#              laboratorio destruido no siga apareciendo en la consola. Un destroy que
+#              deja equipos en rojo y un mapa de una red apagada no distingue «destruido»
+#              de «desplegado», y eso es mentir sobre el estado del sitio.
+# INVARIANTES: se borra por la MARCA que el motor escribe al dar de alta (`netlabs
+#              lab=<lab>`), nunca «lo que sobra» ni «lo que está caído»: eso se llevaría
+#              por delante el histórico de otro laboratorio que hoy no está desplegado.
+#              Un registro que se llama como un equipo del laboratorio pero no lleva su
+#              marca no se toca: se dice —y sólo se señala si su dirección cae además en
+#              una red que el laboratorio declaraba, porque el nombre solo lo comparten
+#              todos los laboratorios— (AGENTS.md §3.6).
+#              Se habla con el API por la puerta de siempre (netxms_entrar.yml →
+#              interior_ssh.yml), ni la clave ni el testigo se imprimen.
+#              Lo que se borra se lee de vuelta: la comprobación que cuenta es la de
+#              después, no la del plan.
+# VER:         docs/diseno.md §3.4, §7; docs/decisiones/0014-el-destroy-tambien-desmonta-la-vista.md
+
+- name: netxms · entrar por el API del servicio de gestión
+  include_tasks: netxms_entrar.yml
+
+# --- leer qué dejó el laboratorio -----------------------------------------
+# Dos lecturas, y no una: el censo dice QUÉ equipos hay, y las fichas dicen qué lleva
+# cada uno —el comentario con la marca—; el censo no trae los comentarios. Cuáles son de
+# este laboratorio lo dice su marca, no su nombre ni su dirección: el asignador reutiliza
+# direcciones y dos laboratorios comparten nombres de equipo.
+- name: netxms · leer el censo de equipos de la vista
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · leer el censo de equipos"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_api | netlabs_netxms_censo_cuerpo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_censo_cmd }}"
+
+- name: netxms · los números de los equipos que la vista tiene
+  ansible.builtin.set_fact:
+    netxms_censo_ids: >-
+      {{ interior.stdout | default('[]', true) | from_json
+         | map(attribute='id') | list }}
+
+- name: netxms · leer las fichas de los equipos de la vista
+  include_tasks: interior_ssh.yml
+  when: netxms_censo_ids | length > 0
+  vars:
+    interior_descripcion: "netxms · leer las fichas de los equipos"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_censo_ids | netlabs_netxms_fichas_cuerpo(netxms_api) }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_fichas_cmd }}"
+
+- name: netxms · qué equipos de la vista son del laboratorio, y cuáles lo parecen
+  ansible.builtin.set_fact:
+    netxms_restos: >-
+      {{ {'suyos': [], 'dudosos': []} if netxms_censo_ids | length == 0
+         else interior.stdout | default('{}', true) | from_json
+              | netlabs_netxms_restos_de(lab.lab, lab.nodes | map(attribute='role') | list,
+                                         lab.address_spaces | default([])) }}
+
+- name: netxms · los registros que se llaman como el laboratorio pero no llevan su marca
+  ansible.builtin.debug:
+    msg: >-
+      En las redes que {{ lab.lab }} declaraba hay registros que se llaman como un equipo
+      suyo y NO llevan su marca: {{ netxms_restos.dudosos | map(attribute='name') | list
+      | join(', ') }}. No consta que los creara este laboratorio —el asignador reutiliza
+      direcciones, y un nombre no lo demuestra—, así que no se retiran. Si son un resto,
+      retíralos a mano en la consola.
+  when: netxms_restos.dudosos | length > 0
+
+# --- el mapa del laboratorio ----------------------------------------------
+# El mapa cuelga de la raíz de mapas y se llama como el laboratorio: la raíz no admite dos
+# nombres iguales, así que el nombre es su identidad. Si el que se llama así llevara la
+# marca de otro, no es suyo y se para.
+- name: netxms · leer las raíces de la vista
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · leer las raíces de la vista"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_raices_cmd }}"
+
+- name: netxms · las raíces que devolvió la vista
+  ansible.builtin.set_fact:
+    netxms_raiz_mapa: >-
+      {{ interior.stdout | default('[]', true) | from_json
+         | netlabs_netxms_raiz_de_mapas | default('', true) }}
+
+- name: netxms · leer los mapas que cuelgan de la raíz de mapas
+  include_tasks: interior_ssh.yml
+  when: netxms_raiz_mapa | int != 0
+  vars:
+    interior_descripcion: "netxms · leer los mapas de la vista"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_hijos_cmd(netxms_raiz_mapa) }}"
+
+- name: netxms · el mapa de este laboratorio, si está
+  ansible.builtin.set_fact:
+    netxms_mapa: >-
+      {{ interior.stdout | default('[]', true) | from_json
+         | netlabs_netxms_mapa_del_lab(lab.lab) if netxms_raiz_mapa | int != 0
+         else {'id': 0, 'nombre': lab.lab, 'ajeno': false} }}
+
+- name: netxms · ese mapa no es de este laboratorio
+  ansible.builtin.fail:
+    msg: >-
+      En la vista hay un mapa que se llama `{{ lab.lab }}` pero lleva la marca de otro
+      laboratorio. No consta que sea de éste y no se retira: retíralo a mano en la consola
+      si de verdad es un resto.
+  when: netxms_mapa.ajeno | default(false) | bool
+
+# --- decir qué se retira ---------------------------------------------------
+- name: "netxms · qué se retira de la vista"
+  ansible.builtin.debug:
+    msg: >-
+      {{ ['se retiran ' ~ (netxms_restos.suyos | length | string) ~ ' equipos de la vista'
+          ~ (' (' ~ (netxms_restos.suyos | map(attribute='name') | list | join(', ')) ~ ')'
+             if netxms_restos.suyos | length > 0 else ''),
+          'y su mapa' if netxms_mapa.id | int != 0 else 'y no había mapa que retirar'] }}
+
+# --- retirar ---------------------------------------------------------------
+- name: "netxms · retirar de la vista los equipos del laboratorio"
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · retirar {{ netxms_resto.name }} ({{ netxms_resto.address }})"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: true
+    interior_secreto: "{{ netxms_testigo }}\n"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_borrar_cmd(netxms_resto.id) }}"
+  loop: "{{ netxms_restos.suyos }}"
+  loop_control: {loop_var: netxms_resto, label: "{{ netxms_resto.name }}"}
+  when: netxms_restos.suyos | length > 0
+
+- name: netxms · retirar el mapa del laboratorio
+  include_tasks: interior_ssh.yml
+  when: netxms_mapa.id | int != 0
+  vars:
+    interior_descripcion: "netxms · retirar el mapa {{ lab.lab }}"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: true
+    interior_secreto: "{{ netxms_testigo }}\n"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_borrar_cmd(netxms_mapa.id) }}"
+
+# --- la comprobación que cuenta: releer -----------------------------------
+# Lo que se acaba de borrar no estaba en la foto de antes: se lee otra vez, y de esa
+# lectura sale lo que el destroy deja declarado para su comprobación final.
+- name: netxms · releer el censo de equipos tras la retirada
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · releer el censo de equipos"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_api | netlabs_netxms_censo_cuerpo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_censo_cmd }}"
+
+- name: netxms · los números de los equipos que quedan en la vista
+  ansible.builtin.set_fact:
+    netxms_censo_ids_tras: >-
+      {{ interior.stdout | default('[]', true) | from_json
+         | map(attribute='id') | list }}
+
+- name: netxms · releer las fichas de los equipos tras la retirada
+  include_tasks: interior_ssh.yml
+  when: netxms_censo_ids_tras | length > 0
+  vars:
+    interior_descripcion: "netxms · releer las fichas de los equipos"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_censo_ids_tras | netlabs_netxms_fichas_cuerpo(netxms_api) }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_fichas_cmd }}"
+
+- name: netxms · las fichas que devolvió la vista tras la retirada
+  ansible.builtin.set_fact:
+    netxms_fichas_tras: >-
+      {{ {} if netxms_censo_ids_tras | length == 0
+         else interior.stdout | default('{}', true) | from_json }}
+
+- name: netxms · releer los mapas de la raíz tras la retirada
+  include_tasks: interior_ssh.yml
+  when: netxms_raiz_mapa | int != 0
+  vars:
+    interior_descripcion: "netxms · releer los mapas de la vista"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_hijos_cmd(netxms_raiz_mapa) }}"
+
+- name: netxms · lo que la vista sigue guardando de este laboratorio
+  ansible.builtin.set_fact:
+    netxms_quedan: >-
+      {{ (netxms_fichas_tras | netlabs_netxms_restos_de(
+            lab.lab, lab.nodes | map(attribute='role') | list,
+            lab.address_spaces | default([]))).suyos }}
+    netxms_mapa_queda: >-
+      {{ interior.stdout | default('[]', true) | from_json
+         | netlabs_netxms_mapa_del_lab(lab.lab) if netxms_raiz_mapa | int != 0
+         else {'id': 0, 'nombre': lab.lab, 'ajeno': false} }}
+
+- name: netxms · no puede quedar nada del laboratorio en la vista
+  ansible.builtin.assert:
+    that:
+      - netxms_quedan | length == 0
+      - netxms_mapa_queda.id | int == 0
+    fail_msg: >-
+      Después de retirarlo queda algo del laboratorio {{ lab.lab }} en la vista: equipos
+      {{ netxms_quedan | map(attribute='name') | list }} y el mapa {{ netxms_mapa_queda.nombre }}
+      {{ 'todavía presente' if netxms_mapa_queda.id | int != 0 else 'ya ausente' }}.
+    success_msg: "La vista no guarda nada de {{ lab.lab }}: ni equipos con su marca, ni su mapa."
