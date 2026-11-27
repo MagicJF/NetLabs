@@ -1202,6 +1202,21 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertNotIn('Bearer "', cmd[2])
         self.assertIn("/objects/search", cmd[2])
 
+    def test_la_lectura_del_objeto_lleva_el_testigo_leido_de_la_entrada(self):
+        """`netxms_objeto_cmd` arma su propia cabecera: el testigo va en `$t`, no fijo.
+
+        La lectura del objeto —el mapa y sus banderas— es una llamada más al API, así que
+        lleva el mismo testigo que las demás. Si en su sitio queda un texto literal, el
+        API rechaza la lectura, `--fail-with-body` la cuenta como fallo y el `apply` se
+        para antes de escribir el mapa, su huella y sus banderas.
+        """
+        cmd = converge.netxms_objeto_cmd(self.API, 7)
+        self.assertEqual(cmd[:2], ["sh", "-c"])
+        self.assertIn("IFS= read -r t", cmd[2])
+        self.assertIn("Authorization: Bearer $t", cmd[2])
+        self.assertIn("-H @/dev/fd/3", cmd[2])
+        self.assertIn("/objects/7", cmd[2])
+
     def test_el_censo_pregunta_solo_por_equipos(self):
         self.assertEqual(json.loads(converge.netxms_censo_cuerpo()), {"class": ["Node"]})
 
@@ -1541,10 +1556,58 @@ class ElMapaQueAlguienAjusta(unittest.TestCase):
         """El comentario que el motor deja en el mapa: su marca y la huella del dibujo."""
         return f"{converge.netxms_marca_de('z_prueba')} {converge.HUELLA_EN_EL_MAPA}{huella}"
 
-    def plan(self, actual, comentarios=""):
+    def plan(self, actual, comentarios="", objeto=None):
+        """El plan del mapa. Por defecto, un objeto cuyas banderas ya están encendidas:
+
+        las pruebas de aquí van del dibujo y de su huella, no de las banderas, y sin esto
+        todas ellas verían además la operación de las banderas.
+        """
+        if objeto is None:
+            objeto = {"flags": {b: True for b in converge.BANDERAS_QUE_EL_MAPA_ENSENA}}
         return converge.netxms_mapa_ops(self.LAB, self.NODOS, self.CENSO, actual, self.API,
                                         "7", self.FICHAS, self.INTERFACES, self.SVG,
-                                        comentarios)
+                                        comentarios, objeto)
+
+    def banderas_del_plan(self, plan):
+        """La operación de banderas del plan, si la hay."""
+        for op in plan["ops"]:
+            cuerpo = json.loads(op["cuerpo"]) if op.get("cuerpo") else {}
+            if "flags" in cuerpo:
+                return cuerpo["flags"]
+        return None
+
+    def test_el_mapa_nace_con_el_marco_y_el_fondo_de_estado(self):
+        """Un mapa recién hecho trae las banderas apagadas: se encienden al colocarlo."""
+        plan = self.plan(None, "", objeto={})
+        banderas = self.banderas_del_plan(plan)
+        self.assertIsNotNone(banderas, "el mapa no enciende el marco ni el fondo")
+        for b in converge.BANDERAS_QUE_EL_MAPA_ENSENA:
+            self.assertIs(banderas.get(b), True)
+
+    def test_las_banderas_ya_encendidas_no_se_tocan(self):
+        """Idempotencia: con el dibujo al día y las banderas puestas, no hay operación."""
+        dibujo = self.dibujo_del_plano()
+        plan = self.plan(dibujo, self.comentario_con(mapa.huella(dibujo)))
+        self.assertEqual(plan["ops"], [])
+
+    def test_las_banderas_se_encienden_sin_pisar_las_demas(self):
+        """El `PATCH` reemplaza el objeto entero: las demás banderas vuelven tal cual."""
+
+        plan = self.plan(None, "", objeto={"flags": {"calculateStatus": True,
+                                                    "showStatusFrame": False}})
+        banderas = self.banderas_del_plan(plan)
+        self.assertIs(banderas.get("calculateStatus"), True, "se ha pisado otra bandera")
+        self.assertIs(banderas.get("showStatusIcon"), True)
+        self.assertIs(banderas.get("showStatusFrame"), True)
+        self.assertIs(banderas.get("showStatusBackground"), True)
+
+    def test_la_huella_se_escribe_con_patch(self):
+        """El servicio no acepta `PUT` para tocar un objeto —responde 405—, sino `PATCH`."""
+        plan = self.plan(self.dibujo_del_plano(), "")
+        sello = [op for op in plan["ops"] if "comments" in (op.get("cuerpo") or "")]
+        self.assertEqual(len(sello), 1)
+        self.assertIn("-X PATCH", " ".join(sello[0]["cmd"]),
+                      "la huella se escribe con un método que el servicio rechaza")
 
     def test_el_mapa_que_nace_se_escribe_y_se_sella(self):
         """Las dos peticiones: el dibujo del plano y, detrás, su huella en el comentario."""

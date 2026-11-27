@@ -82,12 +82,16 @@ class LaHuellaDelMapaPorElFiltro(unittest.TestCase):
            'data-subred="10.20.0.0/24" data-nube="0"/>'
            '<g data-rol="rte1" data-x="60.0" data-y="60.0"/></svg>')
 
-    def plan(self, actual, comentarios=""):
+    def plan(self, actual, comentarios="", objeto=None):
         # El filtro, tal y como Ansible lo ve: lo que se comprueba es que el comentario del
-        # mapa llega al motor y no se queda en el camino.
+        # mapa llega al motor y no se queda en el camino. El objeto va con sus banderas ya
+        # encendidas —como el de un mapa que ya pasó por el motor— porque lo que se mira
+        # aquí es la huella, no el marco de estado.
+        if objeto is None:
+            objeto = {"flags": {b: True for b in converge.BANDERAS_QUE_EL_MAPA_ENSENA}}
         cual = filtros.FilterModule().filters()["netlabs_netxms_mapa_ops"]
         return cual(self.LAB, self.NODOS, self.CENSO, actual,
-                    self.API, "7", [], [], comentarios)
+                    self.API, "7", [], [], comentarios, objeto)
 
     def test_la_huella_del_dibujo_que_ya_esta_deja_el_mapa_quieto(self):
         dibujo = json.loads(self.plan(None)["ops"][0]["cuerpo"])
