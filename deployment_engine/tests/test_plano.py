@@ -213,6 +213,50 @@ class TestPlanoAnidado(unittest.TestCase):
                 self.assertGreater(abs(x - ox) + abs(y - oy), 40,
                                    f"{rol} y {otro} se dibujan uno encima del otro")
 
+    def test_tres_sedes_apiladas_no_tapan_sus_routers_de_borde(self):
+        """Tres sedes hermanas de la misma anchura salen por la misma nube y se apilan.
+
+        Apiladas, sus centros caen en la misma vertical y los tres routers de borde
+        apuntaban al mismo punto: se dibujaban uno encima de otro y sus cables parecían
+        salir de un solo equipo. Se demuestra que el plano los reparte sobre la frontera
+        que comparten —el techo de la compañía bajo la nube— y que ninguno queda debajo
+        de otro. Greptile lo vio con tres sedes; ningún laboratorio del repositorio las
+        tiene, así que el caso se inventa aquí.
+        """
+        lab = {
+            "lab": "tres_sedes",
+            "networks": [
+                {"name": "transito", "address": "203.0.113.0/24", "title": "Internet",
+                 "shape": "cloud"},
+                {"name": "ny", "address": "10.20.0.0/16", "title": "Nueva York"},
+                {"name": "tk", "address": "10.40.0.0/16", "title": "Tokio"},
+                {"name": "bs", "address": "10.60.0.0/16", "title": "Buenos Aires"},
+            ],
+            "nodes": [
+                {"role": "rte1", "type": "router", "networks": ["transito", "ny"]},
+                {"role": "rte2", "type": "router", "networks": ["transito", "tk"]},
+                {"role": "rte3", "type": "router", "networks": ["transito", "bs"]},
+                {"role": "pst1", "type": "workstation", "networks": ["ny"]},
+                {"role": "pst2", "type": "workstation", "networks": ["tk"]},
+                {"role": "pst3", "type": "workstation", "networks": ["bs"]},
+            ],
+            "links": [
+                {"a": {"node": "rte1", "port": 2}, "z": {"node": "pst1", "port": 1}},
+                {"a": {"node": "rte2", "port": 2}, "z": {"node": "pst2", "port": 1}},
+                {"a": {"node": "rte3", "port": 2}, "z": {"node": "pst3", "port": 1}},
+            ],
+        }
+        svg = plano.plano(lab, "topologia")
+        puestos = {}
+        for rol in ("rte1", "rte2", "rte3"):
+            m = re.search(rf'<text x="([\d.]+)" y="([\d.]+)"[^>]*>{rol}</text>', svg)
+            self.assertIsNotNone(m, f"{rol} no aparece en el plano")
+            puestos[rol] = (float(m.group(1)), float(m.group(2)))
+        for i, (rol, (x, y)) in enumerate(puestos.items()):
+            for otro, (ox, oy) in list(puestos.items())[i + 1:]:
+                self.assertGreater(abs(x - ox) + abs(y - oy), 40,
+                                   f"{rol} y {otro} se dibujan uno encima del otro")
+
 
 def cajas_y_equipos(svg):
     """Lo que el SVG declara de sí mismo: cada área y cada equipo con su centro.
