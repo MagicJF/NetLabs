@@ -857,6 +857,51 @@ def _repartir_equipos(region: Region) -> None:
         region.dentro[rol] = (x_clientes, medio - alto_fila / 2 + paso * i)
 
 
+def _repartir_asomados(borde: list[tuple[str, Region, Region, float]],
+                       casa_de: dict[str, Region]) -> None:
+    """Reparte los routers de borde que comparten techo y nube sobre su frontera común.
+
+    Con tres sedes hermanas de la misma anchura apiladas bajo la misma compañía, la caja
+    que las envuelve no es más ancha que una sola sede y sus centros caen en la misma
+    vertical: los tres routers de borde apuntan al mismo punto, se dibujan uno encima de
+    otro y sus cables parecen salir de un solo equipo. Se reparten a lo largo del tramo
+    que el techo de la compañía y la nube tienen en común —la frontera por la que todos
+    salen— sin repetir posiciones, y cada uno sigue asomando bajo su nube.
+
+    Cada entrada del borde es (rol, caja, nube, ancho): el techo que pisa, la nube por la
+    que sale y el ancho de su símbolo, que manda sobre la separación mínima.
+    """
+    if len(borde) < 2:
+        return
+    # El símbolo más ancho manda: dos centros más cerca que eso se tapan (§2.10).
+    minimo = max(ancho for *_, ancho in borde) + 2
+    previas = [casa_de[rol].dentro[rol][0] for rol, *_ in borde]
+    if all(abs(a - b) >= minimo
+           for i, a in enumerate(previas) for b in previas[i + 1:]):
+        # Cada uno en la vertical de su sede, y ninguna coincide: ya no se tapan y
+        # moverlos los despegaba de la sede que salen, que es lo que los identifica.
+        return
+    _, caja, nube, _ = borde[0]
+    guarda = max(SIMBOLO["internet"][0], 2 * HUECO_NUBE) / 2
+    # El tramo común: lo que el techo de la compañía y la nube comparten a la vez. Si no
+    # se solapan —la nube cae fuera de la caja—, se reparten sobre la nube, que es el
+    # borde por el que se lee la salida.
+    x0 = max(caja.x, nube.x + guarda)
+    x1 = min(caja.x + caja.ancho, nube.x + nube.ancho - guarda)
+    if x1 <= x0:
+        x0, x1 = nube.x + guarda, nube.x + nube.ancho - guarda
+    paso = (x1 - x0) / (len(borde) + 1)
+    if paso < minimo:
+        # El tramo no da para un diámetro por equipo: se usa el mínimo imprescindible y
+        # el reparto se centra en él. Un símbolo tapado es peor que uno que sobresale.
+        centro = (x0 + x1) / 2
+        xs = [centro + minimo * (i - (len(borde) - 1) / 2) for i in range(len(borde))]
+    else:
+        xs = [x0 + paso * (i + 1) for i in range(len(borde))]
+    for (rol, caja, _, _), x in zip(borde, xs):
+        casa_de[rol].dentro[rol] = (x, caja.y)
+
+
 def _plano_anidado(lab: dict) -> str:
     """El plano de topología: áreas dentro de áreas, y cada equipo a caballo de las suyas."""
     raiz = _arbol(lab)
@@ -891,6 +936,9 @@ def _plano_anidado(lab: dict) -> str:
     # Dos equipos pueden compartir frontera —los dos routers de borde, sin ir más
     # lejos—: se reparten a lo largo de ella en vez de dibujarse uno encima del otro.
     por_frontera: dict[tuple[int, int], list[str]] = {}
+    # Los routers que se asoman por el mismo techo a la misma nube se reparten juntos,
+    # y el reparto se hace al final: uno solo no sabe con quién comparte la frontera.
+    asomados: dict[tuple[int, int], list[tuple[str, Region, Region, float]]] = {}
     for rol, grupos in cruces.items():
         clave = tuple(sorted((id(grupos[0]), id(grupos[1]))))
         por_frontera.setdefault(clave, []).append(rol)
@@ -918,8 +966,12 @@ def _plano_anidado(lab: dict) -> str:
             guarda = max(SIMBOLO["internet"][0], 2 * HUECO_NUBE) / 2
             izquierda, derecha = nube.x + guarda, nube.x + nube.ancho - guarda
             x = min(max(centro, izquierda), derecha) if derecha >= izquierda else centro
-            y = caja.y
-            repartible = False
+            # Posición provisional: la definitiva la fija el reparto de los que comparten
+            # techo y nube, que sólo puede hacerse cuando se conocen todos.
+            asomados.setdefault((id(caja), id(nube)), []).append(
+                (rol, caja, nube, max(SIMBOLO[por_nodo[rol]["type"]])))
+            casa_de[rol].dentro[rol] = (x, caja.y)
+            continue
         elif _contiene(una, otra) or _contiene(otra, una):
             # Una dentro de otra: el router se apoya en el costado de la de dentro que
             # mira al pasillo de la casa. En el techo chocaría con su cabecera, y ahí
@@ -966,6 +1018,8 @@ def _plano_anidado(lab: dict) -> str:
                 comun = (max(una.y, otra.y), min(una.y + una.alto, otra.y + otra.alto))
                 y = reparto(comun[0], comun[1], hermanos.index(rol))
         casa_de[rol].dentro[rol] = (x, y)
+    for borde in asomados.values():
+        _repartir_asomados(borde, casa_de)
 
     def punto_de(rol: str) -> tuple[float, float]:
         for region in regiones:

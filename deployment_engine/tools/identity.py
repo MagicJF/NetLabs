@@ -1065,7 +1065,7 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     declarados = {c["name"] for c in los_cables["links"]}
     for bridge in bridges:
         iface = bridge.get("iface")
-        if iface in declarados or _lab_from_comment(bridge.get("comments") or "") != name:
+        if iface in declarados or lab_from_comment(bridge.get("comments") or "") != name:
             continue
         steps.append({"op": "bridge_destroy", "bridge": iface,
                       "comment": bridge.get("comments") or ""})
@@ -1506,7 +1506,7 @@ def _check_foreign_spaces(world: dict, lab: dict, env: dict) -> None:
     mine = {ipaddress.ip_network(s, strict=False) for s in lab["address_spaces"]}
     for bridge in world.get("bridges") or []:
         comment = bridge.get("comments") or ""
-        other = _lab_from_comment(comment)
+        other = lab_from_comment(comment)
         if not other or other == lab["lab"]:
             continue
         # Un puente es un cable tonto: no lleva CIDR. El espacio del otro
@@ -1526,7 +1526,7 @@ def _check_foreign_spaces(world: dict, lab: dict, env: dict) -> None:
                 )
 
 
-def _lab_from_comment(comment: str):
+def lab_from_comment(comment: str):
     # El nombre de un laboratorio lleva guion bajo (`b_router_dos_puestos`) y la letra
     # por la que empieza: si la marca se partiera en la primera palabra, el laboratorio
     # no se reconocería a sí mismo y se tomaría por otro con el mismo espacio. El

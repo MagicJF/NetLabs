@@ -1586,6 +1586,19 @@ class LoQueElDestroyRetiraDeLaVista(unittest.TestCase):
         self.assertEqual([r["address"] for r in restos["suyos"]], ["10.30.0.101"])
         self.assertEqual(restos["dudosos"], [])
 
+    def test_un_nombre_que_empieza_como_el_de_este_laboratorio_no_es_un_resto_suyo(self):
+        """El nombre del laboratorio se compara ENTERO, no como prefijo de la marca.
+
+        Demuestra el caso que se lleva por delante el histórico de otro laboratorio: un
+        laboratorio cuyo nombre empieza por el de éste —`d_acme` y `d_acme_dos_sedes`—
+        comparte el prefijo de la marca, y leerla como subcadena tomaba sus registros por
+        restos de éste y pasaba sus números al borrado sin comprobar nombre ni dirección
+        (AGENTS.md §3.6).
+        """
+        censo = [self.nodo(1, "rte1", "10.30.0.101", marca="d_acme_dos_sedes")]
+        restos = converge.netxms_restos_de(censo, "d_acme")
+        self.assertEqual(restos["suyos"], [])
+
     def test_un_registro_con_el_nombre_del_laboratorio_y_sin_marca_no_se_toca(self):
         """El nombre no demuestra quién lo creó: se dice, no se borra (AGENTS.md §3.6)."""
         restos = converge.netxms_restos_de([self.nodo(9, "wsp1", "10.30.0.150")],
@@ -1645,6 +1658,27 @@ class LoQueElDestroyRetiraDeLaVista(unittest.TestCase):
     def test_un_mapa_ajeno_con_el_mismo_nombre_no_se_retira(self):
         hijos = [{"id": 7, "class": "NetworkMap", "name": self.LAB,
                   "comments": "netlabs lab=otro_lab"}]
+        self.assertTrue(converge.netxms_mapa_del_lab(hijos, self.LAB)["ajeno"])
+
+    def test_un_mapa_con_una_nota_sin_marca_no_se_toma_por_ajeno(self):
+        """Un comentario no vacío sin marca no demuestra que el mapa sea de otro.
+
+        Demuestra que `ajeno` sólo lo activa la marca EXPLÍCITA de otro laboratorio: antes
+        cualquier comentario lo hacía, y una nota como «revisar el lunes» bloqueaba tanto
+        `apply` como `destroy` del propio mapa, que se llama como el laboratorio.
+        """
+        hijos = [{"id": 7, "class": "NetworkMap", "name": self.LAB,
+                  "comments": "revisar el lunes"}]
+        self.assertFalse(converge.netxms_mapa_del_lab(hijos, self.LAB)["ajeno"])
+
+    def test_un_mapa_de_otro_cuyo_nombre_empieza_como_este_se_toma_por_ajeno(self):
+        """La marca del mapa se compara entera: el prefijo de `b_router` no es `b_router_dos_puestos`.
+
+        Demuestra que un mapa de otro laboratorio cuyo nombre empieza por el de éste no se
+        reconoce como propio —lo que dejaría retirar su dibujo—: se toma por ajeno y se para.
+        """
+        hijos = [{"id": 7, "class": "NetworkMap", "name": self.LAB,
+                  "comments": "netlabs lab=b_router"}]
         self.assertTrue(converge.netxms_mapa_del_lab(hijos, self.LAB)["ajeno"])
 
     def test_sin_mapa_no_hay_nada_que_retirar(self):

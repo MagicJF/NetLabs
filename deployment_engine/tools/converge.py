@@ -20,7 +20,7 @@ import json
 import os
 import shlex
 
-from identity import LabError, ROS_SECRET, TYPES
+from identity import LabError, ROS_SECRET, TYPES, lab_from_comment
 
 import mapa
 import plano
@@ -1779,6 +1779,20 @@ def netxms_huella_guardada(comentarios: str) -> str:
     return ""
 
 
+def netxms_lab_de_marca(comentario: str) -> str:
+    """El laboratorio que nombra la marca de un comentario; vacío si no lleva ninguna.
+
+    Se lee el valor **entero** de `lab=`, hasta el espacio, y se compara por igualdad, no
+    como subcadena: `netlabs lab=x_uno` es prefijo de `netlabs lab=x_uno_dos`, y tomarlos
+    por el mismo haría que destruir el primero se llevara por delante el histórico del
+    segundo, sin comprobar nombre ni dirección (AGENTS.md §3.6). Se reutiliza el reconocedor
+    de la identidad (`identity.lab_from_comment`), que ya valida ese patrón: el nombre de un
+    laboratorio se escribe una sola vez.
+    """
+    return lab_from_comment(comentario or "") or ""
+
+
+
 def netxms_restos_de(nodos: list | dict | None, lab: str, equipos: list | None = None,
                      espacios: list | None = None) -> dict:
     """Qué equipos de la vista son de este laboratorio, y cuáles lo parecen sin serlo.
@@ -1798,7 +1812,6 @@ def netxms_restos_de(nodos: list | dict | None, lab: str, equipos: list | None =
     """
     if isinstance(nodos, dict):
         nodos = nodos.get("objects") or []
-    marca = netxms_marca_de(lab)
     nombres = {str(n) for n in (equipos or [])}
     suyos, dudosos = [], []
     for nodo in nodos or []:
@@ -1808,7 +1821,7 @@ def netxms_restos_de(nodos: list | dict | None, lab: str, equipos: list | None =
             "name": str(nodo.get("name") or ""),
             "address": str((nodo.get("ipAddress") or {}).get("address") or ""),
         }
-        if marca in comentario:
+        if netxms_lab_de_marca(comentario) == lab:
             suyos.append(ficha)
         elif ficha["name"] in nombres and _es_del_laboratorio(ficha["address"], espacios):
             dudosos.append(ficha)
@@ -1844,8 +1857,12 @@ def netxms_mapa_del_lab(hijos: list | None, lab: str, nombre: str | None = None)
         if str(objeto.get("name") or "") != nombre:
             continue
         marca = str(objeto.get("comments") or "")
+        # `ajeno` es «lleva la marca EXPLÍCITA de OTRO laboratorio»: una nota suelta
+        # —«revisar el lunes»— no demuestra que el mapa sea de otro y no puede bloquear
+        # el propio, que se llama como el laboratorio y la raíz no admite dos iguales.
+        lab_del_mapa = netxms_lab_de_marca(marca)
         return {"id": int(objeto["id"]), "nombre": nombre,
-                "ajeno": bool(marca) and netxms_marca_de(lab) not in marca}
+                "ajeno": bool(lab_del_mapa) and lab_del_mapa != lab}
     return {"id": 0, "nombre": nombre, "ajeno": False}
 
 
