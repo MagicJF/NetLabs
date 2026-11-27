@@ -20,9 +20,9 @@
 #   1 2 1  3 4 2            5 6 3  7 8 4             en cada uno dos puestos (wsp) y un
 #                                                    servidor (svs)
 #
-# Seis áreas de red más la nube: ACME (10.0.0.0/8, que el plano deduce de las dos sedes),
+# Seis áreas de red más la nube: ACME (10.48.0.0/12, que el plano deduce de las dos sedes),
 # Nueva York (10.50.0.0/16), Tokio (10.60.0.0/16) y los cuatro departamentos. La jerarquía
-# es la del plano: el /24 dentro del /16 dentro del /8, como capas de cebolla.
+# es la del plano: el /24 dentro del /16 dentro del /12, como capas de cebolla.
 #
 # Dentro de cada sede, la red de la sede —`ny`, 10.50.0.0/16— es el segmento donde se
 # juntan el router de borde y los dos routers de departamento, y por eso lleva su switch,
@@ -41,7 +41,7 @@
 lab: f_acme_cuatro_departamentos
 
 address_spaces:
-  # ACME, inc. no se declara como espacio: la caja 10.0.0.0/8 la deduce el plano de las
+  # ACME, inc. no se declara como espacio: la caja 10.48.0.0/12 la deduce el plano de las
   # dos sedes que la comparten. Declararla se comería la red de gestión (10.30.0.0/16).
   - 10.50.0.0/16        # la sede de Nueva York
   - 10.60.0.0/16        # la sede de Tokio

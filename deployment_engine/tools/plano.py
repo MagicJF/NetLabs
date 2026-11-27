@@ -1101,8 +1101,12 @@ def _plano_anidado(lab: dict) -> str:
                         """El carril, sin salirse por los costados del área."""
                         return min(max(x, casa.x + 25), casa.x + casa.ancho - 25)
 
+                    # Y cada cable sale del switch por su altura, no todos por la misma:
+                    # compartiendo el tramo de salida, los tres se dibujan uno encima de
+                    # otro y el plano enseña un bus donde hay un cable por cliente.
+                    salida_y = pa[1] + desvio
                     candidatos = [
-                        [(pa[0], pa[1]), (dentro_del_area(x), pa[1]),
+                        [(pa[0], pa[1]), (dentro_del_area(x), salida_y),
                          (dentro_del_area(x), pz[1]), (pz[0], pz[1])]
                         for x in carriles]
                     # Y por último los rodeos de siempre: por debajo, que el techo lo

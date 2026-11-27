@@ -10,6 +10,7 @@ import pathlib
 import re
 import sys
 import ipaddress
+import math
 import unittest
 
 import yaml
@@ -235,6 +236,52 @@ def cajas_y_equipos(svg):
     return areas, equipos
 
 
+def _visible(tramo, cajas):
+    """Cuánto de un tramo queda a la vista, es decir, fuera de todo símbolo.
+
+    El trozo de cable que va por dentro de un símbolo no se ve: lo tapa el propio
+    equipo. Para saber si dos cables se dibujan como uno hay que medir sólo lo que
+    asoma, o el tramo que los dos comparten bajo el switch contaría como defecto.
+    """
+    (x1, y1), (x2, y2) = tramo
+    largo = math.hypot(x2 - x1, y2 - y1)
+    if not largo:
+        return 0.0
+    oculto = 0.0
+    for caja in cajas:
+        dentro = recorte(tramo, caja)
+        if dentro:
+            oculto += (dentro[1] - dentro[0]) * largo
+    return max(0.0, largo - oculto)
+
+
+def solape_a_la_vista(uno, otro, cajas):
+    """El tramo que dos cables comparten a la vista: pegados, se leen como uno solo.
+
+    Se buscan los tramos colineales de los dos —misma recta horizontal o vertical— y
+    se mide cuánto se pisan fuera de los símbolos. Dos cables que salen del mismo
+    switch por el mismo punto y a la misma altura comparten su tramo de salida y el
+    plano enseña un bus que no existe: donde hay un cable por cliente, una línea que
+    se ramifica.
+    """
+    total = 0.0
+    for (ax1, ay1), (ax2, ay2) in uno:
+        for (bx1, by1), (bx2, by2) in otro:
+            if (abs(ax1 - ax2) < 1 and abs(bx1 - bx2) < 1
+                    and abs(ax1 - bx1) < 1):
+                lo = max(min(ay1, ay2), min(by1, by2))
+                hi = min(max(ay1, ay2), max(by1, by2))
+                if hi > lo:
+                    total += _visible(((ax1, lo), (ax1, hi)), cajas)
+            elif (abs(ay1 - ay2) < 1 and abs(by1 - by2) < 1
+                    and abs(ay1 - by1) < 1):
+                lo = max(min(ax1, ax2), min(bx1, bx2))
+                hi = min(max(ax1, ax2), max(bx1, bx2))
+                if hi > lo:
+                    total += _visible(((lo, ay1), (hi, ay1)), cajas)
+    return total
+
+
 def tramos_de_los_cables(svg):
     """Cada cable del plano con sus dos puntas y los tramos rectos que dibuja.
 
@@ -448,6 +495,36 @@ class TestLosCablesNoTachanElPlano(unittest.TestCase):
                         for x0, y0, x1, y1, texto in rotulos:
                             self.assertIsNone(recorte(tramo, (x0, y0, x1, y1)),
                                               f"el cable {a}-{z} tacha el nombre {texto!r}")
+
+    def test_los_cables_de_un_mismo_equipo_no_se_dibujan_como_uno(self):
+        """Los cables que salen de un switch salen cada uno por su sitio.
+
+        El switch de un departamento lleva un cable por cliente. Si todos salen del
+        mismo punto y a la misma altura, el trozo que asoma se dibuja una sola vez y
+        el plano enseña una línea que se ramifica donde hay tres cables. Se mide lo
+        que queda a la vista: el tramo que va por dentro del símbolo no cuenta, que
+        lo tapa el propio equipo.
+        """
+        for lab in todos_los_laboratorios():
+            declaracion = laboratorio(lab)
+            svg = plano.plano(declaracion, "topologia")
+            cajas = list(cajas_de_los_simbolos(svg, declaracion).values())
+            por_equipo: dict[str, list] = {}
+            for (a, z), tramos in tramos_de_los_cables(svg):
+                por_equipo.setdefault(a, []).append(((a, z), tramos))
+                if z != a:
+                    por_equipo.setdefault(z, []).append(((a, z), tramos))
+            for rol, suyos in por_equipo.items():
+                for i, ((a, z), unos) in enumerate(suyos):
+                    for (b, w), otros in suyos[i + 1:]:
+                        if (a, z) == (b, w):
+                            continue          # el mismo cable, contado por su otra punta
+                        solape = solape_a_la_vista(unos, otros, cajas)
+                        with self.subTest(laboratorio=lab, cables=f"{a}-{z} y {b}-{w}"):
+                            self.assertLess(
+                                solape, 12,
+                                f"los cables {a}-{z} y {b}-{w} salen de {rol} pegados: "
+                                f"{solape:.1f} px dibujados como una sola línea")
 
 
 if __name__ == "__main__":
