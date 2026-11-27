@@ -186,6 +186,8 @@ class FilterModule:
             "netlabs_netxms_ops": lambda nodes, encontrados, detalles, api, secrets=None,
                 vivas=None, propias=None: converge.netxms_ops(
                     nodes, encontrados, detalles, api, secrets, vivas=vivas, propias=propias),
+            "netlabs_netxms_objeto_cmd": lambda api, id_objeto:
+                converge.netxms_objeto_cmd(api, id_objeto),
             "netlabs_netxms_borrar_cmd": lambda api, id_objeto:
                 converge.netxms_borrar_cmd(api, id_objeto),
             # El mapa a medida: el del laboratorio, colocado como el plano.
@@ -214,7 +216,7 @@ class FilterModule:
                 converge.netxms_alarma_resolver_cmd(api, id_alarma),
             "netlabs_netxms_interfaces_cuerpo": lambda api=None: converge.netxms_interfaces_cuerpo(),
             "netlabs_netxms_mapa_ops": lambda lab, nodes, encontrados, actual, api, id_mapa,
-                fichas=None, interfaces=None, comentarios="": converge.netxms_mapa_ops(
+                fichas=None, interfaces=None, comentarios="", objeto=None: converge.netxms_mapa_ops(
                     lab, nodes, encontrados, actual, api, id_mapa, fichas, interfaces,
-                    comentarios=comentarios),
+                    comentarios=comentarios, objeto=objeto),
         }

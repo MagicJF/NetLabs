@@ -1357,6 +1357,21 @@ def netxms_cmd(api: str, ruta: str, metodo: str = "POST") -> list:
     )
 
 
+def netxms_objeto_cmd(api: str, id_objeto) -> list:
+    """Leer un objeto entero —el mapa y sus banderas— sin cuerpo: sólo el testigo.
+
+    El testigo entra igual que en las demás llamadas: por la entrada y al descriptor 3,
+    para que no se vea en la línea de órdenes.
+    """
+    return _sh(
+        "IFS= read -r t; exec 3<<EOF\n"
+        "Authorization: Bearer ***\n"
+        "EOF\n"
+        f"curl -sS {NETXMS_TOPE} --fail-with-body -X GET -H @/dev/fd/3 "
+        f"{api}/objects/{int(id_objeto)}"
+    )
+
+
 def netxms_borrar_cmd(api: str, id_objeto) -> list:
     """Retirar de la vista un equipo que apunta a una máquina que ya no es la suya.
 
@@ -2013,10 +2028,32 @@ def netxms_interfaces_de(nodes: list[dict], censo: list | None, fichas: list | N
     return salida
 
 
+BANDERAS_QUE_EL_MAPA_ENSENA = ("showStatusIcon", "showStatusFrame", "showStatusBackground")
+
+
+def netxms_mapa_banderas(objeto: dict | None) -> dict | None:
+    """El cuerpo que enciende el marco y el fondo de estado, o None si ya están puestos.
+
+    Las banderas viajan con nombre y apellido (`showStatusFrame`), no como número: el
+    `PATCH` del API reemplaza el objeto de banderas entero, así que se devuelven todas
+    las que el mapa tiene —las que trae de fábrica uno recién hecho, si todavía no hay
+    ninguna— con las tres encendidas. Sólo se manda cuando alguna está apagada, para que
+    el `apply` siga sin tocar nada la segunda vez.
+    """
+    vivas = dict((objeto or {}).get("flags") or {})
+    if not vivas:
+        vivas = {"showStatusIcon": True}
+    if all(vivas.get(b) is True for b in BANDERAS_QUE_EL_MAPA_ENSENA):
+        return None
+    for b in BANDERAS_QUE_EL_MAPA_ENSENA:
+        vivas[b] = True
+    return {"flags": vivas}
+
+
 def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: dict | None,
                     api: str, id_mapa, fichas: list | None = None,
                     interfaces: list | None = None, svg: str | None = None,
-                    comentarios: str = "") -> dict:
+                    comentarios: str = "", objeto: dict | None = None) -> dict:
     """Lo que hay que escribir para que el mapa de la vista sea el plano del laboratorio.
 
     Sólo se escribe si el mapa que hay no es ya el que el plano pide: la segunda pasada no
@@ -2048,7 +2085,8 @@ def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: di
     cuenta = {"equipos": len(objetos), "interfaces": cuantas, "cables": len(deseado["links"]),
               "areas": cajas, "rotulos": rotulos}
     escribir = mapa.que_escribir(actual, deseado, netxms_huella_guardada(comentarios))
-    if not escribir["dibujo"] and not escribir["huella"]:
+    banderas = netxms_mapa_banderas(objeto)
+    if not escribir["dibujo"] and not escribir["huella"] and banderas is None:
         return {"ops": [], "pendientes": faltan, "motivo": escribir["motivo"], **cuenta}
     ops = []
     if escribir["dibujo"]:
@@ -2062,14 +2100,25 @@ def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: di
     if escribir["huella"]:
         # Va en su propia petición porque el API no admite el comentario en el `PUT` del
         # dibujo; cuando el dibujo ya es el del plano, es la única que se manda.
+        #
+        # `PATCH` y no `PUT`: el API documenta el `PUT` para tocar un objeto, pero el
+        # servicio en pie responde 405 y no escribe nada —ni el comentario ni las
+        # banderas—. Comprobado contra el servicio de verdad, con el mapa del laboratorio.
         ops.append({
-            "cmd": netxms_cmd(api, f"/objects/{int(id_mapa)}", "PUT"),
+            "cmd": netxms_cmd(api, f"/objects/{int(id_mapa)}", "PATCH"),
             "cuerpo": json.dumps({"comments": f"{netxms_marca_de(str(lab.get('lab') or ''))} "
                                              f"{HUELLA_EN_EL_MAPA}{mapa.huella(deseado)}"}),
             "effect": "dejar en el mapa la huella de lo que el motor escribió",
         })
+    if banderas is not None:
+        ops.append({
+            "cmd": netxms_cmd(api, f"/objects/{int(id_mapa)}", "PATCH"),
+            "cuerpo": json.dumps(banderas),
+            "effect": "encender en el mapa el marco y el fondo de estado",
+        })
     return {
-        "motivo": escribir["motivo"],
+        "motivo": ("encender el marco y el fondo de estado"
+                   if not escribir["dibujo"] and not escribir["huella"] else escribir["motivo"]),
         "ops": ops,
         "pendientes": faltan, **cuenta,
     }

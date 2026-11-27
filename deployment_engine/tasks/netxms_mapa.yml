@@ -107,6 +107,28 @@
     netxms_mapa_id: "{{ (interior.stdout | default('{}', true) | from_json).id | default('', true) }}"
   when: netxms_mapa_id | int == 0
 
+# --- las banderas del mapa --------------------------------------------------
+# El marco y el fondo de estado viajan en el objeto del mapa, no en el dibujo, y por
+# defecto vienen apagados. Se lee el objeto una vez para poder encenderlos sin pisar las
+# demás banderas: el `PATCH` reemplaza el objeto entero.
+- name: netxms · leer el objeto del mapa, con sus banderas
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · leer el objeto del mapa {{ lab.lab }}"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_objeto_cmd(netxms_mapa_id) }}"
+  when: netxms_mapa_id | int != 0
+
+- name: netxms · las banderas que el mapa ya trae
+  ansible.builtin.set_fact:
+    netxms_mapa_objeto: "{{ interior.stdout | default('{}', true) | from_json }}"
+  no_log: true
+  when: netxms_mapa_id | int != 0
+
 - name: netxms · el mapa del laboratorio no llegó a nacer
   ansible.builtin.fail:
     msg: >-
@@ -196,7 +218,8 @@
       {{ lab | netlabs_netxms_mapa_ops(equipos, netxms_censo,
          interior.stdout | default('{}', true) | from_json, netxms_api, netxms_mapa_id,
          netxms_fichas | default([], true), netxms_interfaces | default([], true),
-         netxms_mapa.comentario | default('', true)) }}
+         netxms_mapa.comentario | default('', true),
+         netxms_mapa_objeto | default({}, true)) }}
 
 - name: netxms · colocar el mapa del laboratorio como el plano
   include_tasks: interior_ssh.yml
