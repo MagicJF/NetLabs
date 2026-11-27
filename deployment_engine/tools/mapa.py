@@ -569,6 +569,20 @@ def _config_ordenada(elemento: dict) -> str:
         return crudo
 
 
+def resumen_lienzo(mapa: dict) -> tuple:
+    """El tamaño del lienzo, que es parte del dibujo como cualquier otra.
+
+    El lienzo entra en la huella —un mapa con otro `width` o `height` es otro mapa—, así
+    que tiene que entrar también en la comparación con el plano. Sin él, un mapa al que
+    sólo le habían cambiado `width` o `height` se daba por al día: la huella del deseado
+    no cuadraba con la de lo guardado y se tomaba por un sello roto —un `apply` cortado—,
+    así que se reescribía el comentario en cada pasada sin que el dibujo llegara a cambiar
+    nunca, porque la rama de reparar la huella no toca el lienzo. Con el lienzo dentro,
+    ese cambio se lee por lo que es —un ajuste a mano— y el mapa se respeta.
+    """
+    return (int(mapa.get("width") or 0), int(mapa.get("height") or 0))
+
+
 def huella(mapa: dict | None) -> str:
     """El dibujo reducido a un número, para saber si alguien lo ha tocado.
 
@@ -580,7 +594,7 @@ def huella(mapa: dict | None) -> str:
     if not mapa:
         return ""
     contenido = {
-        "lienzo": [mapa.get("width"), mapa.get("height")],
+        "lienzo": resumen_lienzo(mapa),
         "elementos": sorted(_resumen_elemento(e) for e in mapa.get("elements") or []),
         "cables": _resumen_cableado(mapa),
         "ajustes": resumen_ajustes(mapa),
@@ -626,6 +640,8 @@ def esta_al_dia(actual: dict | None, deseado: dict) -> bool:
     los suyos, así que el número de enlace cambia al escribirlos y no significa nada.
     """
     if not actual:
+        return False
+    if resumen_lienzo(actual) != resumen_lienzo(deseado):
         return False
     if resumen_ajustes(actual) != resumen_ajustes(deseado):
         return False

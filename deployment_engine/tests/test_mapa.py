@@ -343,6 +343,30 @@ class ElMapaDelLaboratorio(unittest.TestCase):
         # se lee de vuelta —el cuerpo que viaja al API— sigue coincidiendo con lo deseado.
         self.assertTrue(mapa.esta_al_dia(json.loads(mapa.cuerpo(deseado)), deseado))
 
+    def test_un_lienzo_cambiado_a_mano_no_hace_reescribir_el_comentario(self):
+        """Un mapa al que sólo le cambian el lienzo es un ajuste a mano, no un sello roto.
+
+        Demuestra que el tamaño del lienzo entra en la comparación con el plano: sin él,
+        `esta_al_dia` daba por bueno un mapa con otro `width` o `height`, la huella del
+        deseado no cuadraba con la guardada y la rama de reparar la huella escribía el
+        comentario en cada `apply` sin que el dibujo cambiara nunca —el sello no llegaba a
+        coincidir, porque esa rama no toca el lienzo—. Con el lienzo dentro, ese cambio se
+        lee por lo que es y el mapa se respeta.
+        """
+        lab = laboratorio()
+        svg = plano.plano(lab, "topologia")
+        deseado = mapa.contenido(lab, svg, con_vista_toda(lab))
+        for clave in ("width", "height"):
+            otro = json.loads(json.dumps(deseado))
+            otro[clave] = deseado[clave] + 100
+            with self.subTest(clave=clave):
+                self.assertNotEqual(mapa.huella(otro), mapa.huella(deseado), clave)
+                self.assertFalse(mapa.esta_al_dia(otro, deseado), clave)
+                escribir = mapa.que_escribir(otro, deseado, mapa.huella(deseado))
+                self.assertFalse(escribir["dibujo"], "se ha pisado el lienzo ajustado a mano")
+                self.assertFalse(escribir["huella"], "el comentario se reescribe en cada pasada")
+                self.assertEqual(escribir["motivo"], "ajustado a mano")
+
     def test_ningun_equipo_se_queda_debajo_de_un_rotulo_de_area(self):
         """Un icono encima de la cabecera de su red la tapa: eso sí que no se lee.
 
