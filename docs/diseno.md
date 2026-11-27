@@ -396,16 +396,24 @@ a un lado y a otro. Así que el motor **le manda un mapa hecho a medida**, con e
 que la documentación:
 
 - las **áreas** del plano, como cajas de grupo; su nombre y su bloque de direcciones van en **cajas
-  de texto** colocadas **dentro de su propia área**, arriba a la izquierda como las cabeceras del
-  plano, apartándose sólo lo justo para no pisar un cable o un equipo: un rótulo que dice de qué
-  red es no puede caer en la caja de otra red;
+  de texto** colocadas **dentro de su propia área**, empezando por la esquina de arriba a la
+  izquierda —como las cabeceras del plano— y, si un equipo o un cable la tapan, **bajando por el
+  mismo borde izquierdo** antes de correr hacia el centro: nunca de un extremo al otro, que es lo
+  que hacía parecer que cada cabecera se colocaba donde le daba la gana. Lo que no puede pasar es
+  que **un equipo** quede encima del rótulo —tapa la letra y además miente, porque parece estar en
+  la red que no es—; que lo cruce un cable fino se admite, porque una cabecera arrinconada al fondo
+  del área no la lee nadie (ADR 0015);
 - cada **equipo de red** del laboratorio donde el plano lo pone —el router en la frontera de
-  las redes que une, el switch del núcleo en el centro—, dibujado con su **icono**, sin etiqueta
+  las redes que une, el switch del núcleo en el centro—, dibujado con su **icono** y con el hueco
+  que de verdad ocupa su símbolo (el plano lo escribe en `data-ancho` y `data-alto`): con un hueco
+  fijo de 100×100, el icono de un puesto se comía el bloque de direcciones de su área; sin etiqueta
   de nombre e IP al lado ni cartel de patas: con veintiséis equipos, una ficha por equipo tapa el
   dibujo y los cables que pasan por debajo;
-- cada **cable** del laboratorio, entre los dos equipos que une, con el **puerto y la interfaz de
-  cada punta** (`p1 ether1`), atados a la interfaz de la vista por la que de verdad sale, y los
-  **ajustes** que dicen cómo se dibujan: color propio y trazo fino, porque el gris ancho que pone
+- cada **cable** del laboratorio, entre los dos equipos que une, con el **puerto de cada punta**
+  (`p1`, `p2`) y sin repetir la interfaz —con cuatro puertos juntos, `p2 ether2` y `p3 ether3` se
+  pisaban entre sí—: la interfaz **no se pierde**, viaja en el número de interfaz del enlace, que
+  es lo que la vista necesita para atar la punta a su equipo. Los **ajustes** dicen cómo se dibuja:
+  color propio y trazo fino, porque el gris ancho que pone
   la vista se pierde en el gris de las cajas. El **nombre del cable** —el del puente que lo tiende
   el despliegue— no se dibuja: la vista lo pone en el centro del enlace y tapa el cable. Viaja en
   la configuración del enlace, donde queda informado sin estorbar.

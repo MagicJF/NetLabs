@@ -47,7 +47,8 @@ ELEMENTO_ADORNO = 2        # una figura del mapa, no un equipo
 ADORNO_CAJA = 0            # la caja de grupo: un rectángulo con su rótulo
 ELEMENTO_TEXTO = 5         # una caja de texto: un rótulo suelto
 
-TAMANO_EQUIPO = 100        # lado del hueco de un equipo en el mapa, como la vista
+TAMANO_EQUIPO = 100        # hueco de un equipo cuando el plano no dice cuánto ocupa su símbolo
+HUECO_MINIMO = 24          # un hueco más pequeño que esto no se ve ni se pincha en la vista
 
 # Cómo se ve el mapa. Los colores van en BGR —la vista los guarda así y los lee así— y
 # son de la familia que se lee sobre un fondo claro: la vista pinta el relleno de una caja
@@ -103,13 +104,14 @@ def disposicion(svg: str) -> dict:
     ancho, alto = raiz.get("width"), raiz.get("height")
     if ancho is None or alto is None:
         raise ValueError("el plano no declara su tamaño: no hay mapa que colocar")
-    areas, equipos, cables_del_plano = [], {}, []
+    areas, equipos, tamanos, cables_del_plano = [], {}, {}, []
     for grupo in raiz.iter():
         atributos = grupo.attrib
         if "data-area" in atributos:
             areas.append({
                 "titulo": atributos["data-area"],
                 "subred": atributos.get("data-subred", ""),
+                "lema": atributos.get("data-lema", ""),
                 "x": float(atributos["data-x"]),
                 "y": float(atributos["data-y"]),
                 "ancho": float(atributos["data-ancho"]),
@@ -119,11 +121,15 @@ def disposicion(svg: str) -> dict:
         elif "data-rol" in atributos:
             equipos[atributos["data-rol"]] = (float(atributos["data-x"]),
                                               float(atributos["data-y"]))
+            # Lo que ocupa el símbolo en el plano: la vista dibuja el equipo en un hueco
+            # de ese tamaño, no en uno de 100 que tocaba la cabecera de su área.
+            tamanos[atributos["data-rol"]] = (float(atributos.get("data-ancho") or TAMANO_EQUIPO),
+                                              float(atributos.get("data-alto") or TAMANO_EQUIPO))
         elif atributos.get("class") == "cable" and "data-a" in atributos:
             cables_del_plano.append({"a": atributos["data-a"], "pa": int(atributos["data-pa"]),
                                      "z": atributos["data-z"], "pz": int(atributos["data-pz"])})
     return {"ancho": float(ancho), "alto": float(alto),
-            "areas": areas, "equipos": equipos, "cables": cables_del_plano}
+            "areas": areas, "equipos": equipos, "tamanos": tamanos, "cables": cables_del_plano}
 
 
 def renglones(area: dict) -> list:
@@ -135,6 +141,11 @@ def renglones(area: dict) -> list:
     pisar un cable, mientras que sin el prefijo mide 167 y sí cabe. El prefijo se lee en el
     primer renglón, junto al nombre, que es donde no estorba.
     """
+    if area.get("lema"):
+        # Una caja que no es una red del cliente —la nube de Internet— no lleva bloque
+        # de direcciones: lleva la leyenda que dice qué es. Un /24 ahí la hacía parecer
+        # un segmento más de la casa, que es justo lo que no es.
+        return [area["titulo"], area["lema"]]
     if not area["subred"] or area["subred"] == area["titulo"]:
         return [area["titulo"]]
     rango, _, prefijo = area["subred"].partition(" (")
@@ -237,6 +248,14 @@ def candidatos(area: dict, ancho: float, alto: float) -> list:
     medio_y = max(arriba, min(abajo, area["y"] + (area["alto"] - alto) / 2))
 
     orden = [(izquierda, arriba), (izquierda, area["y"] + 2)]
+    # Un rótulo se lee en su esquina: si la esquina está tapada —un switch pegado al borde o
+    # el cable que sube a la frontera—, se corre hacia abajo por **el mismo borde
+    # izquierdo** antes de cruzar el área. Así todas las cabeceras quedan pegadas a su
+    # borde izquierdo y a la misma altura, que es como se leen de un vistazo.
+    for paso in range(1, 9):
+        orden.append((izquierda, round(arriba + (abajo - arriba) * paso / 9)))
+    for paso in range(1, 7):
+        orden.append((round(izquierda + (derecha - izquierda) * paso / 6), arriba))
     for fila in range(CUADRICULA):
         for columna in range(CUADRICULA):
             orden.append((round(izquierda + (derecha - izquierda) * columna / (CUADRICULA - 1)),
@@ -282,6 +301,16 @@ def sitio_libre(area: dict, ancho: float, alto: float, cables: list, ocupado: li
         ancho_lienzo, alto_lienzo = lienzo
         sitios = [(x, y) for x, y in sitios
                   if x >= 0 and y >= 0 and x + ancho <= ancho_lienzo and y + alto <= alto_lienzo]
+    # La esquina manda. Los cables de la vista son líneas finas y un rótulo se lee igual
+    # por encima de una: lo que no se lee es una cabecera arrinconada al fondo del área
+    # porque en su esquina pasaba un cable. Así que primero se busca el sitio más cercano
+    # a la esquina que no tenga **equipos** encima, y sólo si no hay ninguno se pasa a
+    # contar cables.
+    for x, y in sitios:
+        rectangulo = (x - ETIQUETA_GUARDA, y - ETIQUETA_GUARDA,
+                      ancho + 2 * ETIQUETA_GUARDA, alto + 2 * ETIQUETA_GUARDA)
+        if _cuanto_pisa(rectangulo, [], ocupado)[1] == 0:
+            return x, y
     mejor, mejor_pisada = None, None
     for x, y in sitios:
         rectangulo = (x - ETIQUETA_GUARDA, y - ETIQUETA_GUARDA,
@@ -296,6 +325,16 @@ def sitio_libre(area: dict, ancho: float, alto: float, cables: list, ocupado: li
     return candidatos(area, ancho, alto)[0]
 
 
+def hueco_de(donde: dict, rol: str) -> tuple:
+    """Lo que ocupa un equipo en la vista: lo que ocupa su símbolo en el plano.
+
+    El hueco era de 100×100 para todos, y el de un puesto llegaba hasta el bloque de
+    direcciones de su área: el icono se comía el rótulo que dice qué red es.
+    """
+    ancho, alto = (donde.get("tamanos") or {}).get(rol) or (TAMANO_EQUIPO, TAMANO_EQUIPO)
+    return max(ancho, HUECO_MINIMO), max(alto, HUECO_MINIMO)
+
+
 def _interfaz(interfaces: dict, rol: str, puerto: int) -> int:
     """El número con el que la vista conoce la interfaz de ese puerto, o 0 si no la tiene.
 
@@ -308,15 +347,16 @@ def _interfaz(interfaces: dict, rol: str, puerto: int) -> int:
     return int((interfaces.get(rol) or {}).get(f"ether{puerto}") or 0)
 
 
-def _puerto(interfaces: dict, rol: str, puerto: int) -> str:
-    """Cómo se rotula una punta del cable: su puerto y, si se sabe, la interfaz del equipo.
+def _puerto(puerto: int) -> str:
+    """Cómo se rotula una punta del cable: su puerto, y nada más.
 
-    Es el mismo saber que usa el cable para atarse —el puerto `p3` del plano es la `ether3`
-    del equipo— puesto en la punta, que es donde se lee: así el nombre de la interfaz viaja
-    con el cable aunque la ficha del equipo no lo repita.
+    La interfaz —`ether3`— sigue viajando con el cable: va en el número de interfaz del
+    enlace, que es lo que la vista necesita para atar la punta al equipo. En el rótulo no:
+    cuatro cables que entran por un switch escribían «p1 ether1», «p2 ether2»… tan juntos que
+    se pisaban unos a otros y no se leía ninguno. El puerto sí se lee, y es lo que ata el
+    cable con el plano.
     """
-    suya = f"ether{puerto}"
-    return f"p{puerto} {suya}" if suya in (interfaces.get(rol) or {}) else f"p{puerto}"
+    return f"p{puerto}"
 
 
 def tamano_del_grupo(textos: list) -> tuple:
@@ -415,14 +455,16 @@ def contenido(lab: dict, svg: str, objetos: dict, interfaces: dict | None = None
         })
 
     en_donde = {rol: (cx, cy) for rol, (cx, cy) in donde["equipos"].items() if rol in objetos}
+
     for rol, (cx, cy) in sorted(en_donde.items()):
+        ancho_hueco, alto_hueco = hueco_de(donde, rol)
         numero += 1
         elemento_de[rol] = numero
         elementos.append({
             "id": numero, "type": ELEMENTO_OBJETO, "flags": 0,
             "objectId": int(objetos[rol]),
-            "posX": round(cx - TAMANO_EQUIPO / 2), "posY": round(cy - TAMANO_EQUIPO / 2),
-            "width": TAMANO_EQUIPO, "height": TAMANO_EQUIPO,
+            "posX": round(cx - ancho_hueco / 2), "posY": round(cy - alto_hueco / 2),
+            "width": round(ancho_hueco), "height": round(alto_hueco),
         })
 
     enlaces, trazos = [], []
@@ -434,8 +476,9 @@ def contenido(lab: dict, svg: str, objetos: dict, interfaces: dict | None = None
         trazos.append((en_donde[una], en_donde[otra]))
         # El nombre del cable —`e_swc1p1_rta1p1`, el de su puente— no se dibuja en el mapa:
         # la vista lo pone en el centro del enlace y tapa el cable. Va en la configuración
-        # del enlace, que es donde la vista lo guarda sin enseñarlo. Cada punta sí dice su
-        # puerto y su interfaz, que es lo que se lee: `p1 ether1`.
+        # del enlace, que es donde la vista lo guarda sin enseñarlo. Cada punta dice su
+        # puerto —`p1`, `p2`—: la interfaz viaja atada al enlace, sin rótulo, porque en la
+        # punta se pisaba con las de al lado.
         nombre_cable = str(nombres.get(una, {}).get(punta_a) or "")
         enlaces.append({
             "element1": elemento_de[una], "element2": elemento_de[otra],
@@ -443,8 +486,8 @@ def contenido(lab: dict, svg: str, objetos: dict, interfaces: dict | None = None
             "interface2": _interfaz(interfaces, otra, punta_z),
             "type": 0, "flags": 0,
             "name": "",
-            "connectorName1": _puerto(interfaces, una, punta_a),
-            "connectorName2": _puerto(interfaces, otra, punta_z),
+            "connectorName1": _puerto(punta_a),
+            "connectorName2": _puerto(punta_z),
             "colorSource": 0, "color": 0, "colorProvider": "",
             "config": json.dumps({"dciList": [], "cableName": nombre_cable}, ensure_ascii=False),
         })
@@ -452,8 +495,11 @@ def contenido(lab: dict, svg: str, objetos: dict, interfaces: dict | None = None
     # Los equipos ocupan su hueco. No llevan cartel: la vista ya les pone su etiqueta
     # grande con el nombre y la IP, y un cartel con las patas y el reparto no aportaba y
     # se comía el sitio de las cabeceras de las áreas.
-    ocupado = [(round(cx - TAMANO_EQUIPO / 2), round(cy - TAMANO_EQUIPO / 2),
-                TAMANO_EQUIPO, TAMANO_EQUIPO) for cx, cy in en_donde.values()]
+    ocupado = []
+    for rol, (cx, cy) in en_donde.items():
+        ancho_hueco, alto_hueco = hueco_de(donde, rol)
+        ocupado.append((round(cx - ancho_hueco / 2), round(cy - alto_hueco / 2),
+                        round(ancho_hueco), round(alto_hueco)))
 
     # Los rótulos se colocan de la zona más pequeña a la más grande: la pequeña —una sede
     # con su router y su switch, que es casi todo equipo y cable— no tiene dónde elegir, y

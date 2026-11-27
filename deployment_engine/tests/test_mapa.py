@@ -41,6 +41,16 @@ def con_vista(lab, cuantos=None):
     return {rol: 300 + i for i, rol in enumerate(equipos[:cuantos])}
 
 
+def con_vista_toda(lab):
+    """El laboratorio con TODOS sus equipos en la vista: también los puestos y servidores.
+
+    Los de red no bastan para comprobar el reparto: el hueco que se comía el bloque de
+    direcciones de un área era el de un puesto.
+    """
+    donde = mapa.disposicion(plano.plano(lab, "topologia"))
+    return {rol: 300 + i for i, rol in enumerate(sorted(donde["equipos"]))}
+
+
 class ElMapaDelLaboratorio(unittest.TestCase):
     def test_cada_area_del_plano_es_una_caja_del_mapa(self):
         lab = laboratorio()
@@ -89,8 +99,12 @@ class ElMapaDelLaboratorio(unittest.TestCase):
         for elemento in equipos:
             rol = [r for r, i in objetos.items() if i == elemento["objectId"]][0]
             cx, cy = donde["equipos"][rol]
+            ancho, alto = mapa.hueco_de(donde, rol)
             self.assertEqual((elemento["posX"], elemento["posY"]),
-                             (round(cx - mapa.TAMANO_EQUIPO / 2), round(cy - mapa.TAMANO_EQUIPO / 2)))
+                             (round(cx - ancho / 2), round(cy - alto / 2)))
+            # Y el hueco es el del símbolo del plano: el de 100 llegaba hasta el bloque de
+            # direcciones de su área y se lo comía.
+            self.assertEqual((elemento["width"], elemento["height"]), (round(ancho), round(alto)))
 
     def test_un_equipo_sin_vista_no_se_dibuja_y_sus_cables_tampoco(self):
         lab = laboratorio()
@@ -238,30 +252,46 @@ class ElMapaDelLaboratorio(unittest.TestCase):
         caja["TextBox"] = json.dumps(dentro)
         self.assertFalse(mapa.esta_al_dia(otro, contenido))
 
-    def test_el_rotulo_de_cada_area_no_lo_tapa_ningun_cable_ni_ningun_equipo(self):
-        """El motivo de que los rótulos no vayan en la caja: los cables pasan por encima."""
+    def test_ningun_equipo_se_queda_debajo_de_un_rotulo_de_area(self):
+        """Un icono encima de la cabecera de su red la tapa: eso sí que no se lee.
+
+        Un cable fino que cruce el texto se admite —la alternativa era arrinconar la
+        cabecera al fondo del área—, pero un equipo no: tapa la letra y además miente,
+        porque parece dentro de esa red y lo está de la de al lado.
+        """
         for nombre in todos_los_laboratorios():
             lab = laboratorio(nombre)
             svg = plano.plano(lab, "topologia")
             donde = mapa.disposicion(svg)
-            objetos = con_vista(lab)
+            objetos = con_vista_toda(lab)
             contenido = mapa.contenido(lab, svg, objetos)
-            dentro = {rol: sitio for rol, sitio in donde["equipos"].items() if rol in objetos}
-            cables = [(dentro[c["a"]["node"]], dentro[c["z"]["node"]]) for c in lab["links"]
-                      if c["a"]["node"] in dentro and c["z"]["node"] in dentro]
-            equipos = [(round(cx - mapa.TAMANO_EQUIPO / 2), round(cy - mapa.TAMANO_EQUIPO / 2),
-                        mapa.TAMANO_EQUIPO, mapa.TAMANO_EQUIPO) for cx, cy in dentro.values()]
-            for caja in [e for e in contenido["elements"] if e["type"] == mapa.ELEMENTO_TEXTO]:
-                texto = json.loads(mapa.texto_de(caja))["text"]
-                ancho, alto = mapa.tamano_de_rotulo(texto)
-                rect = (caja["posX"] - mapa.ETIQUETA_GUARDA, caja["posY"] - mapa.ETIQUETA_GUARDA,
-                        ancho + 2 * mapa.ETIQUETA_GUARDA, alto + 2 * mapa.ETIQUETA_GUARDA)
-                for uno, otro in cables:
-                    self.assertFalse(mapa.corta(rect, uno, otro),
-                                     f"{nombre}: un cable tapa «{texto}»")
+            equipos = []
+            for rol, (cx, cy) in donde["equipos"].items():
+                if rol not in objetos:
+                    continue
+                ancho, alto = mapa.hueco_de(donde, rol)
+                equipos.append((round(cx - ancho / 2), round(cy - alto / 2), round(ancho), round(alto)))
+            cajas = [e for e in contenido["elements"] if e["type"] == mapa.ELEMENTO_TEXTO]
+            por_area, i = [], 0
+            for area in donde["areas"]:
+                textos = mapa.rotulos_de(area)[0]
+                cajas_area = cajas[i:i + len(textos)]
+                i += len(textos)
+                # La cabecera es un bloque —título y rango—: sus renglones van pegados a
+                # propósito, así que se compara el bloque entero contra los demás.
+                x0 = min(c["posX"] for c in cajas_area)
+                y0 = min(c["posY"] for c in cajas_area)
+                x1 = max(c["posX"] + mapa.tamano_de_rotulo(json.loads(mapa.texto_de(c))["text"])[0]
+                         for c in cajas_area)
+                y1 = max(c["posY"] + mapa.ETIQUETA_ALTO for c in cajas_area)
+                rect = (x0, y0, x1 - x0, y1 - y0)
                 for hueco in equipos:
                     self.assertFalse(mapa.solapan(rect, hueco),
-                                     f"{nombre}: un equipo queda debajo de «{texto}»")
+                                     f"{nombre}: un equipo tapa «{area['titulo']}»")
+                for otro, quien in por_area:
+                    self.assertFalse(mapa.solapan(rect, otro),
+                                     f"{nombre}: «{area['titulo']}» y «{quien}» se montan")
+                por_area.append((rect, area["titulo"]))
 
     def test_el_rotulo_cae_dentro_del_area_que_rotula(self):
         """El rótulo de un área cae siempre dentro de su área: nunca en la de al lado."""
@@ -281,6 +311,48 @@ class ElMapaDelLaboratorio(unittest.TestCase):
                 self.assertLessEqual(caja["posX"] + ancho, area["x"] + area["ancho"], nombre)
                 self.assertGreaterEqual(caja["posY"], area["y"], nombre)
                 self.assertLessEqual(caja["posY"] + alto, area["y"] + area["alto"], nombre)
+
+    def test_el_rotulo_de_cada_area_va_en_su_esquina(self):
+        """La cabecera de un área se lee arriba a la izquierda, como la de la primera.
+
+        Antes se probaba la rejilla entera del área y, en cuanto un cable rozaba la esquina,
+        el rótulo se iba al otro extremo: la cabecera de una sede aparecía abajo y no había
+        forma de saber por qué. Si la esquina está ocupada, se corre por el mismo borde.
+        """
+        for nombre in todos_los_laboratorios():
+            lab = laboratorio(nombre)
+            svg = plano.plano(lab, "topologia")
+            donde = mapa.disposicion(svg)
+            cajas = [e for e in mapa.contenido(lab, svg, con_vista_toda(lab))["elements"]
+                     if e["type"] == mapa.ELEMENTO_TEXTO]
+            i = 0
+            for area in donde["areas"]:
+                ancho, _ = mapa.tamano_de_rotulo(mapa.rotulos_de(area)[0][0])
+                self.assertLessEqual(cajas[i]["posY"], round(area["y"] + area["alto"] / 2),
+                                     f"{nombre}: «{area['titulo']}» se fue a la mitad de abajo")
+                self.assertLessEqual(cajas[i]["posX"] + ancho, area["x"] + area["ancho"],
+                                     f"{nombre}: «{area['titulo']}» no cabe en su área")
+                # Y en la banda de la izquierda: si un cable o un equipo tapan la esquina,
+                # el rótulo baja por su borde izquierdo o se corre a lo sumo al centro del
+                # área, nunca al otro lado —que es lo que hacía parecer que cada cabecera
+                # se colocase donde le daba la gana.
+                self.assertLessEqual(cajas[i]["posX"], round(area["x"] + area["ancho"] / 2),
+                                     f"{nombre}: «{area['titulo']}» se fue al otro lado")
+                i += len(mapa.rotulos_de(area)[0])
+
+    def test_la_nube_dice_que_es_la_salida_y_no_un_bloque(self):
+        """La nube de Internet no lleva bloque de direcciones: lleva lo que es.
+
+        «Internet (/24)» con su rango se leía como un segmento más de la casa, y la nube es
+        justo lo contrario: la salida a la red pública.
+        """
+        for nombre in todos_los_laboratorios():
+            for area in [a for a in mapa.disposicion(plano.plano(laboratorio(nombre), "topologia"))["areas"]
+                         if a["nube"]]:
+                self.assertEqual(area["subred"], "", f"{nombre}: {area['titulo']}")
+                self.assertEqual(area["lema"], "salida a la red pública", f"{nombre}")
+                self.assertEqual(mapa.rotulos_de(area)[0],
+                                 [area["titulo"], area["lema"]], f"{nombre}")
 
     def test_un_rotulo_mas_ancho_que_su_area_se_parte(self):
         """Si el texto no cabe a lo ancho, se parte y el grupo sigue cabiendo entero."""
@@ -418,16 +490,24 @@ class ElMapaDelLaboratorio(unittest.TestCase):
             enlace["config"] = json.dumps(dict(reversed(list(dentro.items()))), ensure_ascii=False)
         self.assertTrue(mapa.esta_al_dia(vuelta, contenido))
 
-    def test_la_punta_del_cable_dice_la_interfaz_por_la_que_sale(self):
-        """El nombre de la interfaz viaja en la punta del cable, y ahí se lee."""
+    def test_la_punta_del_cable_dice_su_puerto(self):
+        """La punta dice el puerto —`p1`, `p2`— y no la interfaz: cuatro juntas se pisaban.
+
+        La interfaz no se pierde: viaja en el número de interfaz del enlace, que es lo que
+        la vista necesita para atar la punta al equipo.
+        """
         lab = laboratorio()
         svg = plano.plano(lab, "topologia")
         objetos = con_vista(lab)
         interfaces = {rol: {f"ether{n}": 900 + n for n in range(1, 9)} for rol in objetos}
         contenido = mapa.contenido(lab, svg, objetos, interfaces)
         for enlace, cable in zip(contenido["links"], lab["links"]):
-            self.assertEqual(enlace["connectorName1"], f"p{cable['a']['port']} ether{cable['a']['port']}")
-            self.assertEqual(enlace["connectorName2"], f"p{cable['z']['port']} ether{cable['z']['port']}")
+            self.assertEqual(enlace["connectorName1"], f"p{cable['a']['port']}")
+            self.assertEqual(enlace["connectorName2"], f"p{cable['z']['port']}")
+            self.assertEqual(enlace["interface1"],
+                             interfaces[cable["a"]["node"]][f"ether{cable['a']['port']}"])
+            self.assertEqual(enlace["interface2"],
+                             interfaces[cable["z"]["node"]][f"ether{cable['z']['port']}"])
 
     def test_la_vista_devuelve_el_rotulo_con_otro_nombre_y_no_por_eso_reescribe(self):
         """Al escribirla viaja en `TextBox`; al leerla vuelve en `config`, como un texto."""
