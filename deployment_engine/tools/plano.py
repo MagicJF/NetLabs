@@ -546,7 +546,11 @@ def _entre(una: Region, otra: Region) -> tuple[float, float]:
     x0, x1 = max(una.x, otra.x), min(una.x + una.ancho, otra.x + otra.ancho)
     y0, y1 = max(una.y, otra.y), min(una.y + una.alto, otra.y + otra.alto)
     if una.y + una.alto <= otra.y or otra.y + otra.alto <= una.y:
-        # Una encima de otra: el corte es horizontal, en el aire que las separa.
+        # Una encima de otra: el corte es horizontal, en la mitad del aire que las
+        # separa —del borde de la de arriba al de la de abajo—, y no dentro de una de
+        # ellas. Así el símbolo queda a caballo de la frontera, media caja en cada lado,
+        # que es donde se lee como la puerta entre las dos; metido en una, parecería un
+        # equipo suyo, y el hueco es simétrico, así que su mitad es su centro.
         arriba, abajo = sorted((una, otra), key=lambda r: r.y)
         corte = (arriba.y + arriba.alto + abajo.y) / 2
         if x1 > x0:

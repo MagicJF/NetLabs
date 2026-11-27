@@ -1764,6 +1764,21 @@ def netxms_marca_de(lab: str) -> str:
     return f"{NETXMS_MARCA}{lab}"
 
 
+HUELLA_EN_EL_MAPA = "plano="
+
+
+def netxms_huella_guardada(comentarios: str) -> str:
+    """La huella del plano que el motor dejó escrita en el mapa, si dejó alguna.
+
+    Se busca como palabra entera y no como trozo: una huella copiada a mano en medio de
+    otra cosa no es la marca del motor, y creer que sí dejaría el mapa congelado.
+    """
+    for trozo in str(comentarios or "").split():
+        if trozo.startswith(HUELLA_EN_EL_MAPA):
+            return trozo[len(HUELLA_EN_EL_MAPA):]
+    return ""
+
+
 def netxms_lab_de_marca(comentario: str) -> str:
     """El laboratorio que nombra la marca de un comentario; vacío si no lleva ninguna.
 
@@ -1775,6 +1790,7 @@ def netxms_lab_de_marca(comentario: str) -> str:
     laboratorio se escribe una sola vez.
     """
     return lab_from_comment(comentario or "") or ""
+
 
 
 def netxms_restos_de(nodos: list | dict | None, lab: str, equipos: list | None = None,
@@ -1830,9 +1846,12 @@ def _es_del_laboratorio(direccion: str, espacios: list | None) -> bool:
 def netxms_mapa_del_lab(hijos: list | None, lab: str, nombre: str | None = None) -> dict:
     """El mapa de este laboratorio entre los que cuelgan de la raíz de mapas.
 
-    Se reconoce por su nombre —el del laboratorio— y devuelve `{"id", "nombre", "ajeno"}`:
-    `id` vale 0 si no hay ninguno, y `ajeno` dice que el que se llama así lleva la marca de
-    **otro** laboratorio; entonces no es suyo y no se retira: se para y se dice.
+    Se reconoce por su nombre —el del laboratorio— y devuelve `{"id", "nombre", "ajeno",
+    "comentario"}`: `id` vale 0 si no hay ninguno, y `ajeno` dice que el que se llama así
+    lleva la marca de **otro** laboratorio; entonces no es suyo y no se retira: se para y se
+    dice. El comentario viaja con la ficha porque es donde el motor deja la huella de lo que
+    escribió: sin él no se puede distinguir un mapa que alguien ha ajustado a mano de uno
+    que ha quedado como el plano, y el `apply` escribiría encima del trabajo de una persona.
     """
     nombre = str(nombre or lab)
     for objeto in hijos or []:
@@ -1845,9 +1864,9 @@ def netxms_mapa_del_lab(hijos: list | None, lab: str, nombre: str | None = None)
         # —«revisar el lunes»— no demuestra que el mapa sea de otro y no puede bloquear
         # el propio, que se llama como el laboratorio y la raíz no admite dos iguales.
         lab_del_mapa = netxms_lab_de_marca(marca)
-        return {"id": int(objeto["id"]), "nombre": nombre,
+        return {"id": int(objeto["id"]), "nombre": nombre, "comentario": marca,
                 "ajeno": bool(lab_del_mapa) and lab_del_mapa != lab}
-    return {"id": 0, "nombre": nombre, "ajeno": False}
+    return {"id": 0, "nombre": nombre, "comentario": "", "ajeno": False}
 
 
 def netxms_mapa_crear_cuerpo(lab: str, raiz) -> str:
@@ -1996,7 +2015,8 @@ def netxms_interfaces_de(nodes: list[dict], censo: list | None, fichas: list | N
 
 def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: dict | None,
                     api: str, id_mapa, fichas: list | None = None,
-                    interfaces: list | None = None, svg: str | None = None) -> dict:
+                    interfaces: list | None = None, svg: str | None = None,
+                    comentarios: str = "") -> dict:
     """Lo que hay que escribir para que el mapa de la vista sea el plano del laboratorio.
 
     Sólo se escribe si el mapa que hay no es ya el que el plano pide: la segunda pasada no
@@ -2005,7 +2025,9 @@ def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: di
 
     `fichas` e `interfaces` son las dos lecturas con las que cada cable queda atado a la
     interfaz por la que sale (`netxms_interfaces_de`); sin ellas el mapa se dibuja igual,
-    pero sus cables unen dos iconos y no dicen por dónde van.
+    pero sus cables unen dos iconos y no dicen por dónde van. `comentarios` es el comentario
+    del objeto tal y como lo tiene la vista: ahí viaja la huella de lo que el motor escribió
+    la última vez, que es lo que distingue un ajuste a mano de un cambio del plano.
     """
     objetos, faltan = netxms_objetos_de(nodes, censo)
     if svg is None:
@@ -2025,15 +2047,29 @@ def netxms_mapa_ops(lab: dict, nodes: list[dict], censo: list | None, actual: di
     rotulos = sum(1 for e in deseado["elements"] if int(e.get("type") or 0) == mapa.ELEMENTO_TEXTO)
     cuenta = {"equipos": len(objetos), "interfaces": cuantas, "cables": len(deseado["links"]),
               "areas": cajas, "rotulos": rotulos}
-    if mapa.esta_al_dia(actual, deseado):
-        return {"ops": [], "pendientes": faltan, **cuenta}
-    return {
-        "ops": [{
+    escribir = mapa.que_escribir(actual, deseado, netxms_huella_guardada(comentarios))
+    if not escribir["dibujo"] and not escribir["huella"]:
+        return {"ops": [], "pendientes": faltan, "motivo": escribir["motivo"], **cuenta}
+    ops = []
+    if escribir["dibujo"]:
+        ops.append({
             "cmd": netxms_mapa_escribir_cmd(api, id_mapa),
             "cuerpo": mapa.cuerpo(deseado),
             "effect": (f"colocar el mapa {lab.get('lab')} como el plano: "
                        f"{len(objetos)} equipos, {len(deseado['links'])} cables y "
                        f"{cajas} áreas"),
-        }],
+        })
+    if escribir["huella"]:
+        # Va en su propia petición porque el API no admite el comentario en el `PUT` del
+        # dibujo; cuando el dibujo ya es el del plano, es la única que se manda.
+        ops.append({
+            "cmd": netxms_cmd(api, f"/objects/{int(id_mapa)}", "PUT"),
+            "cuerpo": json.dumps({"comments": f"{netxms_marca_de(str(lab.get('lab') or ''))} "
+                                             f"{HUELLA_EN_EL_MAPA}{mapa.huella(deseado)}"}),
+            "effect": "dejar en el mapa la huella de lo que el motor escribió",
+        })
+    return {
+        "motivo": escribir["motivo"],
+        "ops": ops,
         "pendientes": faltan, **cuenta,
     }

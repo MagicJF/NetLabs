@@ -1489,6 +1489,110 @@ class LaCuentaDelMapa(unittest.TestCase):
         self.assertEqual(plan["cables"], 1)
 
 
+class ElMapaQueAlguienAjusta(unittest.TestCase):
+    """Qué se escribe del mapa —el dibujo, su huella o nada— y con qué comentario.
+
+    El dibujo y su huella viajan en dos peticiones del API, así que el motor tiene que poder
+    mandar sólo una: dejar la huella sola cuando el dibujo ya es el del plano —un mapa de
+    antes de esta regla, o un `apply` cortado entre las dos—, y no mandar ninguna cuando ya
+    está todo. El comentario del objeto es el otro extremo del recorrido: sin él, la huella
+    no se comprueba y un ajuste a mano se borra.
+    """
+
+    API = "http://127.0.0.1:8000/v1"
+    LAB = {
+        "lab": "z_prueba",
+        "networks": [{"name": "lan1", "address": "10.20.0.0/24"}],
+        "nodes": [
+            {"role": "rte1", "name": "rte1", "type": "router", "mgmt_address": "10.20.0.11",
+             "networks": ["lan1"]},
+            {"role": "rta1", "name": "rta1", "type": "router", "mgmt_address": "10.20.0.12",
+             "networks": ["lan1"]},
+        ],
+        "links": [{"a": {"node": "rte1", "port": 1}, "z": {"node": "rta1", "port": 1}}],
+    }
+    NODOS = LAB["nodes"]
+    CENSO = [
+        {"id": 100, "name": "rte1", "ipAddress": {"address": "10.20.0.11"}},
+        {"id": 101, "name": "rta1", "ipAddress": {"address": "10.20.0.12"}},
+    ]
+    FICHAS = [
+        {"id": 100, "class": "Node", "children": [1]},
+        {"id": 101, "class": "Node", "children": [2]},
+    ]
+    INTERFACES = [
+        {"id": 1, "class": "Interface", "name": "ether1"},
+        {"id": 2, "class": "Interface", "name": "ether1"},
+    ]
+    SVG = ('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300">'
+           '<g data-area="Núcleo" data-x="10" data-y="10" data-ancho="180" data-alto="120" '
+           'data-subred="10.20.0.0/24" data-nube="0"/>'
+           '<g data-rol="rte1" data-x="60.0" data-y="60.0"/>'
+           '<g data-rol="rta1" data-x="120.0" data-y="60.0"/></svg>')
+
+    def dibujo_del_plano(self):
+        """El mapa que el plano pide, derivado como lo deriva el motor."""
+        objetos, _ = converge.netxms_objetos_de(self.NODOS, self.CENSO)
+        atadas = converge.netxms_interfaces_de(self.NODOS, self.CENSO, self.FICHAS,
+                                              self.INTERFACES)
+        return mapa.contenido(self.LAB, self.SVG, objetos, atadas)
+
+    def comentario_con(self, huella: str) -> str:
+        """El comentario que el motor deja en el mapa: su marca y la huella del dibujo."""
+        return f"{converge.netxms_marca_de('z_prueba')} {converge.HUELLA_EN_EL_MAPA}{huella}"
+
+    def plan(self, actual, comentarios=""):
+        return converge.netxms_mapa_ops(self.LAB, self.NODOS, self.CENSO, actual, self.API,
+                                        "7", self.FICHAS, self.INTERFACES, self.SVG,
+                                        comentarios)
+
+    def test_el_mapa_que_nace_se_escribe_y_se_sella(self):
+        """Las dos peticiones: el dibujo del plano y, detrás, su huella en el comentario."""
+        plan = self.plan(None)
+        self.assertEqual(plan["motivo"], "no hay mapa todavía")
+        self.assertEqual(len(plan["ops"]), 2, "el mapa nuevo no se sella")
+        sello = json.loads(plan["ops"][1]["cuerpo"])["comments"]
+        self.assertEqual(converge.netxms_lab_de_marca(sello), "z_prueba")
+        self.assertEqual(converge.netxms_huella_guardada(sello),
+                         mapa.huella(self.dibujo_del_plano()))
+
+    def test_la_segunda_pasada_no_escribe_nada(self):
+        """Idempotencia: el dibujo del plano con su huella no produce ninguna operación."""
+        dibujo = self.dibujo_del_plano()
+        plan = self.plan(dibujo, self.comentario_con(mapa.huella(dibujo)))
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(plan["motivo"], "ya es el del plano")
+
+    def test_un_mapa_de_antes_de_la_huella_recibe_solo_su_huella(self):
+        """Ya coincide con el plano y no lleva huella: se le pone, sin reescribir el dibujo."""
+        plan = self.plan(self.dibujo_del_plano(), "")
+        self.assertEqual(len(plan["ops"]), 1,
+                         "se ha reescrito un dibujo que ya era el del plano")
+        self.assertIn("/objects/7", " ".join(plan["ops"][0]["cmd"]))
+        self.assertEqual(converge.netxms_huella_guardada(
+            json.loads(plan["ops"][0]["cuerpo"])["comments"]),
+            mapa.huella(self.dibujo_del_plano()))
+        self.assertEqual(plan["motivo"], "faltaba la huella")
+
+    def test_un_apply_cortado_entre_el_dibujo_y_la_huella_se_repara(self):
+        """El dibujo del plano con una huella que no cuadra es un corte, no un ajuste.
+
+        Demuestra que no se lee como «ajustado a mano» —lo que dejaría el mapa congelado
+        para siempre— sino que se vuelve a dejar la huella del dibujo que hay.
+        """
+        plan = self.plan(self.dibujo_del_plano(), self.comentario_con("0" * 40))
+        self.assertEqual(len(plan["ops"]), 1)
+        self.assertEqual(plan["motivo"], "la huella no cuadraba")
+
+    def test_un_mapa_ajustado_a_mano_no_se_toca(self):
+        """La huella no cuadra y el dibujo no es el del plano: manda quien lo movió."""
+        movido = json.loads(json.dumps(self.dibujo_del_plano()))
+        movido["elements"][0]["posX"] = movido["elements"][0]["posX"] + 40
+        plan = self.plan(movido, self.comentario_con(mapa.huella(self.dibujo_del_plano())))
+        self.assertEqual(plan["ops"], [], "el apply ha pisado el mapa que alguien movió")
+        self.assertEqual(plan["motivo"], "ajustado a mano")
+
+
 class ElMarcadorLimpio(unittest.TestCase):
     """Qué alarmas de la vista se dan por resueltas al converger un laboratorio.
 
@@ -1653,7 +1757,7 @@ class LoQueElDestroyRetiraDeLaVista(unittest.TestCase):
             {"id": 7, "class": "NetworkMap", "name": self.LAB, "comments": ""},
         ]
         self.assertEqual(converge.netxms_mapa_del_lab(hijos, self.LAB),
-                         {"id": 7, "nombre": self.LAB, "ajeno": False})
+                         {"id": 7, "nombre": self.LAB, "comentario": "", "ajeno": False})
 
     def test_un_mapa_ajeno_con_el_mismo_nombre_no_se_retira(self):
         hijos = [{"id": 7, "class": "NetworkMap", "name": self.LAB,
@@ -1695,7 +1799,8 @@ class LoQueElDestroyRetiraDeLaVista(unittest.TestCase):
                                   "comments": "netlabs lab=b_router_dos_puestos"})
         nacido = dict(cuerpo, id=11)
         self.assertEqual(converge.netxms_mapa_del_lab([nacido], self.LAB),
-                         {"id": 11, "nombre": self.LAB, "ajeno": False})
+                         {"id": 11, "nombre": self.LAB,
+                          "comentario": "netlabs lab=b_router_dos_puestos", "ajeno": False})
 
 
 if __name__ == "__main__":

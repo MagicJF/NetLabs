@@ -18,10 +18,12 @@
 # LÍMITES:     no registra equipos —eso es `netxms.yml`, y va antes— ni decide dónde va nada:
 #              la colocación y las posiciones son del plano (`tools/mapa.py`), y este fichero
 #              se limita a mandarlas. No dibuja los mapas de comprobación, que son del
-#              servidor. No corrige a mano el mapa que hay: el `PUT` lo reemplaza entero, así
-#              que un ajuste hecho a mano en la vista se pierde cuando el plano cambia. Y no
-#              sabe de nada fuera de este laboratorio: el de direcciones, que sí enseña los
-#              demás, lo dibuja la vista por su cuenta —aquí sólo se le dice de dónde parte—.
+#              servidor. Manda quien ajusta el mapa a mano: si el dibujo que hay no es el que
+#              el motor escribió —su huella va en el comentario del mapa, ADR 0016— no se
+#              toca, y devolverlo al plano es cosa de una persona: se borra el mapa (o su
+#              comentario) y se lanza `apply`. Y no sabe de nada fuera de este laboratorio:
+#              el de direcciones, que sí enseña los demás, lo dibuja la vista por su cuenta
+#              —aquí sólo se le dice de dónde parte—.
 # VER:         docs/diseno.md §2.9 (el mapa a medida), §3.6;
 #              docs/decisiones/0004-el-mapa-de-la-vista-lo-coloca-el-plano.md y
 #              docs/decisiones/0005-el-mapa-dice-lo-que-dice-el-yaml.md
@@ -193,7 +195,8 @@
     netxms_mapa_plan: >-
       {{ lab | netlabs_netxms_mapa_ops(equipos, netxms_censo,
          interior.stdout | default('{}', true) | from_json, netxms_api, netxms_mapa_id,
-         netxms_fichas | default([], true), netxms_interfaces | default([], true)) }}
+         netxms_fichas | default([], true), netxms_interfaces | default([], true),
+         netxms_mapa.comentario | default('', true)) }}
 
 - name: netxms · colocar el mapa del laboratorio como el plano
   include_tasks: interior_ssh.yml
@@ -220,7 +223,7 @@
       los pone el plano, con {{ netxms_mapa_plan.interfaces }} interfaces puestas en sus
       puntas y {{ netxms_mapa_plan.rotulos }} etiquetas —la ficha de cada equipo con sus
       patas y sus direcciones, y el nombre y el bloque de cada zona—.{% if
-      netxms_mapa_plan.ops | length == 0 %} Ya está como el plano.{% endif %}
+      netxms_mapa_plan.ops | length == 0 %} {{ netxms_mapa_plan.motivo }}.{% endif %}
 
 # Un equipo de red que la vista no conozca no se puede dibujar: se dice con su nombre,
 # porque un mapa al que le falta un router sin decirlo es un mapa que miente.
