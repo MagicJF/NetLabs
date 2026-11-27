@@ -198,6 +198,14 @@ class FilterModule:
             "netlabs_netxms_mapa_leer_cmd": lambda api, id_mapa:
                 converge.netxms_mapa_leer_cmd(api, id_mapa),
             "netlabs_netxms_interfaces_cmd": lambda api: converge.netxms_interfaces_cmd(api),
+            # El marcador limpio: las alarmas de los equipos del laboratorio, resueltas.
+            "netlabs_netxms_alarmas_cmd": lambda api: converge.netxms_alarmas_cmd(api),
+            "netlabs_netxms_alarmas_propias": lambda alarmas, ids:
+                converge.netxms_alarmas_propias(alarmas, ids),
+            "netlabs_netxms_propios": lambda nodes, censo:
+                converge.netxms_propios_de(nodes, censo),
+            "netlabs_netxms_alarma_resolver_cmd": lambda api, id_alarma:
+                converge.netxms_alarma_resolver_cmd(api, id_alarma),
             "netlabs_netxms_interfaces_cuerpo": lambda api=None: converge.netxms_interfaces_cuerpo(),
             "netlabs_netxms_mapa_ops": lambda lab, nodes, encontrados, actual, api, id_mapa,
                 fichas=None, interfaces=None: converge.netxms_mapa_ops(

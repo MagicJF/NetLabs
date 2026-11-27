@@ -1,0 +1,90 @@
+# PROPÓSITO:   dejar el marcador limpio en la vista. La vista NO resuelve sola sus alarmas:
+#              una que saltó una vez —la MAC de un invitado que cambió al volver a crearlo,
+#              una MAC que dos nodos compartieron un instante, la máscara de una pata que
+#              era /30 y ahora es /26— se queda viva para siempre, y con ella el equipo en
+#              amarillo en el mapa a medida: el dibujo enseña un mal que ya no está. Aquí se
+#              dan por resueltas las de los equipos de ESTE laboratorio, al final del apply,
+#              que es cuando el laboratorio está convergido y ya se sabe qué queda vivo.
+# INVARIANTES: se llama con `curl` desde DENTRO del invitado de gestión, por la puerta de
+#              siempre, y va DESPUÉS del mapa (`netxms_mapa.yml`), que es quien deja el
+#              laboratorio dibujado. Sólo se tocan alarmas cuyo `source` es el número de un
+#              equipo de este laboratorio —emparejado por nombre Y dirección, que un
+#              homónimo con otra dirección es de otro y sus alarmas no se miran—: las de
+#              otro no se tocan. Sólo las VIVAS (`state`
+#              0) y de aviso para arriba: el ruido que la vista apunta sola —un paquete
+#              instalado— no se toca. El testigo de la sesión va por la entrada estándar,
+#              nunca en la línea de órdenes, y ninguna respuesta se imprime.
+#              Si el mal sigue de verdad, la vista vuelve a levantar la alarma en su
+#              siguiente vuelta: resolver no es esconder, es dejar de repetir lo que ya
+#              pasó. Y un apply sin nada que resolver no cambia nada (`changed=0`).
+# LÍMITES:     no arregla la causa de ninguna alarma —la arregla la convergencia, o no la
+#              arregla nadie— y no toca la topología IP de la vista, que su API no expone:
+#              una subred vieja que la vista recuerde sólo se retira desde su consola, y de
+#              ahí vuelve a salir la alarma de la máscara. Tampoco decide qué es un mal:
+#              obedece a la vista, que es quien lo dice con su severidad.
+# VER:         docs/diseno.md §3.4;
+#              docs/decisiones/0013-el-motor-deja-el-marcador-limpio.md
+
+# --- los equipos de este laboratorio en la vista ------------------------------
+# El marcador necesita los números de sus equipos, y aquí no vale el nombre solo: dos
+# laboratorios pueden tener cada uno su equipo de red con el mismo nombre apuntando a
+# máquinas distintas, y con los dos números el bucle resolvería las alarmas del otro. Se
+# empareja por nombre Y dirección, como el mapa. La búsqueda de fichas del registro sí
+# sigue siendo más ancha (`netxms_ids`): la ficha de un homónimo es la única prueba de
+# quién lo creó.
+- name: netxms · los equipos de este laboratorio en la vista
+  ansible.builtin.set_fact:
+    netxms_propios: "{{ equipos | netlabs_netxms_propios(netxms_censo | default([], true)) }}"
+
+# --- leer el marcador --------------------------------------------------------
+- name: netxms · leer el marcador de la vista
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · leer el marcador de la vista"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_alarmas_cmd }}"
+  when: netxms_propios | default([], true) | length > 0
+
+- name: netxms · el marcador que devolvió la vista
+  ansible.builtin.set_fact:
+    netxms_alarmas: "{{ interior.stdout | default('[]', true) | from_json }}"
+  when: netxms_propios | default([], true) | length > 0
+
+# Las del laboratorio y no las de otro: el `source` de cada alarma es el número de su
+# equipo, y los números propios se leen del censo por nombre y dirección.
+- name: netxms · las alarmas de los equipos de este laboratorio
+  ansible.builtin.set_fact:
+    netxms_alarmas_propias: >-
+      {{ netxms_alarmas | default([], true)
+         | netlabs_netxms_alarmas_propias(netxms_propios | default([], true)) }}
+  when: netxms_propios | default([], true) | length > 0
+
+- name: netxms · lo que hay que limpiar
+  ansible.builtin.debug:
+    msg: "{{ netxms_alarmas_propias | map(attribute='message') | list }}"
+  when: netxms_alarmas_propias | default([], true) | length > 0
+
+- name: netxms · dar por resueltas las alarmas del laboratorio
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · resolver una alarma del laboratorio"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: true
+    interior_secreto: "{{ netxms_testigo }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_alarma_resolver_cmd(netxms_alarma.id) }}"
+  loop: "{{ netxms_alarmas_propias | default([], true) }}"
+  loop_control: {loop_var: netxms_alarma, label: "{{ netxms_alarma.message }}"}
+  when: netxms_alarmas_propias | default([], true) | length > 0
+
+- name: netxms · el marcador del laboratorio queda limpio
+  ansible.builtin.debug:
+    msg: >-
+      {{ netxms_alarmas_propias | length }} alarma(s) del laboratorio dadas por resueltas.
+      Si el mal sigue, la vista las volverá a levantar en su siguiente vuelta.
+  when: netxms_alarmas_propias | default([], true) | length > 0

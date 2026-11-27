@@ -427,6 +427,21 @@ el plano. El mapa que se mantiene es el que el motor coloca a medida, y es el ú
 mirar. Los mapas de comunicación interna y de OSPF tampoco se dan de alta: describen protocolos
 que estos laboratorios no usan.
 
+**El marcador se deja limpio.** El color de un equipo en el mapa sale de sus alarmas vivas, y
+la vista **no resuelve sola** una alarma que saltó una vez —la MAC de un invitado que cambió al
+volver a crearlo se queda viva para siempre, y con ella el equipo en amarillo aunque el mal ya
+no esté—. Por eso, al final del `apply` —después del registro y del mapa, que son quienes dan
+de alta y dibujan—, el motor lee el registro de alarmas y **da por resueltas las de los equipos
+de este laboratorio**: sólo las vivas y de aviso para arriba, y sólo si su `source` es uno de
+los equipos que este laboratorio registró. Las de otro laboratorio no se tocan, y el ruido que
+la vista apunta sola (un paquete instalado) tampoco. No se arregla ninguna causa: si el mal
+sigue, la vista **vuelve a levantar** su alarma en la siguiente vuelta —resolver no es esconder,
+es dejar de repetir lo que ya pasó—, y el informe dice cuántas se dieron por resueltas. Un
+`apply` sin nada que resolver sigue dando `changed=0`. Queda una alarma que el motor no puede
+quitar: la de la **máscara**, que sale de la topología IP de la vista —una subred que aprendió
+cuando las patas del tránsito eran `/30`— y que su API no expone; sólo se retira desde su
+consola (0013).
+
 ### 3.5. Pools: el plano de gestión y los laboratorios no se mezclan
 
 - **Pool de gestión (persistente):** el servicio de observación y camino. Ningún laboratorio

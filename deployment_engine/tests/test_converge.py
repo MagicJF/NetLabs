@@ -1489,5 +1489,73 @@ class LaCuentaDelMapa(unittest.TestCase):
         self.assertEqual(plan["cables"], 1)
 
 
+class ElMarcadorLimpio(unittest.TestCase):
+    """Qué alarmas de la vista se dan por resueltas al converger un laboratorio.
+
+    La vista no resuelve sola una alarma que saltó una vez —la MAC de un invitado que
+    cambió al volver a crearlo—, y con ella el equipo se queda en amarillo aunque el mal
+    ya no esté. Se resuelven las del laboratorio, y sólo las suyas.
+    """
+
+    MIOS = [526, 527, 528]
+
+    def alarma(self, source, severity=3, state=0, message="Duplicate MAC address found",
+               id=1):
+        return {"id": id, "source": source, "severity": severity, "state": state,
+                "message": message}
+
+    def test_una_alarma_viva_de_un_equipo_del_laboratorio_se_resuelve(self):
+        propias = converge.netxms_alarmas_propias([self.alarma(526)], self.MIOS)
+        self.assertEqual([a["id"] for a in propias], [1])
+
+    def test_la_alarma_de_otro_laboratorio_no_se_toca(self):
+        # Los números de otro laboratorio no están entre los míos: no se mira su marcador.
+        self.assertEqual(converge.netxms_alarmas_propias([self.alarma(900)], self.MIOS), [])
+
+    def test_una_alarma_ya_resuelta_no_se_vuelve_a_resolver(self):
+        # `state` 2 es resuelta: volver a resolverla no cambia nada y ensucia el registro.
+        self.assertEqual(
+            converge.netxms_alarmas_propias([self.alarma(526, state=2)], self.MIOS), [])
+
+    def test_el_ruido_de_severidad_normal_no_se_resuelve(self):
+        # Severidad 0 es lo que la vista apunta sola (un paquete instalado): no es un mal.
+        self.assertEqual(
+            converge.netxms_alarmas_propias([self.alarma(526, severity=0)], self.MIOS), [])
+
+    def test_una_alarma_de_aviso_para_arriba_si_se_resuelve(self):
+        propias = converge.netxms_alarmas_propias(
+            [self.alarma(527, severity=1), self.alarma(528, severity=2, id=2)], self.MIOS)
+        self.assertEqual([a["id"] for a in propias], [1, 2])
+
+    def test_sin_alarmas_no_hay_nada_que_resolver(self):
+        self.assertEqual(converge.netxms_alarmas_propias([], self.MIOS), [])
+        self.assertEqual(converge.netxms_alarmas_propias(None, self.MIOS), [])
+
+    NODOS = [{"role": "rta1", "name": "rta1", "mgmt_address": "10.30.0.101"}]
+
+    def test_el_homonimo_de_otro_laboratorio_no_entra_en_la_limpieza(self):
+        """Dos `rta1` con distinta dirección: sólo el de aquí se resuelve.
+
+        Demuestra el caso que se lleva por delante el marcador de otro laboratorio: el
+        nombre es del laboratorio, no de la vista, así que dos laboratorios pueden tener
+        cada uno su `rta1` apuntando a máquinas distintas. Los números propios se emparejan
+        por nombre Y dirección, y con ellos la alarma del homónimo queda fuera. La lectura
+        de fichas sigue viendo los dos, que es lo que hace falta para saber quién creó el
+        resto.
+        """
+        censo = [
+            {"id": 526, "name": "rta1", "ipAddress": {"address": "10.30.0.101"}},  # de este
+            {"id": 901, "name": "rta1", "ipAddress": {"address": "10.40.0.101"}},  # homónimo
+        ]
+        propios = converge.netxms_propios_de(self.NODOS, censo)
+        self.assertEqual(propios, [526])
+        propias = converge.netxms_alarmas_propias(
+            [self.alarma(526), self.alarma(901, id=2)], propios)
+        self.assertEqual([a["id"] for a in propias], [1])
+        # La ficha del homónimo se sigue leyendo en el registro: sin ella no se sabe quién
+        # lo creó y un resto no se puede retirar sin arriesgar el histórico de otro.
+        self.assertEqual(converge.netxms_ids(self.NODOS, censo), [526, 901])
+
+
 if __name__ == "__main__":
     unittest.main()
