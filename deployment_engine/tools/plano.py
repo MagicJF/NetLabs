@@ -175,7 +175,11 @@ def _simbolo(tipo: str, cx: float, cy: float, escala: float = 1.0,
     leer el plano a ojo.
     """
     quien = f' data-rol="{_esc(rol)}"' if rol else ""
+    # El símbolo dice lo que ocupa: la vista dibuja el equipo en un hueco de ese tamaño
+    # —y no en uno de 100 como antes, que tocaba la cabecera de su área—.
+    ancho, alto = SIMBOLO.get(tipo) or (40, 40)
     return (f'<g{quien} data-x="{cx:.1f}" data-y="{cy:.1f}" '
+            f'data-ancho="{ancho * escala:.1f}" data-alto="{alto * escala:.1f}" '
             f'transform="translate({cx:.1f},{cy:.1f}) scale({escala})">'
             f'{_simbolo_cisco(tipo)}</g>')
 
@@ -373,6 +377,9 @@ class Region(Caja):
         self.espina = False
         self.cabecera = 40.0
         self.servicios: list[str] = []
+        # La leyenda de un área que no es una red del cliente —la nube de Internet—:
+        # ocupa el renglón del bloque y dice qué es, en vez de un rango que no lo es.
+        self.lema = ""
         # Una nube no es un área del cliente: es la red del proveedor y se dibuja como
         # tal. Y `enchufe` es el equipo que reparte dentro del área —el switch de
         # acceso—, que va en su propia fila arriba para que los cables entren por él.
@@ -393,7 +400,7 @@ class Region(Caja):
 def _mide_cabecera(region: Region) -> float:
     """El alto del encabezado: nombre, subred y, en una red, lo que tiene montado."""
     alto = 22.0
-    if region.subred:
+    if region.subred or region.lema:
         alto += 15.0
     alto += 14.0 * len(region.servicios)
     return max(alto, 32.0)
@@ -421,6 +428,12 @@ def _arbol(lab: dict) -> Region:
         # `shape: cloud` es una decisión de dibujo: la red se pinta como nube porque no
         # es un segmento del cliente, no porque el despliegue sea distinto.
         region.nube = net.get("shape") == "cloud"
+        if region.nube:
+            # La nube no es una red más de la casa: es por donde se sale a Internet. Su
+            # cabecera lo dice con una leyenda, no con un bloque de direcciones —«Internet
+            # (/24)» se leía como un segmento del cliente y no lo es—.
+            region.lema = "salida a la red pública"
+            region.subred = ""
         # Dos redes con la misma dirección se toman la una a la otra como padre y
         # ninguna queda como raíz: el árbol se construye recurriendo y el plano se cae
         # con un error interno. La validación del laboratorio ya lo rechaza; aquí se
@@ -840,6 +853,51 @@ def _repartir_equipos(region: Region) -> None:
         region.dentro[rol] = (x_clientes, medio - alto_fila / 2 + paso * i)
 
 
+def _repartir_asomados(borde: list[tuple[str, Region, Region, float]],
+                       casa_de: dict[str, Region]) -> None:
+    """Reparte los routers de borde que comparten techo y nube sobre su frontera común.
+
+    Con tres sedes hermanas de la misma anchura apiladas bajo la misma compañía, la caja
+    que las envuelve no es más ancha que una sola sede y sus centros caen en la misma
+    vertical: los tres routers de borde apuntan al mismo punto, se dibujan uno encima de
+    otro y sus cables parecen salir de un solo equipo. Se reparten a lo largo del tramo
+    que el techo de la compañía y la nube tienen en común —la frontera por la que todos
+    salen— sin repetir posiciones, y cada uno sigue asomando bajo su nube.
+
+    Cada entrada del borde es (rol, caja, nube, ancho): el techo que pisa, la nube por la
+    que sale y el ancho de su símbolo, que manda sobre la separación mínima.
+    """
+    if len(borde) < 2:
+        return
+    # El símbolo más ancho manda: dos centros más cerca que eso se tapan (§2.10).
+    minimo = max(ancho for *_, ancho in borde) + 2
+    previas = [casa_de[rol].dentro[rol][0] for rol, *_ in borde]
+    if all(abs(a - b) >= minimo
+           for i, a in enumerate(previas) for b in previas[i + 1:]):
+        # Cada uno en la vertical de su sede, y ninguna coincide: ya no se tapan y
+        # moverlos los despegaba de la sede que salen, que es lo que los identifica.
+        return
+    _, caja, nube, _ = borde[0]
+    guarda = max(SIMBOLO["internet"][0], 2 * HUECO_NUBE) / 2
+    # El tramo común: lo que el techo de la compañía y la nube comparten a la vez. Si no
+    # se solapan —la nube cae fuera de la caja—, se reparten sobre la nube, que es el
+    # borde por el que se lee la salida.
+    x0 = max(caja.x, nube.x + guarda)
+    x1 = min(caja.x + caja.ancho, nube.x + nube.ancho - guarda)
+    if x1 <= x0:
+        x0, x1 = nube.x + guarda, nube.x + nube.ancho - guarda
+    paso = (x1 - x0) / (len(borde) + 1)
+    if paso < minimo:
+        # El tramo no da para un diámetro por equipo: se usa el mínimo imprescindible y
+        # el reparto se centra en él. Un símbolo tapado es peor que uno que sobresale.
+        centro = (x0 + x1) / 2
+        xs = [centro + minimo * (i - (len(borde) - 1) / 2) for i in range(len(borde))]
+    else:
+        xs = [x0 + paso * (i + 1) for i in range(len(borde))]
+    for (rol, caja, _, _), x in zip(borde, xs):
+        casa_de[rol].dentro[rol] = (x, caja.y)
+
+
 def _plano_anidado(lab: dict) -> str:
     """El plano de topología: áreas dentro de áreas, y cada equipo a caballo de las suyas."""
     raiz = _arbol(lab)
@@ -874,6 +932,9 @@ def _plano_anidado(lab: dict) -> str:
     # Dos equipos pueden compartir frontera —los dos routers de borde, sin ir más
     # lejos—: se reparten a lo largo de ella en vez de dibujarse uno encima del otro.
     por_frontera: dict[tuple[int, int], list[str]] = {}
+    # Los routers que se asoman por el mismo techo a la misma nube se reparten juntos,
+    # y el reparto se hace al final: uno solo no sabe con quién comparte la frontera.
+    asomados: dict[tuple[int, int], list[tuple[str, Region, Region, float]]] = {}
     for rol, grupos in cruces.items():
         clave = tuple(sorted((id(grupos[0]), id(grupos[1]))))
         por_frontera.setdefault(clave, []).append(rol)
@@ -884,21 +945,29 @@ def _plano_anidado(lab: dict) -> str:
         una, otra = grupos[0], grupos[1]
         casa = casa_de[rol]
         if una.nube or otra.nube:
-            # El router de borde no flota en el aire que separa la nube de la empresa:
-            # se apoya en la frontera de la empresa, que es donde acaba la red propia,
-            # y a la altura de SU sede. Las dos sedes tienen su propia salida, así que
-            # no pueden acabar los dos routers en el mismo punto del borde.
+            # El router de borde vive EN la frontera entre Internet y la empresa: se apoya
+            # en el techo de la caja que contiene a su sede —la empresa— y se asoma bajo la
+            # nube, que es su salida. Metido en la caja parecía un equipo más de la red
+            # privada, que es justo lo que no es; y cada sede tiene la suya, así que los dos
+            # routers de borde no pueden acabar en el mismo punto del borde.
             dentro = otra if una.nube else una
+            nube = otra if otra.nube else una
             suya = [q for q in patas.get(rol) or [] if not q.nube]
-            x = (suya[0].x + suya[0].ancho / 2) if suya else dentro.x + dentro.ancho / 2
-            repartible = False
-            # El router de borde tiene una pata en su sede y otra en Internet: va a
-            # caballo del techo de SU SEDE, no del techo de la empresa. Puesto en el
-            # borde de la caja grande, no interseca ninguna de las dos redes que une.
             caja = suya[0] if suya else dentro
             while caja.padre is not None and not caja.padre.sintetica:
                 caja = caja.padre
-            y = (suya[0].y if suya else caja.y)
+            # El asomo se arrima a la vertical de la nube, sin salirse de ella: un router
+            # justo debajo de su nube se lee como su salida, y uno lejos de ella, no.
+            centro = (suya[0].x + suya[0].ancho / 2) if suya else dentro.x + dentro.ancho / 2
+            guarda = max(SIMBOLO["internet"][0], 2 * HUECO_NUBE) / 2
+            izquierda, derecha = nube.x + guarda, nube.x + nube.ancho - guarda
+            x = min(max(centro, izquierda), derecha) if derecha >= izquierda else centro
+            # Posición provisional: la definitiva la fija el reparto de los que comparten
+            # techo y nube, que sólo puede hacerse cuando se conocen todos.
+            asomados.setdefault((id(caja), id(nube)), []).append(
+                (rol, caja, nube, max(SIMBOLO[por_nodo[rol]["type"]])))
+            casa_de[rol].dentro[rol] = (x, caja.y)
+            continue
         elif _contiene(una, otra) or _contiene(otra, una):
             # Una dentro de otra: el router se apoya en el costado de la de dentro que
             # mira al pasillo de la casa. En el techo chocaría con su cabecera, y ahí
@@ -945,6 +1014,8 @@ def _plano_anidado(lab: dict) -> str:
                 comun = (max(una.y, otra.y), min(una.y + una.alto, otra.y + otra.alto))
                 y = reparto(comun[0], comun[1], hermanos.index(rol))
         casa_de[rol].dentro[rol] = (x, y)
+    for borde in asomados.values():
+        _repartir_asomados(borde, casa_de)
 
     def punto_de(rol: str) -> tuple[float, float]:
         for region in regiones:
@@ -1011,8 +1082,24 @@ def _plano_anidado(lab: dict) -> str:
     lados: dict[str, str] = {}
     deslices: dict[str, tuple[float, float]] = {}
     nombres: dict[str, tuple[float, float, float, float]] = {}
+    # La boca de cada cable: ahí mismo, pegado a su equipo, se escribe el número del puerto.
+    # Esa banda no entraba en el modelo de obstáculos —el número lo pone el cable, que se
+    # dibuja después— y el nombre del equipo acababa escrito encima del «p1».
+    bocas: list[tuple[float, float, float, float]] = []
+    for a, _, z, _ in cables:
+        for rol, otro in ((a, z), (z, a)):
+            try:
+                (cx, cy), (ox, oy) = punto_de(rol), punto_de(otro)
+            except KeyError:
+                continue
+            ancho, alto = SIMBOLO[tipos[rol]]
+            if abs(oy - cy) >= abs(ox - cx):
+                boca = (cx, cy + (alto / 2 + 9) * (1 if oy >= cy else -1))
+            else:
+                boca = (cx + (ancho / 2 + 9) * (1 if ox >= cx else -1), cy)
+            bocas.append((boca[0] - 36, boca[1] - 9, boca[0] + 36, boca[1] + 9))
     ocupado: list[tuple[float, float, float, float]] = (list(simbolos.values())
-                                                        + list(rotulos))
+                                                        + list(rotulos) + bocas)
     for region in regiones:
         for rol, (cx, cy) in region.dentro.items():
             lineas = _que_dice(por_nodo[rol])
@@ -1028,18 +1115,34 @@ def _plano_anidado(lab: dict) -> str:
             candidatos: list[tuple[str, tuple[float, float]]] = []
             for lado in [pide] + [l for l in ("abajo", "derecha", "izquierda", "arriba")
                                   if l != pide]:
-                for paso in (0, 6, -6, 12, -12, 18, -18, 24, -24):
-                    aparte = ((paso, 0.0) if lado in ("abajo", "arriba")
-                              else (0.0, paso))
+                apartes = [(paso, 0.0) if lado in ("abajo", "arriba") else (0.0, paso)
+                           for paso in (0, 6, -6, 12, -12, 18, -18, 24, -24)]
+                if lado in ("abajo", "arriba"):
+                    # Y, si lo que estorba es la boca de los cables —justo debajo—, un poco
+                    # más allá: el nombre no puede escribirse encima del número del puerto.
+                    signo = 1.0 if lado == "abajo" else -1.0
+                    apartes += [(0.0, signo * hueco) for hueco in (18.0, 30.0)]
+                for aparte in apartes:
                     candidatos.append((lado, aparte))
             elegido, desliz = pide, (0.0, 0.0)
             bloque = _caja_de_la_etiqueta(cx, cy, lineas, pide, tipos[rol])
+            menos_malo: tuple | None = None
             for lado, aparte in candidatos:
                 prueba = _caja_de_la_etiqueta(cx, cy, lineas, lado, tipos[rol], aparte)
-                if region.sintetica or _dentro_de(prueba, region):
-                    if all(not _se_tocan(prueba, caja) for caja in ocupado):
-                        elegido, desliz, bloque = lado, aparte, prueba
-                        break
+                if not region.sintetica and not _dentro_de(prueba, region):
+                    continue
+                estorbo = sum(1 for caja in ocupado if _se_tocan(prueba, caja))
+                if estorbo == 0:
+                    elegido, desliz, bloque = lado, aparte, prueba
+                    break
+                # Si no hay ni un sitio limpio —en una sede apretada no lo hay—, el rótulo
+                # se pone donde menos estorba y no de vuelta al lado pedido: devolverlo al
+                # lado pedido lo escribía encima del «p1» de su propio cable.
+                if menos_malo is None or estorbo < menos_malo[0]:
+                    menos_malo = (estorbo, lado, aparte, prueba)
+            else:
+                if menos_malo is not None:
+                    _, elegido, desliz, bloque = menos_malo
             lados[rol] = elegido
             deslices[rol] = desliz
             nombres[rol] = _caja_del_nombre(cx, cy, lineas, elegido, tipos[rol], desliz)
@@ -1412,9 +1515,10 @@ def _puerto(x: float, y: float, numero: int, arriba: bool = True) -> str:
     """El número del puerto, junto al cable y pegado a su equipo.
 
     Sin esto un switch es una caja con líneas: no se sabe por dónde entra cada cable,
-    y el plano deja de servir para cablear.
+    y el plano deja de servir para cablear. Va a dos o tres píxeles de la boca: más
+    adentro se escribía encima del nombre y de las direcciones del propio equipo.
     """
-    dy = -6 if arriba else 12
+    dy = -3 if arriba else 4
     return (f'<text x="{x + 6:.1f}" y="{y + dy:.1f}" font-family="{FUENTE}" '
             f'font-size="9" fill="{TENUE}">p{numero}</text>')
 
@@ -1909,17 +2013,21 @@ def _area(caja: Caja, servicios: list[str] | None = None, suave: bool = False) -
     textos = [
         f'<g data-area="{_esc(caja.titulo)}" data-x="{caja.x:.1f}" data-y="{caja.y:.1f}" '
         f'data-ancho="{caja.ancho:.1f}" data-alto="{caja.alto:.1f}" data-subred="{_esc(caja.subred)}" '
+        f'data-lema="{_esc(getattr(caja, "lema", ""))}" '
         f'data-nube="{int(getattr(caja, "nube", False))}" '
         f'data-hijas="{len(getattr(caja, "hijas", []))}"/>',
         f'<text x="{caja.x + 16:.1f}" y="{caja.y + 21:.1f}" font-family="{FUENTE}" '
         f'font-size="12.5" font-weight="650" fill="{EQUIPO_TRAZO}" '
         f'paint-order="stroke" stroke="#ffffff" stroke-width="3.2">{_esc(caja.titulo)}</text>',
     ]
-    if caja.subred:
+    # El segundo renglón de la cabecera es el bloque de direcciones de la red o, si la
+    # caja no es una red del cliente —la nube de Internet—, la leyenda que dice qué es.
+    segundo = caja.subred or getattr(caja, "lema", "")
+    if segundo:
         textos.append(
             f'<text x="{caja.x + 16:.1f}" y="{caja.y + 36:.1f}" font-family="{FUENTE}" '
             f'font-size="10.5" fill="{TENUE}" paint-order="stroke" stroke="#ffffff" '
-            f'stroke-width="3">{_esc(caja.subred)}</text>')
+            f'stroke-width="3">{_esc(segundo)}</text>')
     # Lo que la red tiene montado de forma permanente —el rango que reparte— se escribe
     # en su cabecera. La puerta no: esa es la dirección del equipo que la toca, y va
     # escrita en el equipo, que es su dueño; repetirla aquí sólo añadiría ruido.

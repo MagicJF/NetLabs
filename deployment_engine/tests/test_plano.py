@@ -70,6 +70,20 @@ def cabe(hija, madre) -> bool:
             and hija.y + hija.alto <= madre.y + madre.alto + 0.5)
 
 
+def se_pisan(una, otra) -> bool:
+    """Dos cajas del plano se pisan cuando sus rectángulos tienen área en común.
+
+    Se mide la caja del símbolo —lo que ocupa el equipo en el dibujo— y no la del texto
+    de su nombre: el nombre puede colocarse a cualquiera de los cuatro lados (§ la
+    colocación de etiquetas), así que dos routers dibujados en el mismo punto pueden
+    tener los rótulos repartidos alrededor y la comparación de textos los daría por
+    buenos dejando pasar justo la superposición que se quiere evitar.
+    """
+    ax0, ay0, ax1, ay1 = una
+    bx0, by0, bx1, by1 = otra
+    return ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1
+
+
 def texto_del_svg(svg):
     """Las etiquetas del plano con la caja que ocupan, estimada por su tamaño de letra.
 
@@ -198,20 +212,71 @@ class TestPlanoAnidado(unittest.TestCase):
                 self.assertEqual(choques, [], f"etiquetas montadas: {choques}")
 
     def test_cada_sede_tiene_su_salida_a_internet(self):
-        """Con dos sedes y una sola nube, los dos routers no pueden acabar apilados."""
-        svg = plano.plano(laboratorio(), "topologia")
-        raiz, casa_de, cruces, _, _ = montar(laboratorio())
+        """Con dos sedes y una sola nube, los dos routers no pueden acabar apilados.
+
+        Se comparan las cajas de los símbolos —lo que ocupa cada equipo— y no el texto de
+        sus nombres: el nombre se coloca a un lado del símbolo, así que medir el rótulo
+        deja pasar dos routers dibujados en el mismo punto cuyas etiquetas se reparten
+        alrededor, que es justo la superposición que esta prueba debe cazar.
+        """
+        declaracion = laboratorio()
+        svg = plano.plano(declaracion, "topologia")
+        _, _, cruces, _, _ = montar(declaracion)
         bordes = [rol for rol, grupos in cruces.items() if any(g.nube for g in grupos)]
         self.assertGreaterEqual(len(bordes), 2, "faltan routers de borde")
-        puestos = {}
+        simbolos = cajas_de_los_simbolos(svg, declaracion)
+        cajas = {}
         for rol in bordes:
-            m = re.search(rf'<text x="([\d.]+)" y="([\d.]+)"[^>]*>{rol}</text>', svg)
-            self.assertIsNotNone(m, f"{rol} no aparece en el plano")
-            puestos[rol] = (float(m.group(1)), float(m.group(2)))
-        for i, (rol, (x, y)) in enumerate(puestos.items()):
-            for otro, (ox, oy) in list(puestos.items())[i + 1:]:
-                self.assertGreater(abs(x - ox) + abs(y - oy), 40,
-                                   f"{rol} y {otro} se dibujan uno encima del otro")
+            self.assertIn(rol, simbolos, f"{rol} no aparece en el plano")
+            cajas[rol] = simbolos[rol]
+        for i, (rol, caja) in enumerate(cajas.items()):
+            for otro, otra in list(cajas.items())[i + 1:]:
+                self.assertFalse(se_pisan(caja, otra),
+                                 f"{rol} y {otro} se dibujan uno encima del otro")
+
+    def test_tres_sedes_apiladas_no_tapan_sus_routers_de_borde(self):
+        """Tres sedes hermanas de la misma anchura salen por la misma nube y se apilan.
+
+        Apiladas, sus centros caen en la misma vertical y los tres routers de borde
+        apuntaban al mismo punto: se dibujaban uno encima de otro y sus cables parecían
+        salir de un solo equipo. Se demuestra que el plano los reparte sobre la frontera
+        que comparten —el techo de la compañía bajo la nube— y que ninguno queda debajo
+        de otro. Greptile lo vio con tres sedes; ningún laboratorio del repositorio las
+        tiene, así que el caso se inventa aquí.
+        """
+        lab = {
+            "lab": "tres_sedes",
+            "networks": [
+                {"name": "transito", "address": "203.0.113.0/24", "title": "Internet",
+                 "shape": "cloud"},
+                {"name": "ny", "address": "10.20.0.0/16", "title": "Nueva York"},
+                {"name": "tk", "address": "10.40.0.0/16", "title": "Tokio"},
+                {"name": "bs", "address": "10.60.0.0/16", "title": "Buenos Aires"},
+            ],
+            "nodes": [
+                {"role": "rte1", "type": "router", "networks": ["transito", "ny"]},
+                {"role": "rte2", "type": "router", "networks": ["transito", "tk"]},
+                {"role": "rte3", "type": "router", "networks": ["transito", "bs"]},
+                {"role": "pst1", "type": "workstation", "networks": ["ny"]},
+                {"role": "pst2", "type": "workstation", "networks": ["tk"]},
+                {"role": "pst3", "type": "workstation", "networks": ["bs"]},
+            ],
+            "links": [
+                {"a": {"node": "rte1", "port": 2}, "z": {"node": "pst1", "port": 1}},
+                {"a": {"node": "rte2", "port": 2}, "z": {"node": "pst2", "port": 1}},
+                {"a": {"node": "rte3", "port": 2}, "z": {"node": "pst3", "port": 1}},
+            ],
+        }
+        svg = plano.plano(lab, "topologia")
+        simbolos = cajas_de_los_simbolos(svg, lab)
+        cajas = {}
+        for rol in ("rte1", "rte2", "rte3"):
+            self.assertIn(rol, simbolos, f"{rol} no aparece en el plano")
+            cajas[rol] = simbolos[rol]
+        for i, (rol, caja) in enumerate(cajas.items()):
+            for otro, otra in list(cajas.items())[i + 1:]:
+                self.assertFalse(se_pisan(caja, otra),
+                                 f"{rol} y {otro} se dibujan uno encima del otro")
 
 
 def cajas_y_equipos(svg):
@@ -223,11 +288,11 @@ def cajas_y_equipos(svg):
     areas = [
         {"titulo": m.group(1), "x": float(m.group(2)), "y": float(m.group(3)),
          "ancho": float(m.group(4)), "alto": float(m.group(5)), "subred": m.group(6),
-         "nube": m.group(7) == "1", "hijas": int(m.group(8))}
+         "lema": m.group(7), "nube": m.group(8) == "1", "hijas": int(m.group(9))}
         for m in re.finditer(
             r'<g data-area="([^"]*)" data-x="([\d.-]+)" data-y="([\d.-]+)" '
             r'data-ancho="([\d.-]+)" data-alto="([\d.-]+)" data-subred="([^"]*)" '
-            r'data-nube="(\d)" data-hijas="(\d+)"/>', svg)
+            r'data-lema="([^"]*)" data-nube="(\d)" data-hijas="(\d+)"/>', svg)
     ]
     equipos = [
         {"rol": m.group(1), "x": float(m.group(2)), "y": float(m.group(3))}
@@ -391,7 +456,7 @@ class TestLoQueElPlanoDeclara(unittest.TestCase):
         esfumaba— y su geometría dejaba de comprobarse.
         """
         svg = ('<g data-area="sede" data-x="1.0" data-y="2.0" data-ancho="3.0" '
-               'data-alto="4.0" data-subred="" data-nube="0" data-hijas="10"/>')
+               'data-alto="4.0" data-subred="" data-lema="" data-nube="0" data-hijas="10"/>')
         areas, _ = cajas_y_equipos(svg)
         self.assertEqual([a["hijas"] for a in areas], [10])
 
@@ -423,36 +488,39 @@ class TestConvenciones(unittest.TestCase):
                     self.assertEqual(str(red.network_address), inicio, detalle)
                     self.assertEqual(str(red.broadcast_address), fin, detalle)
 
-    def test_el_router_de_borde_cabalga_el_borde_de_su_sede(self):
-        """Una pata en la sede y otra en Internet: tiene que intersecar la sede."""
+    def test_el_router_de_borde_cabalga_la_frontera_de_la_empresa(self):
+        """Una pata en la sede y otra en Internet: se apoya en el techo de la caja que
+        envuelve a su sede —la frontera por la que se sale— y asoma bajo su nube.
+
+        Metido dentro de la caja parecía un equipo más de la red privada, que es justo lo
+        que no es; y puesto en el techo de la sede, sin más, no se veía que fuese la salida.
+        """
         for lab in todos_los_laboratorios():
             areas, equipos = cajas_y_equipos(plano.plano(laboratorio(lab), "topologia"))
             por_rol = {e["rol"]: e for e in equipos}
+            nubes = [a for a in areas if a["nube"]]
             for rol, sede in routers_de_borde(lab):
                 with self.subTest(laboratorio=lab, equipo=rol):
                     # Sin símbolo no hay nada que comprobar, y saltárselo dejaba la prueba
                     # pasando por un router de borde que el plano no dibuja.
                     self.assertIn(rol, por_rol, f"{rol} no tiene símbolo en el plano")
                     e = por_rol[rol]
-                    abajo = [a for a in areas
-                             if a["x"] - 0.5 <= e["x"] <= a["x"] + a["ancho"] + 0.5
-                             and a["y"] - 0.5 <= e["y"] <= a["y"] + a["alto"] + 0.5]
-                    self.assertTrue(abajo, f"{rol} no cae dentro de su caja")
-                    # El borde de su sede pasa por el centro del símbolo: media pata
-                    # dentro de la red y media fuera. Y no el de la caja que la envuelve.
-                    cabalga = [a for a in abajo if abs(a["y"] - e["y"]) <= 1.0]
-                    self.assertTrue(cabalga, f"{rol} no está a caballo del techo de su sede")
-                    # Y la caja que cabalga es SU sede —la red de su pata terrestre—, no
-                    # otra que también toque ese centro: mirando sólo la primera, la prueba
-                    # pasaba con el router a caballo de una caja que no es la suya.
-                    sede_caja = next((a for a in cabalga if a["titulo"] == sede), None)
-                    self.assertIsNotNone(sede_caja, f"{rol} no cabalga el techo de {sede}")
-                    # Y su sede está dentro de otra caja: la que envuelve la empresa.
+                    sede_caja = next((a for a in areas if a["titulo"] == sede), None)
+                    self.assertIsNotNone(sede_caja, f"{sede} no es una caja del plano")
+                    # Las cajas que envuelven a su sede: la empresa, y lo que la envuelva.
                     madres = [a for a in areas if a is not sede_caja
-                              and a["x"] < sede_caja["x"] + 1 and a["y"] < sede_caja["y"] - 1
+                              and a["x"] < sede_caja["x"] + 1
+                              and a["y"] < sede_caja["y"] - 1
                               and a["x"] + a["ancho"] > sede_caja["x"] + sede_caja["ancho"] - 1
                               and a["y"] + a["alto"] > sede_caja["y"] + sede_caja["alto"] - 1]
-                    self.assertTrue(madres, f"{rol} cabalga la caja exterior, no {sede}")
+                    # La frontera es el techo de la caja más exterior: media pata dentro de
+                    # la empresa y media fuera, que es donde está la salida a Internet.
+                    techo = min([m["y"] for m in madres], default=sede_caja["y"])
+                    self.assertAlmostEqual(e["y"], techo, delta=1.0,
+                                           msg=f"{rol} no cabalga la frontera con Internet")
+                    # Y asoma bajo su nube: lejos de ella no se lee como su salida.
+                    self.assertTrue(any(n["x"] <= e["x"] <= n["x"] + n["ancho"] for n in nubes),
+                                    f"{rol} no está bajo la nube de Internet")
 
     def test_el_pie_del_plano_queda_a_plomo(self):
         """Las redes de un mismo plano miden lo mismo: con altos distintos, el pie se descose."""
