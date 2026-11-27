@@ -1365,7 +1365,7 @@ def netxms_objeto_cmd(api: str, id_objeto) -> list:
     """
     return _sh(
         "IFS= read -r t; exec 3<<EOF\n"
-        "Authorization: Bearer ***\n"
+        "Authorization: Bearer $t\n"
         "EOF\n"
         f"curl -sS {NETXMS_TOPE} --fail-with-body -X GET -H @/dev/fd/3 "
         f"{api}/objects/{int(id_objeto)}"

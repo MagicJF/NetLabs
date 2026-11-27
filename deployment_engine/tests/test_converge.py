@@ -1202,6 +1202,21 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertNotIn('Bearer "', cmd[2])
         self.assertIn("/objects/search", cmd[2])
 
+    def test_la_lectura_del_objeto_lleva_el_testigo_leido_de_la_entrada(self):
+        """`netxms_objeto_cmd` arma su propia cabecera: el testigo va en `$t`, no fijo.
+
+        La lectura del objeto —el mapa y sus banderas— es una llamada más al API, así que
+        lleva el mismo testigo que las demás. Si en su sitio queda un texto literal, el
+        API rechaza la lectura, `--fail-with-body` la cuenta como fallo y el `apply` se
+        para antes de escribir el mapa, su huella y sus banderas.
+        """
+        cmd = converge.netxms_objeto_cmd(self.API, 7)
+        self.assertEqual(cmd[:2], ["sh", "-c"])
+        self.assertIn("IFS= read -r t", cmd[2])
+        self.assertIn("Authorization: Bearer $t", cmd[2])
+        self.assertIn("-H @/dev/fd/3", cmd[2])
+        self.assertIn("/objects/7", cmd[2])
+
     def test_el_censo_pregunta_solo_por_equipos(self):
         self.assertEqual(json.loads(converge.netxms_censo_cuerpo()), {"class": ["Node"]})
 
