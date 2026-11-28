@@ -19,6 +19,7 @@ import ipaddress
 import json
 import os
 import shlex
+from urllib.parse import urlsplit
 
 from identity import (LabError, ROS_SECRET, SNMP_V3_AUTENTICACION, SNMP_V3_CIFRADO,
                       TYPES, lab_from_comment)
@@ -1846,6 +1847,49 @@ def netxms_reinicio_cmd() -> list:
     «se intentó»: la puerta no da por bueno lo que no puede comprobar.
     """
     return _sh("systemctl restart netxms-server && echo CAMBIO:1")
+
+
+# El puerto por defecto de cada esquema: el que un cliente HTTP usaría cuando la dirección no lo
+# escribe. Sin esto, una dirección válida como `http://127.0.0.1/v1` se quedaría sin puerto que
+# leer y el `apply` se pararía, o la espera aceptaría cualquier puerto abierto.
+NETXMS_PUERTO_POR_ESQUEMA = {"http": 80, "https": 443}
+
+
+def netxms_puerto_api(api: str) -> int:
+    """El puerto por el que atiende el servicio de gestión, leído de su dirección.
+
+    La dirección del API es la única que sabe por dónde se entra, así que el puerto no se
+    escribe a mano: se lee de ella con un analizador de URL, que entiende lo que partir la
+    cadena no —una dirección sin puerto (`http://127.0.0.1/v1`) y una IPv6 entre corchetes
+    (`http://[::1]:8000/v1`)—. Sin puerto explícito manda el del esquema, que es lo que haría
+    un cliente HTTP. Una dirección que el analizador no sepa leer para el `apply` en vez de
+    inventarse un puerto, que sería dejar la espera mirando donde nadie escucha.
+    """
+    partes = urlsplit(api)
+    try:
+        puerto = partes.port
+    except ValueError as exc:
+        raise LabError(
+            f"la dirección del API de gestión no trae un puerto válido: {api}") from exc
+    if puerto is not None:
+        return puerto
+    return NETXMS_PUERTO_POR_ESQUEMA.get(partes.scheme.lower(), 80)
+
+
+def netxms_espera_cmd(puerto: int) -> list:
+    """El guion que espera a que el servicio vuelva a atender, y sólo entonces lo dice.
+
+    Sondea con un tope en vez de esperar a ciegas, y mira las escuchas TCP filtrando por el
+    puerto **entero** —`ss ... sport = :<puerto>`—: una coincidencia parcial (`:80` dentro de
+    `:8080`) daría por vuelto un servicio que todavía no atiende, y el `apply` acabaría en
+    verde con la vista muerta. El guion viaja entrecomillado entero (ver `_sh`).
+    """
+    vueltas = " ".join(str(vuelta) for vuelta in range(1, 61))
+    return _sh(
+        f"for i in {vueltas}; do "
+        f"ss -Hltn sport = :{int(puerto)} | grep -q LISTEN && echo LISTO && exit 0; "
+        f"sleep 3; done; exit 1"
+    )
 
 
 def _identidad_para_la_vista(identidad: dict | None) -> dict | None:

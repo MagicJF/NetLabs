@@ -2343,6 +2343,29 @@ class LaEscuchaDeLosRegistros(unittest.TestCase):
         self.assertEqual(json.loads(plan["ops"][0]["cuerpo"]), {"value": "514"})
         self.assertIn("Syslog.ListenPort", " ".join(plan["ops"][0]["cmd"]))
 
+    def test_el_puerto_del_api_sale_de_su_direccion_con_un_analizador(self):
+        """El puerto no se parte a mano: una dirección sin puerto y una IPv6 entre corchetes son válidas.
+
+        Demuestra que `http://127.0.0.1/v1` no deja el puerto sin leer —`split(':')[1]` no existía
+        y paraba cualquier `apply` con registro— y que `http://[::1]:8000/v1` da 8000 en vez de una
+        cadena vacía: sin puerto explícito manda el del esquema, como haría un cliente HTTP.
+        """
+        self.assertEqual(converge.netxms_puerto_api("http://127.0.0.1:8000/v1"), 8000)
+        self.assertEqual(converge.netxms_puerto_api("http://127.0.0.1/v1"), 80)
+        self.assertEqual(converge.netxms_puerto_api("https://127.0.0.1/v1"), 443)
+        self.assertEqual(converge.netxms_puerto_api("http://[::1]:8000/v1"), 8000)
+
+    def test_la_espera_compara_el_puerto_entero(self):
+        """`:80` no puede dar por bueno un `:8080`: la espera filtra por el puerto completo.
+
+        Demuestra que la comprobación de vuelta no acepta una coincidencia parcial —otro servicio
+        escuchando en `8000` o `8080` haría imprimir `LISTO` con el API todavía sin atender, y el
+        `apply` acabaría en verde con la vista muerta—.
+        """
+        guion = " ".join(converge.netxms_espera_cmd(80))
+        self.assertIn("sport = :80", guion)
+        self.assertNotIn("grep -q :80", guion)
+
     def test_una_variable_que_no_exige_reinicio_no_reinicia(self):
         plan = self.plan(actuales=self.configs(escucha="0", reinicio=False))
         self.assertEqual(len(plan["ops"]), 1)
@@ -2369,6 +2392,47 @@ class LaEscuchaDeLosRegistros(unittest.TestCase):
         cmd = " ".join(converge.netxms_reinicio_cmd())
         self.assertIn("systemctl restart netxms-server", cmd)
         self.assertIn("CAMBIO:1", cmd)
+
+
+class LosGuionesQueSeLlevanElTestigo(unittest.TestCase):
+    """Todo guion que entrega el testigo por el descriptor 3 tiene que cerrar su heredoc.
+
+    Medido: al `EOF` que cierra le faltaba su salto de línea —quedó pegado a la cabecera— y el
+    heredoc se lo tragó todo: la llamada de dentro no llegaba a ejecutarse y el guion terminaba
+    con éxito y sin salida. El motor leía «nada» de la vista y volvía a escribir en cada pasada
+    creyendo que aún no estaba escrito, sin que nada fallara. Por eso se mira el guion.
+    """
+
+    API = "http://127.0.0.1:8000/v1"
+
+    def guiones(self):
+        """Los guiones que hablan con la vista llevándose el testigo por dentro."""
+        return {
+            "leer la configuración del servicio": converge.netxms_configs_cmd(self.API),
+            "escribir una variable del servicio": converge.netxms_config_cmd(
+                self.API, converge.NETXMS_REGISTRO_ESCUCHA
+            ),
+            "leer un objeto": converge.netxms_objeto_cmd(self.API, 7),
+            "dar de alta un equipo": converge.netxms_crear_cmd(self.API),
+        }
+
+    def test_la_cabecera_entrega_el_testigo_leido_de_la_entrada(self):
+        for nombre, cmd in self.guiones().items():
+            with self.subTest(guion=nombre):
+                lineas = cmd[2].strip("'").split("\n")
+                self.assertTrue(lineas[0].startswith("IFS= read -r t"),
+                                f"{nombre}: el testigo ya no se lee de la entrada")
+                self.assertEqual(lineas[1], "Authorization: Bearer $t",
+                                 f"{nombre}: la cabecera no entrega lo que se leyó")
+
+    def test_el_heredoc_se_cierra_solo_en_su_linea_y_antes_de_la_llamada(self):
+        for nombre, cmd in self.guiones().items():
+            with self.subTest(guion=nombre):
+                lineas = cmd[2].strip("'").split("\n")
+                self.assertIn("<<EOF", lineas[0], f"{nombre}: no lleva testigo por descriptor")
+                self.assertEqual(lineas[2], "EOF",
+                                 f"{nombre}: el cierre no está solo, así que el heredoc traga la llamada")
+                self.assertIn("curl", lineas[3], f"{nombre}: la llamada no queda detrás del cierre")
 
 
 if __name__ == "__main__":
