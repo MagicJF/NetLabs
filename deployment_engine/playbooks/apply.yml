@@ -94,7 +94,10 @@
       vars:
         pve_method: PUT
         pve_path: "/nodes/{{ env.proxmox.node }}/network/{{ item.bridge }}"
-        pve_body: {comments: "{{ item.comment }}", address: "{{ item.address }}",
+        # `type` no es opcional al cambiar una red, aunque la ruta ya diga cuál es el
+        # puente: sin él la API contesta 400 «property is missing and it is not optional»
+        # (medido). Un puente se cambia diciendo que es un puente.
+        pve_body: {type: bridge, comments: "{{ item.comment }}", address: "{{ item.address }}",
                    netmask: "{{ item.netmask }}"}
         pve_do: "cambiar el tramo de {{ item.bridge }}"
         pve_status: [200]

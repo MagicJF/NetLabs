@@ -1118,6 +1118,27 @@ def _rutas(lab: dict, nodes: list[dict]) -> list[dict]:
     return rutas
 
 
+def _misma_mascara(declarada: str | None, puesta: str | None) -> bool:
+    """Si las dos máscaras dicen lo mismo, aunque se escriban distinto.
+
+    La API del nodo **devuelve** la máscara de un puente como longitud de prefijo («24») pero
+    **acepta** —y el plano declara— la forma punteada («255.255.255.0»): compararlas tal cual da
+    por cambiado un puente que ya está como debe, y el motor pediría el mismo cambio en cada
+    pasada para siempre. Medido: así estaba, y por eso el `apply` intentaba «cambiar el tramo» de
+    una salida que ya estaba bien. Se comparan por lo que significan, no por cómo se escriben.
+    """
+    def ancho(valor: str | None) -> int | None:
+        texto = str(valor or "").strip()
+        if not texto:
+            return None
+        try:
+            return (ipaddress.ip_network(f"0.0.0.0/{texto}").prefixlen
+                    if "." in texto else int(texto))
+        except ValueError:
+            return None
+    return ancho(declarada) == ancho(puesta)
+
+
 def plan(world: dict, lab: dict, env: dict) -> dict:
     """Calcula qué hay que hacer, sin tocar el mundo.
 
@@ -1259,10 +1280,12 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         # Se comparan dirección Y máscara: un puente al que le quitaron la dirección o
         # le cambiaron la máscara es una salida rota, y el plan tiene que repararla.
         # El comentario del fichero del nodo lleva su salto de línea al final: se
-        # compara por contención, igual que la marca de un cable.
+        # compara por contención, igual que la marca de un cable. La máscara se compara
+        # por lo que significa: la API la devuelve como longitud y el plano la declara
+        # punteada, y tal cual daría por cambiado un puente que ya está bien.
         if (comment not in (exists.get("comments") or "")
                 or (exists.get("address") or "") != salida["address"]
-                or (exists.get("netmask") or "") != salida["netmask"]):
+                or not _misma_mascara(salida["netmask"], exists.get("netmask"))):
             steps.append({"op": "bridge_set", "bridge": bridge, "comment": comment,
                           "address": salida["address"], "netmask": salida["netmask"]})
             effects.append(f"la salida {bridge} pasa a {salida['address']}/{salida['netmask']}")

@@ -1215,6 +1215,47 @@ class LaSalidaALaRedPublica(unittest.TestCase):
                              laboratorio("f_acme_cuatro_departamentos"), entorno())
         self.assertEqual([s for s in plan["steps"] if s.get("bridge") == "f_ny_salida"], [])
 
+    def test_la_mascara_que_devuelve_la_api_no_hace_cambiar_la_salida(self):
+        """Medido: la API devuelve la máscara como longitud («24») y el plano la declara punteada.
+
+        Compararlas tal cual —que es como estaba— pedía «cambiar el tramo» de una salida que ya
+        estaba bien, en cada pasada y para siempre.
+        """
+        bridges = [{"iface": "f_ny_salida", "address": "172.30.10.1", "netmask": "24",
+                    "comments": ("netlabs lab=f_acme_cuatro_departamentos "
+                                 "space=172.30.10.0/24 salida=ny_salida\n")}]
+        plan = identity.plan(mundo(bridges=bridges),
+                             laboratorio("f_acme_cuatro_departamentos"), entorno())
+        self.assertEqual([s for s in plan["steps"] if s.get("bridge") == "f_ny_salida"], [])
+
+    def test_una_mascara_distinta_si_manda_cambiar_la_salida(self):
+        bridges = [{"iface": "f_ny_salida", "address": "172.30.10.1", "netmask": "16",
+                    "comments": ("netlabs lab=f_acme_cuatro_departamentos "
+                                 "space=172.30.10.0/24 salida=ny_salida\n")}]
+        plan = identity.plan(mundo(bridges=bridges),
+                             laboratorio("f_acme_cuatro_departamentos"), entorno())
+        paso = next(s for s in plan["steps"] if s.get("bridge") == "f_ny_salida")
+        self.assertEqual(paso["op"], "bridge_set")
+
+    def test_una_salida_a_la_que_le_falta_la_mascara_se_repara(self):
+        """Una salida sin máscara está rota: el plan la repara en vez de darla por buena."""
+        bridges = [{"iface": "f_ny_salida", "address": "172.30.10.1",
+                    "comments": ("netlabs lab=f_acme_cuatro_departamentos "
+                                 "space=172.30.10.0/24 salida=ny_salida\n")}]
+        plan = identity.plan(mundo(bridges=bridges),
+                             laboratorio("f_acme_cuatro_departamentos"), entorno())
+        paso = next(s for s in plan["steps"] if s.get("bridge") == "f_ny_salida")
+        self.assertEqual(paso["op"], "bridge_set")
+
+    def test_la_mascara_se_compara_por_lo_que_significa(self):
+        self.assertTrue(identity._misma_mascara("255.255.255.0", "24"))
+        self.assertTrue(identity._misma_mascara("24", "255.255.255.0"))
+        self.assertTrue(identity._misma_mascara("255.255.0.0", "16"))
+        self.assertFalse(identity._misma_mascara("255.255.255.0", "16"))
+        self.assertFalse(identity._misma_mascara("24", ""))
+        self.assertFalse(identity._misma_mascara("24", None))
+        self.assertFalse(identity._misma_mascara("24", "lo que sea"))
+
     def test_cambiar_el_tramo_de_la_salida_reapunta_su_puerta(self):
         bridges = [{"iface": "f_ny_salida", "address": "172.30.9.1",
                     "netmask": "255.255.255.0",
