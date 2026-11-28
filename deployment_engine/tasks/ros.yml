@@ -129,7 +129,7 @@
 
 - name: "RouterOS · calcular la diferencia de {{ router.name }}"
   ansible.builtin.set_fact:
-    ros_ops: "{{ router | netlabs_ros_ops(ros_current, ros_clave, secrets, env.management.address_space) }}"
+    ros_ops: "{{ router | netlabs_ros_ops(ros_current, ros_clave, secrets, env.management.address_space, env.observabilidad | default({})) }}"
 
 - name: "RouterOS · enseñar la diferencia de {{ router.name }}"
   ansible.builtin.debug:
@@ -233,7 +233,8 @@
     ros_resto: >-
       {{ router | netlabs_ros_ops(dict(ros_relecturas.results
            | map(attribute='ros_lectura') | map(attribute='clave') | zip(ros_relecturas.results | map(attribute='json')
-           | list)), ros_clave, secrets, env.management.address_space) }}
+           | list)), ros_clave, secrets, env.management.address_space,
+           env.observabilidad | default({})) }}
 
 - name: "RouterOS · dar el cambio por bueno sólo si de verdad está en {{ router.name }}"
   ansible.builtin.assert:

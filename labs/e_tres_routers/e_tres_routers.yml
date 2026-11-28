@@ -62,7 +62,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # Cada router de departamento: una pata en el núcleo y otra en su red. Dos patas en
   # dos redes distintas es lo que lo hace router; con una sola estaría conmutando.
@@ -85,7 +85,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rta2
     type: router
@@ -106,7 +106,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rta3
     type: router
@@ -127,7 +127,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # El switch de cada departamento: conmuta entre el router y sus puestos. Todas sus
   # patas son de su red; la de gestión va fuera del puente y no se declara.
@@ -140,7 +140,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swa2
     type: switch
@@ -151,7 +151,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swa3
     type: switch
@@ -162,7 +162,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # Dos puestos por departamento, para tener a quien pedirle la dirección por DHCP y
   # desde donde probar que se llega a los otros dos departamentos.

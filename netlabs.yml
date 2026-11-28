@@ -64,3 +64,22 @@ vmids:
 # función y el ordinal (`rte1`, `swc2`), y ese mismo nombre es su hostname, su
 # nombre en Proxmox y la punta de sus cables. El código de cada tipo vive en
 # `TYPES` (deployment_engine/tools/identity.py), que es la única traducción.
+
+# Cómo se mira a los equipos. Esto NO es un laboratorio: es el mundo. Un laboratorio
+# no elige cómo le miran —lo declara su área `snmp: {enabled}`, y nada más—, y el
+# motor aplica esto a cada equipo RouterOS que despliega y a su ficha en la vista.
+#
+# El P0 de la observabilidad (ADR 0019) retira la comunidad v2c en claro y la
+# sustituye por SNMP v3 con autenticación y cifrado. La identidad se nombra aquí y su
+# valor vive en `secrets.yml`: el entorno no escribe secretos, los señala.
+observabilidad:
+  snmp:
+    version: 3
+    credencial_from: secrets.snmp_v3
+  # Y los equipos mandan sus registros a la vista, que los escucha. Se declara aquí y no en un
+  # laboratorio por el mismo motivo que la identidad de arriba: no es de un sitio, es de cómo se
+  # mira a los equipos en todo el sitio. El puerto se puede omitir —514, el de siempre— y
+  # `recoger: false` apaga la escucha en vez de dejarla a medias.
+  registro:
+    recoger: true
+    puerto: 514

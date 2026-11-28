@@ -20,7 +20,8 @@ import json
 import os
 import shlex
 
-from identity import LabError, ROS_SECRET, TYPES, lab_from_comment
+from identity import (LabError, ROS_SECRET, SNMP_V3_AUTENTICACION, SNMP_V3_CIFRADO,
+                      TYPES, lab_from_comment)
 
 import mapa
 import plano
@@ -152,16 +153,18 @@ def _quote(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 def ros_ops(node: dict, current: dict, routeros_clave: str,
-            secrets: dict | None = None, mgmt_cidr: str | None = None) -> list[dict]:
+            secrets: dict | None = None, mgmt_cidr: str | None = None,
+            observabilidad: dict | None = None) -> list[dict]:
     """Las llamadas REST que llevan el router de lo que hay a lo declarado.
 
     `current` es lo que devolvieron las lecturas de ROS_READS. Cada llamada lleva
     `effect`, la frase que el humano lee en el plan: si un cambio no se puede
     explicar en una frase, no se hace.
 
-    SNMP es un área declarada (`snmp: {enabled, community_from}`); sin ella el
-    motor no toca el servicio. La comunidad se nombra en el laboratorio y se
-    resuelve en secrets.yml; sólo lectura y restringida a la gestión.
+    SNMP es un área declarada (`snmp: {enabled}`); sin ella el motor no toca el
+    servicio. Con qué se mira —SNMP v3, o la comunidad v2c en claro— lo declara el
+    entorno (`observabilidad.snmp`, ADR 0019), no el laboratorio: sólo lectura y
+    restringido a la red de gestión en ambos casos.
     """
     ops: list[dict] = []
     configure = node.get("configure") or {}
@@ -185,8 +188,14 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
 
     area_snmp = configure.get("snmp")
     if area_snmp is not None:
+        # La identidad con la que se mira sólo se resuelve si el área pide encenderla: apagar el
+        # servicio no necesita credencial —una retirada o a medias no puede impedir apagarlo—, y
+        # resolverla antes dejaría SNMP encendido por un secreto que no hace falta para dejarlo
+        # como el laboratorio dice.
+        identidad = (observabilidad_de(observabilidad, secrets)
+                     if area_snmp.get("enabled") else None)
         ops += _snmp_ops(current.get("snmp") or {}, current.get("snmp_community") or [],
-                         area_snmp, secrets, mgmt_cidr)
+                         area_snmp, identidad, mgmt_cidr)
 
     if "services" in configure:
         servicios = {s.get("name"): s for s in current.get("services") or []}
@@ -221,14 +230,73 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
     return ops
 
 
+def observabilidad_de(bloque: dict | None, secrets: dict | None) -> dict | None:
+    """La identidad con la que se mira a los equipos, resuelta (ADR 0019).
+
+    El entorno declara la versión y **nombra** la credencial; aquí se resuelve contra
+    `secrets.yml`. Devuelve `None` si el entorno no declara nada: entonces un laboratorio
+    que encienda SNMP no tiene con qué mirarlo, y `_snmp_ops` lo dice en vez de
+    inventarse una identidad.
+    """
+    snmp = (bloque or {}).get("snmp")
+    if snmp is None:
+        return None
+    nombre = snmp["credencial_from"].removeprefix("secrets.")
+    if snmp["version"] == 2:
+        comunidad = secreto(secrets or {}, nombre)
+        if not comunidad or len(comunidad) > 32 or any(c.isspace() for c in comunidad):
+            raise LabError(
+                "la comunidad SNMP de secrets.yml no vale: entre 1 y 32 caracteres, sin espacios"
+            )
+        return {"version": 2, "comunidad": comunidad}
+
+    bloque_v3 = secreto_bloque(secrets or {}, nombre)
+    faltan = {"usuario", "autenticacion", "clave_autenticacion", "cifrado", "clave_cifrado"} - set(bloque_v3)
+    if faltan:
+        raise LabError(f"a `secrets.{nombre}` le falta {', '.join(sorted(faltan))}")
+    usuario = str(bloque_v3["usuario"])
+    if not usuario or len(usuario) > 32 or any(c.isspace() for c in usuario):
+        raise LabError(
+            f"el usuario SNMP v3 de `secrets.{nombre}` no vale: entre 1 y 32 caracteres, "
+            "sin espacios (en RouterOS el usuario ES el nombre de la entrada)"
+        )
+    autenticacion = str(bloque_v3["autenticacion"]).upper()
+    cifrado = str(bloque_v3["cifrado"]).upper()
+    if autenticacion not in SNMP_V3_AUTENTICACION:
+        raise LabError(
+            f"la autenticación SNMP v3 de `secrets.{nombre}` es {autenticacion!r}, y el "
+            f"equipo admite {', '.join(SNMP_V3_AUTENTICACION)}"
+        )
+    if cifrado not in SNMP_V3_CIFRADO:
+        raise LabError(
+            f"el cifrado SNMP v3 de `secrets.{nombre}` es {cifrado!r}, y el equipo admite "
+            f"{', '.join(SNMP_V3_CIFRADO)} (`AES` es AES-128)"
+        )
+    # SNMP v3 exige una clave de al menos ocho octetos: el equipo acepta menos, y luego la
+    # mano falla en el sondeo con un «usmStats» que no dice por qué. Se corta antes.
+    for campo in ("clave_autenticacion", "clave_cifrado"):
+        if len(str(bloque_v3[campo])) < 8:
+            raise LabError(f"`secrets.{nombre}.{campo}` tiene menos de 8 caracteres: SNMP v3 no la admite")
+    return {
+        "version": 3,
+        "usuario": usuario,
+        "autenticacion": autenticacion,
+        "clave_autenticacion": str(bloque_v3["clave_autenticacion"]),
+        "cifrado": cifrado,
+        "clave_cifrado": str(bloque_v3["clave_cifrado"]),
+    }
+
+
 def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
-              secrets: dict | None, mgmt_cidr: str | None) -> list[dict]:
-    """El área `snmp` de un laboratorio: servicio encendido y una comunidad de lectura.
+              identidad: dict | None, mgmt_cidr: str | None) -> list[dict]:
+    """El área `snmp` de un laboratorio: el servicio encendido, y con qué se mira.
 
     NetXMS no puede sacar el nombre, las interfaces ni las tablas de rutas y ARP de un
     CHR sin SNMP; con él, el router se convierte en la fuente de lo que cuelga de sus
-    redes. El laboratorio decide si se enciende; el motor deriva lo que no se declara
-    (sólo lectura, y sólo desde la red de gestión).
+    redes. El laboratorio decide **si** se enciende y nada más —la versión y la identidad
+    las declara el entorno (`observabilidad.snmp`, ADR 0019), porque mirar no es cosa de
+    un laboratorio—, y el motor deriva lo que no se declara: sólo lectura, y sólo desde la
+    red de gestión.
     """
     encendido_ahora = str(ajustes.get("enabled", "")).lower() in ("true", "yes")
     if not area["enabled"]:
@@ -238,14 +306,26 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
                      "effect": "SNMP apagado (el laboratorio no lo declara encendido)"}]
         return []
 
-    comunidad = secreto(secrets or {}, area["community_from"].removeprefix("secrets."))
-    if len(comunidad) > 32 or any(c.isspace() for c in comunidad):
+    if identidad is None:
         raise LabError(
-            f"la comunidad SNMP de secrets.yml no vale: entre 1 y 32 caracteres, sin espacios"
+            "el laboratorio enciende SNMP y el entorno no declara `observabilidad.snmp`: "
+            "no se inventa una identidad con la que mirar (ADR 0019)"
         )
     if not mgmt_cidr:
-        raise LabError("falta la red de gestión para restringir la comunidad SNMP")
+        raise LabError("falta la red de gestión para restringir el acceso SNMP")
+    if identidad["version"] == 3:
+        return _snmp_v3_ops(identidad, comunidades, mgmt_cidr, encendido_ahora)
+    return _snmp_v2c_ops(identidad["comunidad"], comunidades, mgmt_cidr, encendido_ahora)
 
+
+def _snmp_v2c_ops(comunidad: str, comunidades: list, mgmt_cidr: str,
+                  encendido_ahora: bool) -> list[dict]:
+    """SNMP v2c: una comunidad de lectura, acotada a la gestión, y el resto igual.
+
+    La rama que el P0 deja atrás, y que sigue viva porque un equipo que no sepa v3 tiene
+    que poder mirarse de alguna manera. Las claves se declaran en el entorno: aquí ya
+    llegan resueltas.
+    """
     # El encendido va al final, no al principio: mientras la comunidad siga abierta a
     # `::/0`, encender el servicio lo deja expuesto. El bucle de escritura de `ros.yml`
     # ejecuta estas llamadas en orden y para en la primera que falla —y con ella el
@@ -334,6 +414,77 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
                     "body": {"enabled": "yes"},
                     "tras_restricciones": True,
                     "effect": "SNMP encendido, con la comunidad ya acotada a la gestión"})
+    return ops
+
+
+def _snmp_v3_ops(identidad: dict, comunidades: list, mgmt_cidr: str,
+                 encendido_ahora: bool) -> list[dict]:
+    """SNMP v3: un usuario autenticado y cifrado, y ninguna comunidad en claro.
+
+    En RouterOS la identidad v3 **es una entrada de `/snmp/community`** con `security`
+    distinto de `none` —`private` es autenticación y cifrado—, y su nombre es el usuario
+    de SNMP v3. Medido contra un CHR 7.25 desplegado, no deducido: con `security=private`
+    el equipo deja de responder a v2c con ese nombre, que es justo lo que el P0 busca, y
+    las claves vuelven al leerlas, así que la comparación es real y un `apply` repetido no
+    reescribe nada.
+    """
+    usuario = identidad["usuario"]
+    v3 = {
+        "security": "private",
+        "authentication-protocol": identidad["autenticacion"],
+        "authentication-password": identidad["clave_autenticacion"],
+        "encryption-protocol": identidad["cifrado"],
+        "encryption-password": identidad["clave_cifrado"],
+    }
+    ops: list[dict] = []
+    propia = next((c for c in comunidades if c.get("name") == usuario), None)
+    if propia is None:
+        ops.append({"method": "PUT", "path": "/rest/snmp/community",
+                    "body": {"name": usuario, "addresses": mgmt_cidr,
+                             "read-access": "yes", "write-access": "no", **v3},
+                    "effect": f"identidad SNMP v3 (authPriv), sólo lectura, desde {mgmt_cidr}"})
+    else:
+        cambios: dict = {}
+        # La propia se vuelve a encender aunque alguien la apagara: declararla es quererla
+        # viva. Las demás no: ésas las respeta esta rama y las apaga la de abajo.
+        if str(propia.get("disabled", "")).lower() in ("true", "yes"):
+            cambios["disabled"] = "no"
+        if propia.get("addresses") != mgmt_cidr:
+            cambios["addresses"] = mgmt_cidr
+        if str(propia.get("read-access", "")).lower() not in ("true", "yes"):
+            cambios["read-access"] = "yes"
+        if str(propia.get("write-access", "")).lower() in ("true", "yes"):
+            cambios["write-access"] = "no"
+        for campo, valor in v3.items():
+            # RouterOS devuelve las claves al leerlas (medido), así que comparar es
+            # comparar de verdad: si ya coinciden, no hay llamada y el apply no cambia nada.
+            if str(propia.get(campo, "")) != str(valor):
+                cambios[campo] = valor
+        if cambios:
+            ops.append({"method": "PATCH", "path": f"/rest/snmp/community/{propia['.id']}",
+                        "body": cambios,
+                        "effect": f"identidad SNMP v3 -> {mgmt_cidr} (authPriv, sólo lectura)"})
+
+    # Con v3 declarado, una comunidad v2c es exactamente el claro que el P0 retira: se
+    # apaga. Medido: mientras `security=none` siguiera en pie, el equipo seguiría
+    # contestando a `snmpwalk -v2c` con ese nombre, y la migración sería decorativa. Se
+    # nombran por su id, nunca por su nombre: el nombre de una comunidad es su valor.
+    for otra in comunidades:
+        if otra.get("name") == usuario:
+            continue
+        if str(otra.get("disabled", "")).lower() in ("true", "yes"):
+            continue
+        ops.append({"method": "PATCH", "path": f"/rest/snmp/community/{otra['.id']}",
+                    "body": {"disabled": "yes"},
+                    "effect": f"apagar la comunidad v2c {otra['.id']} (con v3 no queda claro)"})
+
+    # Sólo al final, y marcado para que `ros.yml` lo ejecute en un paso propio, después de
+    # que las restricciones hayan terminado enteras: encender antes de acotar es abrir.
+    if not encendido_ahora:
+        ops.append({"method": "POST", "path": "/rest/snmp/set",
+                    "body": {"enabled": "yes"},
+                    "tras_restricciones": True,
+                    "effect": "SNMP encendido, con la identidad v3 ya puesta"})
     return ops
 
 
@@ -757,6 +908,23 @@ def secreto(secrets: dict, nombre: str) -> str:
     if not isinstance(valor, str) or not valor:
         raise LabError(
             f"secrets.yml no tiene {nombre!r} o está vacío: la credencial se nombra, "
+            "el valor vive en secrets.yml"
+        )
+    return valor
+
+
+def secreto_bloque(secrets: dict, nombre: str) -> dict:
+    """Un secreto del sitio que es un mapa —una credencial con varios campos—, por su nombre.
+
+    Es a la identidad v3 lo que `secreto` es a la comunidad v2c: la identidad de SNMP v3
+    no cabe en una cadena —usuario, protocolo de autenticación, protocolo de cifrado y sus
+    dos claves—, así que vive en un mapa y aquí se comprueba que lo sea antes de leer campo
+    a campo. Ausente o de otro tipo es un fallo del sitio y se dice.
+    """
+    valor = (secrets or {}).get(nombre)
+    if not isinstance(valor, dict):
+        raise LabError(
+            f"secrets.yml no tiene {nombre!r} o no es un mapa: la credencial se nombra, "
             "el valor vive en secrets.yml"
         )
     return valor
@@ -1432,6 +1600,21 @@ NETXMS_RUTA_CENSO = "/objects/search"
 NETXMS_RUTA_FICHAS = "/objects/details"
 NETXMS_RUTA_CREAR = "/objects"
 
+# El grupo SNMP de un equipo: `GET`/`PATCH /objects/{id}/snmp`, una ruta por equipo —el
+# API no tiene ninguna que escriba el grupo de varios de una vez—. Es el único sitio por
+# el que se le dice a la vista **con qué identidad** sondea un equipo: las credenciales
+# SSH de la ficha común sólo se aceptan al crear, pero las de SNMP sí se corrigen después
+# (medido: `PATCH` 200 y el grupo cambia).
+NETXMS_RUTA_SNMP = "/objects/{}/snmp"
+
+# Cómo se llama el cifrado en cada sistema. El entorno declara la identidad en el idioma
+# de RouterOS —donde `AES` es AES-128— y la vista la escribe a la suya: medido contra la
+# instalación (`libnxsnmp`, `s_snmpPrivMethodNames`), admite `NONE|DES|AES-128|AES-192|
+# AES-256`, así que `AES` a secas le contesta 400 y hay que traducirlo aquí. Los métodos
+# de autenticación se llaman igual en los dos (MD5, SHA1, SHA256, SHA512), y la vista
+# admite además SHA224 y SHA384, que RouterOS no sabe.
+NETXMS_CIFRADO_DESDE_ROUTEROS = {"DES": "DES", "AES": "AES-128"}
+
 
 def netxms_login_cmd(api: str) -> list:
     """El login: el único que no lleva testigo. El cuerpo entra por la entrada estándar.
@@ -1532,6 +1715,172 @@ def netxms_crear_cmd(api: str) -> list:
     return netxms_cmd(api, NETXMS_RUTA_CREAR)
 
 
+def netxms_snmp_cmd(api: str, id_objeto) -> list:
+    """Escribir con qué identidad sondea la vista a un equipo (su grupo SNMP)."""
+    return netxms_cmd(api, NETXMS_RUTA_SNMP.format(int(id_objeto)), metodo="PATCH")
+
+
+# La configuración del propio servicio de la vista: `GET`/`PUT /server-config/{nombre}`. No es
+# un objeto del inventario sino una variable del servicio, y el API las trata como al resto: una
+# lectura y una escritura por nombre. Medido en la instalación: la lectura devuelve, además del
+# valor, si el cambio exige reiniciar el servicio (`needServerRestart`), así que el motor no
+# adivina cuándo hay que reiniciar — se lo pregunta a quien lo sabe.
+NETXMS_RUTA_CONFIGS = "/server-config"
+NETXMS_RUTA_CONFIG = "/server-config/{}"
+
+# Cómo se llama en el servicio lo que enciende la escucha de registros y dónde escucha. Los
+# nombres son suyos, no del motor: cambiarlos es cambiar de versión de la vista.
+NETXMS_REGISTRO_ESCUCHA = "Syslog.EnableListener"
+NETXMS_REGISTRO_PUERTO = "Syslog.ListenPort"
+# El puerto en el que la vista escucha por defecto: el que trae el servicio sin que nadie lo cambie.
+NETXMS_REGISTRO_PUERTO_POR_DEFECTO = 514
+
+
+def netxms_configs_cmd(api: str) -> list:
+    """Todas las variables de configuración visibles del servicio, de una vez.
+
+    Una sola lectura en vez de una por variable: el servicio las devuelve juntas y el motor
+    decide con esa foto si hay algo que escribir. Sin cuerpo —es una lectura—, y con el
+    testigo por el descriptor de siempre para que no se vea en la línea de órdenes.
+    """
+    return _sh(
+        "IFS= read -r t; exec 3<<EOF\n"
+        "Authorization: Bearer $t\n"
+        "EOF\n"
+        f"curl -sS {NETXMS_TOPE} --fail-with-body -X GET -H @/dev/fd/3 "
+        f"{api}{NETXMS_RUTA_CONFIGS}"
+    )
+
+
+def netxms_config_cmd(api: str, nombre: str) -> list:
+    """Escribir una variable de configuración del servicio; el valor va en el cuerpo."""
+    return netxms_cmd(api, NETXMS_RUTA_CONFIG.format(nombre), metodo="PUT")
+
+
+def netxms_registro_puerto(declarado: dict | None, actuales: list | None) -> int:
+    """El puerto en el que la vista escucha los registros: el declarado, o el que ya tiene.
+
+    El plan sólo escribe el puerto si el entorno lo declara, así que cuando no lo declara el
+    efectivo es el que la vista tenga guardado —y su defecto si no aparece—. Medir el de fábrica
+    cuando no hay ninguno declarado daría por apagada una escucha que sí está, y el motor
+    reiniciaría la vista en cada pasada sin corregir nunca la diferencia.
+    """
+    puerto = (declarado or {}).get("puerto")
+    if puerto is not None:
+        return int(puerto)
+    for variable in actuales or []:
+        if isinstance(variable, dict) and variable.get("name") == NETXMS_REGISTRO_PUERTO:
+            try:
+                return int(variable.get("value"))
+            except (TypeError, ValueError):
+                break
+    return NETXMS_REGISTRO_PUERTO_POR_DEFECTO
+
+
+def netxms_registro_ops(declarado: dict | None, actuales: list | None, api: str,
+                        escuchando: bool | None = None) -> dict:
+    """Lo que hay que escribir para que la vista recoja los registros como el entorno declara.
+
+    `actuales` es lo que devolvió `GET /server-config` —la lista entera, que es una lectura y no
+    una por variable—. `escuchando` es si hay algo escuchando de verdad el puerto declarado, que
+    lo mide quien llama (la variable no lo dice). Devuelve `{"ops": [...], "reiniciar": bool}`.
+
+    El reinicio no se adivina: cada variable dice si su cambio lo exige (`needServerRestart`),
+    así que sólo se reinicia cuando de verdad se ha escrito algo que lo pide, y nunca por una
+    escritura que no cambió nada. Si la variable no aparece en la lectura —no está o no es
+    visible—, se da por hecho que el cambio exige reinicio: ante la duda, que el cambio surta
+    efecto, porque lo contrario es dejarlo apagado creyendo que está encendido.
+
+    Pero el valor escrito **no es la escucha en pie**, y la vista no tiene ningún campo que diga
+    «esto está escrito y todavía no en vigor» —medido: la lectura sólo trae el valor—: una pasada
+    que escriba y se corte antes de reiniciar dejaría el valor correcto y la escucha apagada, y la
+    siguiente pasada, al ver el valor correcto, no reiniciaría jamás. Por eso, cuando se declaró
+    encendida y **no hay nadie escuchando el puerto**, se reinicia aunque no hubiera nada que
+    escribir. Sin poder medirlo (`escuchando is None`) no se reinicia: un reinicio a ciegas en cada
+    pasada sería peor que el problema.
+
+    Sin declaración no se toca nada: encender una escucha que nadie ha pedido es una decisión del
+    entorno, no del motor (ADR 0019). El laboratorio no declara esto —ni sus equipos—: el qué se
+    mira es del mundo.
+    """
+    if not declarado:
+        return {"ops": [], "reiniciar": False}
+    por_nombre = {v.get("name"): v for v in (actuales or []) if isinstance(v, dict)}
+    encender = bool(declarado.get("recoger"))
+    deseado = {NETXMS_REGISTRO_ESCUCHA: "1" if encender else "0"}
+    if declarado.get("puerto") is not None:
+        deseado[NETXMS_REGISTRO_PUERTO] = str(declarado["puerto"])
+    ops: list[dict] = []
+    reiniciar = False
+    for nombre, valor in deseado.items():
+        actual = por_nombre.get(nombre)
+        if actual is not None and str(actual.get("value", "")) == valor:
+            continue
+        if nombre == NETXMS_REGISTRO_ESCUCHA:
+            efecto = ("que la vista escuche los registros de los equipos"
+                      if valor == "1" else "que la vista deje de escuchar registros de los equipos")
+        else:
+            efecto = f"que la vista escuche los registros en el puerto {valor}"
+        ops.append({"cmd": netxms_config_cmd(api, nombre),
+                    "cuerpo": json.dumps({"value": valor}),
+                    "effect": efecto})
+        # Desconocida o presente: si no se pudo leer, se reinicia por si acaso.
+        reiniciar = reiniciar or bool((actual or {}).get("needServerRestart", True))
+    # El valor dice lo que está escrito; la escucha dice lo que pasa. Si se declaró encendida y no
+    # hay nadie escuchando, falta el reinicio —lo escriba esta pasada o una anterior que se cortó—.
+    if encender and escuchando is False:
+        reiniciar = True
+    return {"ops": ops, "reiniciar": reiniciar}
+
+
+def netxms_reinicio_cmd() -> list:
+    """Reiniciar el servicio de la vista, y decirlo.
+
+    Va por la puerta del invitado (`interior_ssh.yml`) porque no es una llamada a su API sino un
+    servicio de dentro. Imprime `CAMBIO:1` para que el motor pueda distinguir «se reinició» de
+    «se intentó»: la puerta no da por bueno lo que no puede comprobar.
+    """
+    return _sh("systemctl restart netxms-server && echo CAMBIO:1")
+
+
+def _identidad_para_la_vista(identidad: dict | None) -> dict | None:
+    """La identidad resuelta del entorno, dicha como la dice la vista.
+
+    Una sola identidad se declara una vez y cada sistema la escribe a su manera: RouterOS
+    llama `AES` a lo que la vista llama `AES-128`, y la comunidad de v2c se llama aquí
+    `authName` porque para SNMP v1/v2c el nombre de la comunidad **es** el nombre con el
+    que se autentica. Sin identidad declarada no hay nada que poner: quien la necesite lo
+    dice (el equipo que la encienda lo comprueba en `_snmp_ops`).
+    """
+    if identidad is None:
+        return None
+    if identidad["version"] == 2:
+        return {"version": "2c", "authName": identidad["comunidad"], "authMethod": "NONE",
+                "authPassword": "", "privMethod": "NONE", "privPassword": ""}
+    return {
+        "version": "3",
+        "authName": identidad["usuario"],
+        "authMethod": identidad["autenticacion"],
+        "authPassword": identidad["clave_autenticacion"],
+        "privMethod": NETXMS_CIFRADO_DESDE_ROUTEROS.get(identidad["cifrado"], identidad["cifrado"]),
+        "privPassword": identidad["clave_cifrado"],
+    }
+
+
+def _cambios_del_grupo(actual: dict, deseado: dict) -> dict:
+    """Los campos del grupo SNMP que hay que escribir, comparando de verdad.
+
+    La vista aplica un `PATCH` de fusión —sólo lo que se le manda— y devuelve las claves al
+    leerlas (medido), así que la comparación es real: si ya coinciden, no hay llamada y un
+    `apply` repetido no escribe. Se manda la versión siempre que cambie, porque es la que
+    elige el modelo de seguridad: un usuario v3 escrito sobre un equipo en v2c se guardaría
+    como comunidad, y las claves viajarían en claro sin que nadie se enterara.
+    """
+    return {clave: valor for clave, valor in deseado.items()
+            if str(actual.get(clave, "")) != str(valor)}
+
+
+
 def _direccion_de(node: dict) -> str:
     """La dirección con la que la vista conoce a este nodo, o vacío si aún no tiene.
 
@@ -1577,10 +1926,22 @@ def linux_clave(_node: dict, secrets: dict | None = None) -> str:
     return valor
 
 
+def _la_vista_sondea(node: dict) -> bool:
+    """Si la vista mira a este equipo por SNMP: un equipo de red que enciende el área.
+
+    Un puesto no habla SNMP —su salud va por ICMP— y un equipo sin el área no tiene el servicio
+    encendido, así que la vista no tiene qué sondear en ninguno de los dos. Sin ninguno, el motor
+    no resuelve la identidad de sondeo: no hace falta.
+    """
+    if node.get("type") in ("server", "workstation"):
+        return False
+    return bool(((node.get("configure") or {}).get("snmp") or {}).get("enabled"))
+
+
 def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | None,
                api: str, secrets: dict | None = None,
                puerto: int = NETXMS_PUERTO_SSH, vivas: list | None = None,
-               propias: list | None = None) -> dict:
+               propias: list | None = None, observabilidad: dict | None = None) -> dict:
     """Qué equipos del laboratorio faltan en la vista, y cuáles están a medias.
 
     `encontrados` es el censo que devuelve la búsqueda (resúmenes, sin credenciales);
@@ -1610,6 +1971,11 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
     Un equipo que ya está como debe no produce ninguna llamada —eso es lo que hace que
     el segundo `apply` no escriba— y uno que ya está con otras credenciales sale como
     pendiente, porque el API de esta versión sólo las acepta al crear el equipo.
+
+    La identidad con la que la vista **sondea** un equipo va aparte y sí se corrige: se
+    le dice en el alta y, si el equipo ya estaba registrado con otra —o sondéandose en
+    claro—, con un `PATCH` de su grupo SNMP. Es la misma identidad que el entorno declara
+    una sola vez (ADR 0019); aquí sólo se traduce a como la escribe la vista.
     """
     por_nombre: dict = {}
     por_ip: dict = {}
@@ -1710,6 +2076,12 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
                 )
 
     altas: list[dict] = []
+    identidades: list[dict] = []
+    # La identidad de sondeo sólo se resuelve si algún equipo la pide: un laboratorio sin SNMP
+    # no exige la credencial —no hay nada que sondear—, y resolverla antes hacía que faltara un
+    # secreto que nadie iba a usar.
+    de_la_vista = (_identidad_para_la_vista(observabilidad_de(observabilidad, secrets))
+                   if any(_la_vista_sondea(n) for n in nodes or []) else None)
     for node, _candidatos, objeto in equipos:
         direccion = _direccion_de(node)
         nombre = node.get("name") or node.get("role")
@@ -1720,6 +2092,12 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
         es_final = node.get("type") in ("server", "workstation")
         usuario = "root" if es_final else (_declared_user(node) or "admin")
         clave = linux_clave(node, secrets) if es_final else ros_clave(node, secrets or {})
+        # La identidad con la que la vista sondea un equipo se pone donde hay algo que
+        # sondear: sólo en quien enciende SNMP. Sin el área, el motor no toca el servicio
+        # en el equipo (ver `_snmp_ops`), así que tampoco tiene sentido decirle a la vista
+        # que lo sondee; y un nodo final no habla SNMP —su salud se mira por ICMP—, así
+        # que la identidad es de los equipos de red.
+        grupo = de_la_vista if _la_vista_sondea(node) else None
         # Un nodo final que ya está registrado sin credenciales (o con otras) no se
         # puede arreglar con PATCH: el API de esta versión las ignora. Se rehace una
         # vez —se retira y se vuelve a dar de alta— para que su terminal abra sola;
@@ -1786,6 +2164,12 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
                 "sshPassword": clave,
                 "sshPort": int(puerto),
             }
+            # Las credenciales SSH sólo se aceptan al crear; las de SNMP sí se pueden
+            # corregir después, pero van en el mismo alta cuando se sabe con antelación:
+            # un equipo que naciera sondeándose en claro y se arreglara en el mismo
+            # `apply` habría pasado un rato con las claves a la vista de la red.
+            if grupo:
+                cuerpo["snmp"] = grupo
             altas.append({
                 "cmd": netxms_crear_cmd(api),
                 "cuerpo": json.dumps(cuerpo),
@@ -1798,6 +2182,18 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
         # persona. Los nodos finales sí se rehacen arriba, porque su terminal es el
         # único uso de esas credenciales.
         actual = leidos.get(int(objeto["id"])) or {}
+        # La identidad de sondeo va aparte de la terminal y se arregla aunque la terminal
+        # esté como debe: son dos cosas independientes, y un equipo que ya tiene bien sus
+        # credenciales SSH puede seguir contestando en claro por SNMP.
+        if grupo and objeto.get("id") is not None:
+            cambios = _cambios_del_grupo(actual.get("snmp") or {}, grupo)
+            if cambios:
+                identidades.append({
+                    "cmd": netxms_snmp_cmd(api, objeto["id"]),
+                    "cuerpo": json.dumps(cambios),
+                    "effect": (f"decirle a la vista con qué identidad sondea a {nombre} "
+                               f"({direccion}): SNMP v{grupo['version']}"),
+                })
         if (str(actual.get("sshLogin") or "") == usuario
                 and str(actual.get("sshPassword") or "") == clave
                 and int(actual.get("sshPort") or 0) == int(puerto)):
@@ -1807,7 +2203,7 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
             f"(usuario {actual.get('sshLogin') or 'ninguno'}), y el API de esta versión "
             "sólo las acepta al crear el equipo: cámbialas a mano en su consola"
         )
-    return {"ops": borrados + altas, "pendientes": pendientes}
+    return {"ops": borrados + altas + identidades, "pendientes": pendientes}
 
 
 def netxms_ids(nodes: list[dict], encontrados: list | None) -> list:

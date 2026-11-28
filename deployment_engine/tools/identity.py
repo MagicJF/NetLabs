@@ -52,6 +52,14 @@ TYPES = {
 ROS_SECRET = "secrets.routeros_clave"
 # La comunidad SNMP tampoco se escribe en el laboratorio: se nombra y se resuelve.
 SNMP_SECRET = "secrets.snmp_comunidad"
+# El P0 de la observabilidad (ADR 0019) deja atrás la comunidad v2c en claro. La
+# identidad v3 tampoco la elige un laboratorio: se nombra UNA vez, en el entorno
+# (`observabilidad.snmp`), y su valor vive en `secrets.yml`. Los protocolos son los que
+# RouterOS 7.25 admite —medido contra un CHR desplegado, no deducido de la documentación:
+# en mayúsculas, y `AES` es AES-128 (no existe `AES256`).
+SNMP_V3_SECRET = "secrets.snmp_v3"
+SNMP_V3_AUTENTICACION = ("MD5", "SHA1", "SHA256", "SHA512")
+SNMP_V3_CIFRADO = ("DES", "AES")
 
 # Las áreas de configuración que el motor entiende, por clase de equipo. Una clave
 # fuera de su lista es un error con mensaje (§2.13), no una nota al pie.
@@ -183,8 +191,83 @@ def tunnel_port(vmid: int) -> int:
 # Validación de la declaración
 # ---------------------------------------------------------------------------
 
+def _validate_registro(registro: dict) -> None:
+    """El bloque `observabilidad.registro`: si la vista escucha los registros de los equipos.
+
+    Se enciende una sola vez, para todo el sitio: el laboratorio no lo declara —un equipo no
+    elige quién le escucha—, igual que no elige con qué identidad se le sondea (ADR 0019).
+    """
+    if not isinstance(registro, dict):
+        raise LabError("'observabilidad.registro' tiene que ser un mapa")
+    sobran = set(registro) - {"recoger", "puerto"}
+    if sobran:
+        raise LabError(
+            f"'observabilidad.registro' no entiende {', '.join(sorted(sobran))}: es "
+            "{recoger, puerto}"
+        )
+    if "recoger" in registro and not isinstance(registro["recoger"], bool):
+        raise LabError(
+            f"'observabilidad.registro.recoger' es verdadero o falso; dice {registro['recoger']!r}"
+        )
+    puerto = registro.get("puerto")
+    # Un booleano también es `int` en Python, así que `puerto: true` pasaría el rango y viajaría
+    # al API como `"True"`: se rechaza antes de llamarlo, como el vmid.
+    if puerto is not None and not (
+            isinstance(puerto, int) and not isinstance(puerto, bool) and 1 <= puerto <= 65535):
+        raise LabError(
+            f"'observabilidad.registro.puerto' es un puerto (1-65535); dice {puerto!r}"
+        )
+
+
+def validate_observabilidad(env: dict) -> None:
+    """El bloque `observabilidad` del entorno: cómo se mira a los equipos (ADR 0019).
+
+    No es un laboratorio, así que no lo valida `_validate_area`: se comprueba aquí, con
+    el entorno delante, para que un error se lea donde está escrito. El entorno nombra la
+    credencial; el valor lo resuelve `converge` contra `secrets.yml`.
+    """
+    bloque = env.get("observabilidad")
+    if bloque is None:
+        return
+    if not isinstance(bloque, dict):
+        raise LabError("'observabilidad' del entorno tiene que ser un mapa")
+    sobran = set(bloque) - {"snmp", "registro"}
+    if sobran:
+        raise LabError(
+            f"'observabilidad' del entorno no entiende {', '.join(sorted(sobran))}: es "
+            "{snmp, registro}"
+        )
+    registro = bloque.get("registro")
+    if registro is not None:
+        _validate_registro(registro)
+    snmp = bloque.get("snmp")
+    if snmp is None:
+        return
+    if not isinstance(snmp, dict):
+        raise LabError("'observabilidad.snmp' tiene que ser un mapa")
+    sobran = set(snmp) - {"version", "credencial_from"}
+    if sobran:
+        raise LabError(
+            f"'observabilidad.snmp' no entiende {', '.join(sorted(sobran))}: es "
+            "{version, credencial_from}"
+        )
+    version = snmp.get("version")
+    if version not in (2, 3):
+        raise LabError(
+            f"'observabilidad.snmp.version' es 2 (comunidad en claro) o 3 (usuario "
+            f"autenticado y cifrado); dice {version!r}"
+        )
+    esperado = SNMP_V3_SECRET if version == 3 else SNMP_SECRET
+    if snmp.get("credencial_from") != esperado:
+        raise LabError(
+            f"la identidad SNMP v{version} sólo puede tomar el nombre de `{esperado}`: "
+            "se nombra en el entorno y se resuelve contra secrets.yml, no se escribe aquí"
+        )
+
+
 def validate(lab: dict, env: dict) -> None:
     """Rechaza lo que el motor no entiende, con el motivo y el sitio."""
+    validate_observabilidad(env)
     if not isinstance(lab, dict):
         raise LabError("la declaración tiene que ser un mapa YAML")
     unknown = set(lab) - LAB_KEYS
@@ -849,21 +932,20 @@ def _validate_area(role: str, area: str, body, networks: dict, salidas=None,
                     f"`{ROS_SECRET}`: una clave escrita en el laboratorio no se admite"
                 )
     elif area == "snmp":
+        # El laboratorio sólo dice si se mira al equipo; con qué identidad se mira es
+        # del entorno (`observabilidad.snmp`, ADR 0019). Un laboratorio que eligiera su
+        # propia versión de SNMP tendría la vista mirando a cada equipo de una manera.
         if not isinstance(body, dict):
             raise LabError(f"el área 'snmp' de {role!r} tiene que ser un mapa")
-        sobran = set(body) - {"enabled", "community_from"}
+        sobran = set(body) - {"enabled"}
         if sobran:
             raise LabError(
                 f"el área 'snmp' de {role!r} no entiende {', '.join(sorted(sobran))}: "
-                "es {enabled, community_from}"
+                "es {enabled}. La identidad con la que se mira vive en el entorno "
+                "(`observabilidad.snmp`), no en el laboratorio"
             )
         if not isinstance(body.get("enabled"), bool):
             raise LabError(f"el área 'snmp' de {role!r} declara 'enabled' sí o no")
-        if body["enabled"] and body.get("community_from") != SNMP_SECRET:
-            raise LabError(
-                f"la comunidad SNMP de {role!r} solo puede tomar el nombre de `{SNMP_SECRET}`: "
-                "la comunidad se nombra, no se escribe en el laboratorio"
-            )
 
 
 def _require_list(role: str, area: str, body) -> None:
@@ -1039,6 +1121,27 @@ def _rutas(lab: dict, nodes: list[dict]) -> list[dict]:
     return rutas
 
 
+def _misma_mascara(declarada: str | None, puesta: str | None) -> bool:
+    """Si las dos máscaras dicen lo mismo, aunque se escriban distinto.
+
+    La API del nodo **devuelve** la máscara de un puente como longitud de prefijo («24») pero
+    **acepta** —y el plano declara— la forma punteada («255.255.255.0»): compararlas tal cual da
+    por cambiado un puente que ya está como debe, y el motor pediría el mismo cambio en cada
+    pasada para siempre. Medido: así estaba, y por eso el `apply` intentaba «cambiar el tramo» de
+    una salida que ya estaba bien. Se comparan por lo que significan, no por cómo se escriben.
+    """
+    def ancho(valor: str | None) -> int | None:
+        texto = str(valor or "").strip()
+        if not texto:
+            return None
+        try:
+            return (ipaddress.ip_network(f"0.0.0.0/{texto}").prefixlen
+                    if "." in texto else int(texto))
+        except ValueError:
+            return None
+    return ancho(declarada) == ancho(puesta)
+
+
 def plan(world: dict, lab: dict, env: dict) -> dict:
     """Calcula qué hay que hacer, sin tocar el mundo.
 
@@ -1180,10 +1283,12 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         # Se comparan dirección Y máscara: un puente al que le quitaron la dirección o
         # le cambiaron la máscara es una salida rota, y el plan tiene que repararla.
         # El comentario del fichero del nodo lleva su salto de línea al final: se
-        # compara por contención, igual que la marca de un cable.
+        # compara por contención, igual que la marca de un cable. La máscara se compara
+        # por lo que significa: la API la devuelve como longitud y el plano la declara
+        # punteada, y tal cual daría por cambiado un puente que ya está bien.
         if (comment not in (exists.get("comments") or "")
                 or (exists.get("address") or "") != salida["address"]
-                or (exists.get("netmask") or "") != salida["netmask"]):
+                or not _misma_mascara(salida["netmask"], exists.get("netmask"))):
             steps.append({"op": "bridge_set", "bridge": bridge, "comment": comment,
                           "address": salida["address"], "netmask": salida["netmask"]})
             effects.append(f"la salida {bridge} pasa a {salida['address']}/{salida['netmask']}")

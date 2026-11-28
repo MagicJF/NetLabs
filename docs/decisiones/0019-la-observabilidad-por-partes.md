@@ -35,6 +35,25 @@ y su PR.
 3. **El poll de topología encendido.** Sin él, por mucho que un equipo anuncie vecinos, la vista no
    mira.
 
+**Lo que se midió en la instalación viva** (ya no es «lo que dice el código»):
+
+- **Syslog: está apagado.** `Syslog.EnableListener = 0` y no hay nada escuchando en 514/udp. Se enciende con una variable **guardada en la base**, no en `netxmsd.conf`:
+  `nxdbmgr set Syslog.EnableListener 1` —ya existe `nxdbmgr get/set`, y `-N` no reemplaza el valor si
+  ya está: idempotente de serie—, **exige reiniciar el servicio**, y `Syslog.ListenPort` es 514 (por
+  debajo de 1024 hace falta privilegio). Los mensajes van a la tabla `syslog` y se **atan a un equipo
+  por su dirección de origen**: lo que venga de una fuente que no sea un equipo declarado **se
+  descarta** salvo `Syslog.AllowUnknownSources=1` (hoy 0). Ese detalle es el que hace que un syslog
+  «encendido» no registre nada y parezca que funciona.
+- **Topología: no hay nada que encender — ya lo está.** `Topology.PollingInterval = 1800`,
+  `Topology.RoutingTable.UpdateInterval = 300`, `Topology.EnableSTPDiscovery = 1`, el hook
+  `TopologyPoll` se carga al arrancar, y **no existe ninguna variable que lo apague**: el flag por
+  equipo (`flags.disableTopologyPoll`) ya está en `false`. El §7 decía «hoy sin ejecutar» y **eso es
+  lo que estaba mal**. Pero encendido no es lo mismo que sirviendo: **`physical_links` está vacío**,
+  no ha descubierto un solo enlace de capa 2. Lo que queda de esta parte no es encenderla, es
+  averiguar por qué no ve nada —¿RouterOS no publica STP/LLDP en sus puentes como la vista espera,
+  el radio de descubrimiento, la red de gestión?— antes de dar la topología por hecha.
+
+
 **P1 — la topología, con lo que sí es fiable**
 
 4. La topología L2 se apoya en la **tabla de reenvío del puente (FDB/Bridge)**, no en el LLDP. El
@@ -69,15 +88,27 @@ y su PR.
 - El §7 de `docs/diseno.md` decía «sin agente en esta fase»; esta decisión lo sustituye por un P2
   declarado y con motivo.
 - **Nada de esto se declara en un laboratorio**: se enciende en los equipos y en la vista, y por eso
-  va aparte de los laboratorios. Pero **el motor no queda fuera del P0**: la migración a SNMP v3
-  tendrá que adaptar también lo que el motor restaura. En un laboratorio que declare el área `snmp`,
-  `_snmp_ops` (`tools/converge.py`) impone `security: none` —v2c— a la comunidad declarada y a las
-  demás activas, y vuelve a encender las de fábrica: el `apply` siguiente desharía el v3 y
-  devolvería el laboratorio al claro sin decirlo. Hasta que le llegue el turno, el motor se queda
-  como está.
-- **Antes del P0** lo que hay que comprobar es el camino entre la vista y los equipos —que el sondeo
-  SNMP v3 y los registros lleguen por la red de gestión—, que es de lo que el P0 depende. La consola
-  pública no está en ese camino: el motor habla con el servicio **desde dentro de su invitado**, por
-  su API (`management.api`, `http://127.0.0.1:8000/v1`), que es por donde lee y coloca el mapa. Que
-  `netxms.matadepera.eu:443` falle es del proxy que publica la consola, y no bloquea ni a la
-  topología ni al syslog.
+  va aparte de los laboratorios. Pero **el motor no queda fuera del P0**, ni en los equipos ni en la
+  vista. En RouterOS, un laboratorio que declare el área `snmp` pone la identidad v3 con
+  `security: private` y apaga las comunidades v2c —antes `_snmp_ops` imponía `security: none` y
+  volvía a encender las de fábrica, así que el `apply` siguiente habría deshecho el v3 sin decirlo—.
+  Y en la vista se le dice **la misma identidad traducida a su idioma**, que no es el mismo: la
+  instalación llama `AES-128` a lo que RouterOS llama `AES` y contesta 400 a un `AES` a secas, y a la
+  comunidad de v2c la llama `authName`, que es lo que es. Se le dice por el grupo SNMP del equipo
+  (`/objects/{id}/snmp`), que es el único sitio por el que su API acepta tocar cómo se sondea un
+  equipo: las credenciales SSH sólo las acepta al crear, y por eso un equipo con la terminal bien y el
+  sondeo en claro se quedaba así. Sin esto, retirar las comunidades en claro habría dejado a la vista
+  sin poder sondear y el P0 sería decorativo.
+- La consola pública **no está en ese camino**: el motor habla con el servicio **desde dentro de su
+  invitado**, por su API (`management.api`, `http://127.0.0.1:8000/v1`), que es por donde lee el censo,
+  da de alta los equipos, les dice con qué sondearlos y coloca el mapa. Que `netxms.matadepera.eu:443`
+  falle es del proxy que publica la consola, y no bloquea ni a la topología ni al syslog.
+- Quedan de esta parte —P0— la **recogida de registros** y el **poll de topología**; el sondeo v3
+  está desplegado sobre el laboratorio `f_acme_cuatro_departamentos` y medido: los catorce equipos de
+  red llevan la identidad v3 en su RouterOS con las comunidades v2c apagadas, la vista guarda esa
+  misma identidad para los catorce, y desde el invitado de la vista —su propia herramienta, sus mismas
+  credenciales— el equipo contesta a `authPriv` con `sysName.0: rte1` mientras la comunidad de fábrica
+  por v2c **agota el tiempo**: ya no hay nadie contestando en claro. El API de esta versión no tiene
+  sondeo forzado (responde 404 a `POST /objects/{id}/poll/{tipo}`), así que el sondeo de la vista se
+  comprueba por sus credenciales y su estado —`snmpUnreachable: false`, driver `MIKROTIK`—, no por una
+  ejecución a demanda.

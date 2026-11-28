@@ -85,7 +85,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rtp1
     type: router
@@ -103,7 +103,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # --- los dos routers de borde: entre Internet y la red de su sede -----------------
   - role: rte1
@@ -134,7 +134,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rte2
     type: router
@@ -158,7 +158,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # --- el switch de la red de cada sede: aquí se juntan el borde y los dos routers --
   # Un switch no enruta: conmuta. Lleva los mismos recursos que un router —un núcleo y
@@ -172,7 +172,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swc2
     type: switch
@@ -183,7 +183,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # --- los cuatro routers de departamento: entre la red de la sede y su departamento -
   - role: rta1
@@ -207,7 +207,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rta2
     type: router
@@ -229,7 +229,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rta3
     type: router
@@ -251,7 +251,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rta4
     type: router
@@ -273,7 +273,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # --- el switch de cada departamento: es quien conecta los clientes al router ------
   # Cuatro patas: el router, los dos puestos y el servidor.
@@ -286,7 +286,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swa2
     type: switch
@@ -297,7 +297,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swa3
     type: switch
@@ -308,7 +308,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swa4
     type: switch
@@ -319,7 +319,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # --- los puestos: piden dirección al router de su departamento --------------------
   # Con reserva: siguen siendo clientes DHCP, pero el router siempre les da la misma

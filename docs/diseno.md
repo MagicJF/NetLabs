@@ -794,11 +794,13 @@ RouterOS), así que declararlo otra vez sería una segunda verdad esperando a co
 que no está, se añade la primitiva al motor **con su prueba**, no se abre una puerta genérica del
 tipo «ejecuta esta orden» ni se permite un caso especial por laboratorio.
 
-El área `snmp` enciende el servicio y mantiene una comunidad de **sólo lectura, restringida a la
-red de gestión**: el laboratorio dice `enabled` y nombra la comunidad (`community_from`), y el
-valor se resuelve en `secrets.yml`. Sin el área, el motor no toca el servicio; es lo que permite
-a NetXMS leer nombre, interfaces, rutas y tabla ARP del router, y de ahí lo que cuelga de sus
-redes (§3.4).
+El área `snmp` enciende el servicio y mantiene una identidad de **sólo lectura, restringida a la
+red de gestión**. El laboratorio dice `enabled` y **nada más**: con qué identidad se mira —SNMP v3
+con autenticación y cifrado, o la comunidad v2c en claro— lo declara el **entorno**
+(`observabilidad.snmp`, §7), porque mirar a un equipo no es cosa de un laboratorio y, si lo fuera,
+dos equipos del mismo laboratorio podrían mirarse de dos maneras. Sin el área, el motor no toca el
+servicio; es lo que permite a NetXMS leer nombre, interfaces, rutas y tabla ARP del router, y de ahí
+lo que cuelga de sus redes (§3.4).
 
 El área que abre el laboratorio al plano de gestión (permitir el cruce desde la red de gestión
 hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.
@@ -828,12 +830,24 @@ hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.
 Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 0019):
 
 - **P0.** SNMP v3 en lugar de la comunidad en claro, los registros de los equipos recogidos por la
-  vista, y el **poll de topología** encendido —hoy sin ejecutar—. Va con el motor dentro: en un
-  laboratorio que declare el área `snmp`, el motor impone `security: none` (v2c) a las comunidades
-  y vuelve a encender las de fábrica (`_snmp_ops`), así que la migración tiene que adaptar también
-  lo que el motor restaura —si no, el `apply` siguiente la deshace—. Lo que no cambia es dónde
-  vive: la consola pública no está en el camino del motor, que habla con la vista por su API desde
-  dentro de su invitado (`management.api`).
+  vista, y el **poll de topología** —que este § daba por «sin ejecutar» y **ya está encendido**: no
+  hay interruptor global que apagar, va por temporizador (`Topology.PollingInterval`, 1800 s) y el flag
+  por equipo está en `false`. Lo que pasa es que **corre y no ve nada** (`physical_links` vacío): lo que
+  queda no es encenderlo, es averiguar por qué no descubre un solo enlace de capa 2 (ADR 0019)—. La
+  parte de SNMP está hecha: la
+  identidad se declara **una vez, en el entorno** (`observabilidad.snmp`, `version: 3`), y el
+  laboratorio sólo dice si se mira al equipo; el motor crea en cada RouterOS una entrada
+  `/snmp/community` con `security: private` —autenticación y cifrado—, acota **todas** las
+  identidades a la red de gestión y **apaga las comunidades v2c**, porque mientras una siga viva el
+  equipo sigue contestando en claro y la migración sería decorativa. La rama v2c se conserva para un
+  equipo que no sepa v3, y se elige con una palabra (`version: 2`), no por equipo. La **misma**
+  identidad se le dice a la vista, traducida a su idioma —la instalación llama `AES-128` a lo que
+  RouterOS llama `AES`, y a la comunidad de v2c la llama `authName`—, por el grupo SNMP del equipo
+  (`/objects/{id}/snmp`): sin eso, retirar las comunidades en claro dejaría a la vista sin poder
+  sondear y el cambio sería decorativo por el otro lado. Va en el alta y se corrige después con un
+  `PATCH` de fusión, así que un `apply` repetido no escribe. Quedan de esta parte la recogida de
+  registros y el poll de topología. Lo que no cambia es dónde vive: la consola pública no está en el
+  camino del motor, que habla con la vista por su API desde dentro de su invitado (`management.api`).
 - **P1.** La topología L2 real por la **tabla del puente (FDB)**, no por LLDP: el LLDP de MikroTik no
   lo lee bien la vista. Con ella delante, se contrasta con el plano del motor (ADR 0007).
 - **P2.** **Agente** en los nodos finales Linux —CPU, memoria, procesos—. En RouterOS no existe.
@@ -853,6 +867,35 @@ Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 00
 - Las capacidades de un equipo las detecta el **poll de configuración**: tras cambiar RouterOS hay que
   forzarlo para que la ficha deje de mentir.
 - OSPF, VRRP, BFD y 802.1x son **laboratorios**, no monitorización: se modelan para poder romperlos.
+
+### 7.2. Los registros de los equipos: los escucha la vista, y lo enciende el entorno
+
+La vista nace con la escucha de registros apagada, y encenderla tiene dos partes incómodas: la
+variable vive **en la base del servicio** —no en su fichero de arranque— y el servicio **sólo la lee
+al arrancar**. De ahí que la decisión (ADR 0021) no sea «escribir una variable» sino dos cosas:
+
+- **Es del entorno, no del laboratorio.** Se declara en `observabilidad.registro` (`recoger`,
+  `puerto`), junto a la identidad con la que se sondea y por el mismo motivo: un equipo no elige
+  quién le escucha. La validación **rechaza** que un laboratorio lo declare.
+- **Se escribe sólo la diferencia, y por la vía del API.** Una lectura de todas las variables
+  (`GET /server-config`) y, por cada una que difiera, su `PUT /server-config/{nombre}`. Un `apply`
+  repetido no escribe nada.
+- **El reinicio lo dice la variable, no el motor.** Cada variable trae en la lectura si su cambio
+  exige reiniciar (`needServerRestart`); el motor no mantiene su propia lista de nombres que
+  reinician —se quedaría vieja—. Sólo reinicia si escribió algo que lo pide, y **si no pudo leer la
+  variable asume que sí**: ante la duda, que el cambio surta efecto, porque creer encendido lo que
+  está apagado engaña. Después espera a que el servicio vuelva a atender antes de darlo por bueno,
+  que un reinicio que no levanta dejaría el despliegue en verde y la vista muerta.
+- **El valor escrito no es la escucha en pie, y se mide.** La lectura no trae ningún campo que diga
+  «esto está escrito y todavía no en vigor», así que una pasada que escriba y se corte antes de
+  reiniciar deja el valor correcto y la escucha apagada, y la pasada siguiente —al ver el valor
+  correcto— no reiniciaría **jamás**. Se llegó ahí, y por eso el motor no se fía del valor: mira el
+  puerto (`ss -lun`) y, si el entorno pidió escuchar y no hay nadie escuchando, falta el reinicio
+  aunque no hubiera nada que escribir. Lo que no se puede medir no se suple reiniciando a ciegas:
+  reiniciar el servicio en cada pasada sería peor que el problema.
+- **Falta la otra mitad, y va aparte:** que los equipos **manden** sus registros a la vista (en
+  RouterOS, la acción de registro con destino remoto) y la comprobación de que un mensaje entra y
+  se guarda. La escucha queda puesta; el tráfico, todavía no.
 
 ---
 
