@@ -1,4 +1,4 @@
-# 0023 — El icono de un equipo sale de su rol, no de lo que la vista adivine
+# 0025 — El icono de un equipo sale de su rol, no de lo que la vista adivine
 
 **Fecha:** 28 de noviembre de 2026
 **Estado:** aceptada
