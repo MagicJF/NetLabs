@@ -336,6 +336,10 @@ nodes:
     networks: [ny_ventas]
     address: dhcp
     reserve: 10.50.55.50
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
   - role: wsp2
     type: workstation
@@ -345,6 +349,10 @@ nodes:
     networks: [ny_ventas]
     address: dhcp
     reserve: 10.50.55.51
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
   - role: wsp3
     type: workstation
@@ -354,6 +362,10 @@ nodes:
     networks: [ny_ingenieria]
     address: dhcp
     reserve: 10.50.66.50
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
   - role: wsp4
     type: workstation
@@ -363,6 +375,10 @@ nodes:
     networks: [ny_ingenieria]
     address: dhcp
     reserve: 10.50.66.51
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
   - role: wsp5
     type: workstation
@@ -372,6 +388,10 @@ nodes:
     networks: [tk_ventas]
     address: dhcp
     reserve: 10.60.55.50
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
   - role: wsp6
     type: workstation
@@ -381,6 +401,10 @@ nodes:
     networks: [tk_ventas]
     address: dhcp
     reserve: 10.60.55.51
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
   - role: wsp7
     type: workstation
@@ -390,6 +414,10 @@ nodes:
     networks: [tk_ingenieria]
     address: dhcp
     reserve: 10.60.66.50
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
   - role: wsp8
     type: workstation
@@ -399,6 +427,10 @@ nodes:
     networks: [tk_ingenieria]
     address: dhcp
     reserve: 10.60.66.51
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
   # --- los servidores: un servicio por departamento, con dirección propia -----------
   - role: svs1                    # el servidor de Sales en Nueva York
@@ -408,6 +440,10 @@ nodes:
     resources: {cores: 1, memory: 256, disk: 4}
     networks: [ny_ventas]
     address: 10.50.55.10/24
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
   - role: svs2                    # el servidor de Engineering en Nueva York
     type: server
@@ -416,6 +452,10 @@ nodes:
     resources: {cores: 1, memory: 256, disk: 4}
     networks: [ny_ingenieria]
     address: 10.50.66.10/24
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
   - role: svs3                    # el servidor de Sales en Tokio
     type: server
@@ -424,6 +464,10 @@ nodes:
     resources: {cores: 1, memory: 256, disk: 4}
     networks: [tk_ventas]
     address: 10.60.55.10/24
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
   - role: svs4                    # el servidor de Engineering en Tokio
     type: server
@@ -432,6 +476,10 @@ nodes:
     resources: {cores: 1, memory: 256, disk: 4}
     networks: [tk_ingenieria]
     address: 10.60.66.10/24
+    # Se mira por dentro: su CPU, su memoria, su disco y sus procesos los lee el
+    # agente de la vista, no un simple «responde / no responde».
+    configure:
+      agente: {enabled: true}
 
 links:
   # Internet: el proveedor y su switch; no hay cable directo entre routers.

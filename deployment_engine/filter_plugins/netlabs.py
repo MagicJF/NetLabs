@@ -194,6 +194,11 @@ class FilterModule:
             "netlabs_netxms_fichas_cmd": lambda api: converge.netxms_fichas_cmd(api),
             "netlabs_netxms_fichas_cuerpo": lambda ids=None, api=None: converge.netxms_fichas_cuerpo(ids),
             "netlabs_netxms_ids": lambda nodes, encontrados: converge.netxms_ids(nodes, encontrados),
+            # El agente de los nodos finales: el motor lo instala y espera con tope a que
+            # la vista lo vea (ADR 0019, P2).
+            "netlabs_netxms_agente_ops": lambda nodes, encontrados, detalles, api:
+                converge.netxms_agente_ops(nodes, encontrados, detalles, api),
+            "netlabs_netxms_agente_nodos": lambda nodes: converge.netxms_agente_nodos(nodes),
             "netlabs_netxms_ops": lambda nodes, encontrados, detalles, api, secrets=None,
                 vivas=None, propias=None, observabilidad=None: converge.netxms_ops(
                     nodes, encontrados, detalles, api, secrets, vivas=vivas, propias=propias,

@@ -102,3 +102,22 @@ observabilidad:
   registro:
     recoger: true
     puerto: 514
+
+  # El agente de la vista en los nodos finales Linux (P2, ADR 0019). Un nodo final no
+  # habla SNMP —con SNMP la vista le saca las interfaces, no la salud—, así que su CPU,
+  # su memoria, su disco y sus procesos se leen con el agente nativo. El laboratorio
+  # sólo enciende su área `agente: {enabled}` en el nodo; con qué se instala y desde
+  # dónde se le sondea es del sitio, y vive aquí.
+  #
+  # `repositorio` es la misma forma que el área `repositories` de un Linux
+  # ({name, url, suite, components, key?}), y `key` es la clave con la que se firma el
+  # repositorio; el motor la deja en /etc/apt/keyrings/<name>.gpg. El agente no está en
+  # el repositorio de fábrica de la imagen, y por eso el paquete no se instala sin esto.
+  agente:
+    paquete: netxms-agent
+    repositorio:
+      name: netxms
+      url: https://packages.netxms.org/7.x/debian
+      suite: trixie
+      components: main
+      key: https://packages.netxms.org/netxms-keyring.gpg

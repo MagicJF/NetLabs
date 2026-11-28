@@ -1375,3 +1375,92 @@ class LaSalidaALaRedPublica(unittest.TestCase):
         with self.assertRaises(identity.LabError) as ctx:
             identity.cables(lab)
         self.assertIn("ya es el nombre de un cable", str(ctx.exception))
+
+
+class ElAgenteDeLaVista(unittest.TestCase):
+    """P2 de la observabilidad (ADR 0019): un nodo final Linux se mira por dentro.
+
+    El laboratorio enciende el área `agente` de su nodo —`agente: {enabled: true}`, como
+    enciende `snmp`— y el motor lo pone: el paquete del agente, con el repositorio que
+    declara el **sitio** y no el laboratorio, su configuración —la vista y nadie más
+    puede leerlo— y su servicio. La salud del invitado deja de ser un «responde».
+    """
+
+    def _lab_con_agente(self, role="wsp1"):
+        lab = copy.deepcopy(laboratorio())
+        next(n for n in lab["nodes"] if n["role"] == role)["configure"] = {"agente": {"enabled": True}}
+        return lab
+
+    def _nodo(self, plan, role):
+        return next(n for n in plan["nodes"] if n["role"] == role)
+
+    def test_un_nodo_con_el_area_encendida_lleva_el_paquete_y_su_servicio(self):
+        env = entorno()
+        plan = identity.plan(mundo(), self._lab_con_agente(), env)
+        config = self._nodo(plan, "wsp1")["configure"]
+        agente = env["observabilidad"]["agente"]
+        self.assertIn(agente["paquete"], config["packages"])
+        self.assertIn(agente["repositorio"], config["repositories"])
+        self.assertIs(config["services"]["netxms-agent"], True)
+        fichero = next(f for f in config["files"] if f["path"] == identity.NXAGENTE_CONF)
+        # La vista y nadie más: su espacio de gestión queda en la lista de SÓLO LECTURA,
+        # no en la que además escribiría la configuración del agente.
+        self.assertIn("Servers=10.30.0.0/16", fichero["content"])
+        self.assertNotIn("MasterServers", fichero["content"])
+        self.assertNotIn("ControlServers", fichero["content"])
+        # Escribir la configuración no es haberla releído: el fichero reinicia el servicio.
+        self.assertEqual(fichero["restart"], "netxms-agent")
+        # Y el área declarada sigue viéndose en la ficha: no se sustituye por las cuatro
+        # áreas que produce en su lugar.
+        self.assertEqual(config["agente"], {"enabled": True})
+
+    def test_con_lo_que_el_sitio_no_declara_el_agente_no_se_inventa(self):
+        env = copy.deepcopy(entorno())
+        del env["observabilidad"]["agente"]
+        with self.assertRaisesRegex(identity.LabError, "no declara"):
+            identity.plan(mundo(), self._lab_con_agente(), env)
+
+    def test_el_agente_no_es_de_un_equipo_de_red(self):
+        # RouteOS no lleva agente (ADR 0019): declararlo en un router lo pararía en el
+        # vocabulario, que es antes de desplegar nada.
+        lab = copy.deepcopy(laboratorio())
+        lab["nodes"][0]["configure"]["agente"] = {"enabled": True}
+        with self.assertRaisesRegex(identity.LabError, "no existe para su tipo"):
+            identity.plan(mundo(), lab, entorno())
+
+    def test_el_agente_solo_entiende_si_esta_encendido(self):
+        # Con qué se instala no lo elige el laboratorio: eso haría que la vista mirase a
+        # cada nodo de una manera. La forma del área es una sola.
+        lab = copy.deepcopy(laboratorio())
+        lab["nodes"][1]["configure"] = {"agente": {"paquete": "otro"}}
+        with self.assertRaisesRegex(identity.LabError, "no entiende paquete"):
+            identity.plan(mundo(), lab, entorno())
+
+    def test_el_agente_no_se_declara_en_el_invitado_de_gestion(self):
+        # El invitado de gestión ya es la vista y ya lleva su agente: declararlo ahí lo
+        # escribiría dos veces, en el mismo sitio donde corre el servicio.
+        lab = copy.deepcopy(laboratorio("a_bootstrap"))
+        lab["nodes"][0]["configure"] = {"agente": {"enabled": True}}
+        with self.assertRaisesRegex(identity.LabError, "ya es la vista"):
+            identity.plan(mundo(), lab, entorno())
+
+    def test_dos_pasadas_dan_la_misma_orden_y_la_segunda_no_pide_nada(self):
+        """Lo que el agente añade al interior no se escribe dos veces.
+
+        La segunda pasada ve el mundo como lo dejó la primera —los invitados y los
+        puentes ya creados—: su orden para el nodo es la MISMA, y no pide ningún paso que
+        el hipervisor tenga que escribir. Sin esto, cada `apply` reinstalaría el agente
+        aunque ya estuviera puesto.
+        """
+        lab, env = self._lab_con_agente(), entorno()
+        primero = identity.plan(mundo(), lab, env)
+        pool = primero["pool"]
+        invitados = [{"vmid": n["vmid"], "name": n["name"], "type": n["guest"], "pool": pool,
+                      "status": "running"} for n in primero["nodes"]]
+        puentes = [{"iface": s["bridge"], "comments": s["comment"]}
+                   for s in primero["steps"] if s["op"] == "bridge_ensure"]
+        segundo = identity.plan(mundo(invitados=invitados, bridges=puentes, pools=[pool]), lab, env)
+        self.assertEqual(self._nodo(segundo, "wsp1")["configure"],
+                         self._nodo(primero, "wsp1")["configure"])
+        self.assertEqual([s for s in segundo["steps"]
+                          if s["op"] not in ("rutas_converge", "netxms_registro", "netxms_mapa")], [])

@@ -68,8 +68,24 @@ SNMP_V3_CIFRADO = ("DES", "AES")
 # declararlo otra vez sería una segunda verdad esperando a contradecirse.
 AREAS = {
     "routeros": {"addresses", "routes", "nat", "dns", "dhcp_server", "services", "users", "snmp"},
-    "linux": {"repositories", "packages", "files", "commands", "services"},
+    "linux": {"repositories", "packages", "files", "commands", "services", "agente"},
 }
+
+# El agente de la vista en los nodos finales Linux (P2, ADR 0019). Un nodo final no
+# habla SNMP —con SNMP la vista le saca las interfaces, no la salud—, así que su CPU,
+# su memoria, su disco y sus procesos se leen con el agente nativo. El laboratorio
+# sólo enciende el área (`agente: {enabled}`) y el motor la expande a las áreas que ya
+# sabe converger, con el paquete y el repositorio que declara el **sitio**
+# (`observabilidad.agente`): mirar no es cosa de un laboratorio.
+#
+# El agente lee **un solo** fichero, `/etc/nxagentd.conf` (medido: el paquete 7.0.5-1
+# no trae ningún directorio de fragmentos y su man 5 `nxagentd.conf` no lista otro), así
+# que la configuración se escribe ahí entera. El paquete lo crea con su plantilla —que
+# deja `MasterServers=127.0.0.0/8`, es decir acceso total desde el propio equipo— y el
+# motor lo sustituye por lo que declara el sitio: la configuración del agente no se
+# adivina, se declara.
+NXAGENTE_CONF = "/etc/nxagentd.conf"
+NXAGENTE_SERVICIO = "netxms-agent"
 
 LAB_KEYS = {"lab", "kind", "address_spaces", "networks", "nodes", "links"}
 # Un laboratorio de control no dibuja una topología: declara el servicio que
@@ -231,15 +247,18 @@ def validate_observabilidad(env: dict) -> None:
         return
     if not isinstance(bloque, dict):
         raise LabError("'observabilidad' del entorno tiene que ser un mapa")
-    sobran = set(bloque) - {"snmp", "registro"}
+    sobran = set(bloque) - {"snmp", "registro", "agente"}
     if sobran:
         raise LabError(
             f"'observabilidad' del entorno no entiende {', '.join(sorted(sobran))}: es "
-            "{snmp, registro}"
+            "{snmp, registro, agente}"
         )
     registro = bloque.get("registro")
     if registro is not None:
         _validate_registro(registro)
+    agente = bloque.get("agente")
+    if agente is not None:
+        _validate_agente_entorno(agente)
     snmp = bloque.get("snmp")
     if snmp is None:
         return
@@ -263,6 +282,107 @@ def validate_observabilidad(env: dict) -> None:
             f"la identidad SNMP v{version} sólo puede tomar el nombre de `{esperado}`: "
             "se nombra en el entorno y se resuelve contra secrets.yml, no se escribe aquí"
         )
+
+
+def _validate_repo(donde: str, item) -> None:
+    """La forma de un repositorio de `apt`: {name, url, suite, components, key?}.
+
+    Se declara en el entorno (el repositorio del agente que pone el sitio) y en el área
+    `repositories` de un Linux; la forma es la misma y se comprueba en un solo sitio.
+    """
+    if not isinstance(item, dict) or set(item) not in (
+        {"name", "url", "suite", "components"},
+        {"name", "url", "suite", "components", "key"},
+    ):
+        raise LabError(f"cada repositorio de {donde} es {{name, url, suite, components, key?}}")
+    for key in ("name", "url", "suite", "components"):
+        if not isinstance(item[key], str) or not item[key]:
+            raise LabError(f"el campo {key!r} del repositorio de {donde} tiene que ser texto no vacío")
+    if "key" in item and (not isinstance(item["key"], str) or not item["key"]):
+        raise LabError(f"la 'key' del repositorio de {donde} tiene que ser una URL")
+
+
+def _validate_agente_entorno(agente) -> None:
+    """El bloque `observabilidad.agente`: con qué se instala el agente de la vista.
+
+    El entorno dice el paquete y el repositorio del sitio —los mismos datos que un
+    laboratorio podría declarar en su área `repositories`, sólo que aquí no los elige
+    un laboratorio—. El puerto del agente y el del sondeo de la vista son los de fábrica
+    en los dos extremos, así que no se declaran: escribir un valor que ya es el de por
+    defecto sería una segunda verdad esperando a contradecirse.
+    """
+    if not isinstance(agente, dict):
+        raise LabError("'observabilidad.agente' tiene que ser un mapa")
+    sobran = set(agente) - {"paquete", "repositorio"}
+    if sobran:
+        raise LabError(
+            f"'observabilidad.agente' no entiende {', '.join(sorted(sobran))}: es "
+            "{paquete, repositorio}"
+        )
+    paquete = agente.get("paquete")
+    if not isinstance(paquete, str) or not paquete:
+        raise LabError("'observabilidad.agente.paquete' tiene que ser el nombre de un paquete")
+    if "repositorio" not in agente:
+        raise LabError(
+            "'observabilidad.agente' necesita 'repositorio': el agente no está en el "
+            "repositorio de fábrica de la imagen"
+        )
+    _validate_repo("'observabilidad.agente.repositorio'", agente["repositorio"])
+
+
+def _agente_del_entorno(env: dict) -> dict:
+    """El bloque del sitio con el que se instala el agente; se nombra una sola vez."""
+    bloque = (env.get("observabilidad") or {}).get("agente")
+    if bloque is None:
+        raise LabError(
+            "el laboratorio enciende el agente de la vista y el entorno no declara "
+            "`observabilidad.agente`: no se inventa con qué instalarlo (ADR 0019)"
+        )
+    return bloque
+
+
+def _expandir_agente(configure: dict, env: dict) -> None:
+    """El área `agente` de un nodo final, escrita como las áreas que el motor converge.
+
+    El laboratorio declara `agente: {enabled: true}` y nada más; aquí se convierte en el
+    repositorio del sitio, el paquete del agente, su configuración y su servicio. Se
+    expande en el plan (y no en una tarea) por dos razones: el interior del nodo se
+    converge con los mismos verbos que cualquier otro Linux (`converge.linux_ops`), y la
+    segunda pasada del mismo plan no tiene nada que escribir.
+
+    El área `agente` se queda en el `configure` del plan: quien mire la ficha del nodo
+    tiene que ver que declaró el agente, no cuatro áreas sueltas que nadie declaró.
+    """
+    if not (configure.get("agente") or {}).get("enabled"):
+        return
+    ajustes = _agente_del_entorno(env)
+    espacio = env["management"]["address_space"]
+    # El agente acepta como lectora a la red de gestión y a nadie más. `Servers` es su
+    # lista de **sólo lectura** —`ControlServers` daría además ejecutar acciones
+    # preconfiguradas y `MasterServers` reescribir esta misma configuración—, y CPU,
+    # memoria, disco y procesos se leen: no hace falta más. Lo dice el propio paquete, y
+    # el paquete sólo lee `/etc/nxagentd.conf`: no hay directorio de fragmentos donde
+    # dejar esto aparte (medido, paquete 7.0.5-1).
+    contenido = (
+        "### netlabs — el agente de la vista en este equipo. Lo escribe el motor desde\n"
+        "### la declaración del laboratorio; no lo edites a mano.\n"
+        "[CORE]\n"
+        "# La red de gestión lee las métricas y nada más.\n"
+        f"Servers={espacio}\n"
+        "# Los registros al diario del sistema, como los dejaba el paquete.\n"
+        "LogFile={systemd}\n"
+    )
+    configure.setdefault("repositories", []).append(dict(ajustes["repositorio"]))
+    configure.setdefault("packages", []).append(ajustes["paquete"])
+    configure.setdefault("files", []).append({
+        "path": NXAGENTE_CONF,
+        "content": contenido,
+        "mode": "0644",
+        # El fichero es la configuración del agente: hasta que no lo relee, el servicio
+        # sigue con la vieja, y haberlo escrito no es que lo haya releído.
+        "restart": NXAGENTE_SERVICIO,
+    })
+    configure.setdefault("services", {})[NXAGENTE_SERVICIO] = True
 
 
 def validate(lab: dict, env: dict) -> None:
@@ -498,6 +618,15 @@ def _validate_control_node(node: dict, roles: set) -> None:
     if not isinstance(configure, dict):
         raise LabError(f"'configure' del nodo {role!r} tiene que ser un mapa de áreas")
     for area in configure:
+        # El invitado de gestión ya lleva el agente del sitio —es la vista—, y el área
+        # `agente` lo instalaría en el mismo sitio donde corre el servicio: se rechaza
+        # en vez de escribir dos veces lo mismo.
+        if area == "agente":
+            raise LabError(
+                f"el nodo {role!r} declara el área 'agente': el invitado de gestión ya "
+                "es la vista y ya lleva su agente, así que declararlo aquí lo escribiría "
+                "dos veces. El agente se declara en los nodos finales Linux"
+            )
         if area not in AREAS["linux"]:
             raise LabError(
                 f"el nodo {role!r} declara el área {area!r}, que no existe para su tipo. "
@@ -853,18 +982,7 @@ def _validate_area(role: str, area: str, body, networks: dict, salidas=None,
     elif area == "repositories":
         _require_list(role, area, body)
         for item in body:
-            if not isinstance(item, dict) or set(item) not in (
-                {"name", "url", "suite", "components"},
-                {"name", "url", "suite", "components", "key"},
-            ):
-                raise LabError(
-                    f"cada repositorio de {role!r} es {{name, url, suite, components, key?}}"
-                )
-            for key in ("name", "url", "suite", "components"):
-                if not isinstance(item[key], str) or not item[key]:
-                    raise LabError(f"el campo {key!r} del repositorio de {role!r} tiene que ser texto no vacío")
-            if "key" in item and (not isinstance(item["key"], str) or not item["key"]):
-                raise LabError(f"la 'key' del repositorio de {role!r} tiene que ser una URL")
+            _validate_repo(repr(role), item)
     elif area == "packages":
         _require_list(role, area, body)
         for item in body:
@@ -946,6 +1064,22 @@ def _validate_area(role: str, area: str, body, networks: dict, salidas=None,
             )
         if not isinstance(body.get("enabled"), bool):
             raise LabError(f"el área 'snmp' de {role!r} declara 'enabled' sí o no")
+    elif area == "agente":
+        # El laboratorio sólo dice si el nodo se mira por dentro; con qué se instala y
+        # desde dónde se le sondea es del entorno (`observabilidad.agente`, ADR 0019).
+        # Un laboratorio que eligiera su propio agente tendría la vista mirando a cada
+        # nodo de una manera.
+        if not isinstance(body, dict):
+            raise LabError(f"el área 'agente' de {role!r} tiene que ser un mapa")
+        sobran = set(body) - {"enabled"}
+        if sobran:
+            raise LabError(
+                f"el área 'agente' de {role!r} no entiende {', '.join(sorted(sobran))}: "
+                "es {enabled}. El paquete y el repositorio con los que se instala viven "
+                "en el entorno (`observabilidad.agente`), no en el laboratorio"
+            )
+        if not isinstance(body.get("enabled"), bool):
+            raise LabError(f"el área 'agente' de {role!r} declara 'enabled' sí o no")
 
 
 def _require_list(role: str, area: str, body) -> None:
@@ -1628,6 +1762,13 @@ def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
     if static and not TYPES[kind]["network_device"]:
         interfaces[0]["address"] = static
         interfaces[0]["gateway"] = _gateway_for(lab, node["networks"][0])
+    # El plan no comparte estructura con la declaración que recibe: si el motor
+    # añadiera la concesión al `dhcp_server` del laboratorio, el segundo plan de la
+    # misma declaración la volvería a validar y rechazaría su propia clave.
+    configure = copy.deepcopy(node.get("configure") or {})
+    # El área `agente` de un nodo final se expande aquí, con el entorno delante: el
+    # laboratorio dice que se mira por dentro y el sitio dice con qué.
+    _expandir_agente(configure, env)
     return {
         "role": node["role"],
         "type": kind,
@@ -1658,10 +1799,7 @@ def _build_node(node, vmid, lab_name, lab, env, mgmt_net, cables) -> dict:
         "address": static or ("dhcp" if address == "dhcp" else None),
         "reserve": reservada,
         "networks": [{"name": n, "address": str(networks[n])} for n in node["networks"]],
-        # El plan no comparte estructura con la declaración que recibe: si el motor
-        # añadiera la concesión al `dhcp_server` del laboratorio, el segundo plan de la
-        # misma declaración la volvería a validar y rechazaría su propia clave.
-        "configure": copy.deepcopy(node.get("configure") or {}),
+        "configure": configure,
     }
 
 

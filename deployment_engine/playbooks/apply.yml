@@ -296,6 +296,26 @@
         # entero en vez de saltarse esta puerta.
         - linux_nodo.netxms_address | default('', true) | length > 0
 
+    # --- el interior de los nodos finales: el agente de la vista ----------
+    # Un nodo final Linux no habla SNMP —con SNMP la vista le saca las interfaces, no
+    # la salud—, así que su CPU, su memoria, su disco y sus procesos se leen con el
+    # agente nativo. El laboratorio sólo declara el área `agente` de su nodo; la
+    # expansión a las áreas que el motor ya sabe converger (el repositorio del sitio,
+    # el paquete del agente, su configuración y su servicio) la hace el plan. Va antes
+    # del registro: el poll de configuración de la vista detecta el agente en cuanto su
+    # ficha existe, y dar de alta el nodo sin agente lo dejaría mirándose por ICMP hasta
+    # el siguiente apply.
+    - name: "apply · el interior de los nodos finales (el agente de la vista)"
+      include_tasks: ../tasks/linux_interior.yml
+      loop: "{{ plan.nodes }}"
+      loop_control: {loop_var: linux_nodo, label: "{{ linux_nodo.name }}"}
+      vars:
+        objetivo: "{{ linux_nodo.netxms_address }}"
+        linux_descripcion: "{{ linux_nodo.name }}"
+      when:
+        - linux_nodo.type in ['server', 'workstation']
+        - linux_nodo.configure | default({}) | get('agente', {}) | get('enabled', false)
+
     # --- el registro de los equipos en lo que observa el sitio -------------
     # Va después del interior del router y no antes: la credencial que se registra es
     # la que el router ya tiene puesta (la pone su REST), no una que valdrá más tarde.
@@ -328,6 +348,19 @@
           {{ (invitados_ahora | selectattr('pool', 'equalto', plan.pool) | list
               | netlabs_direcciones_vivas(env.management.address_space))
              + (plan.nodes | selectattr('netxms_address') | map(attribute='netxms_address') | list) }}
+      when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
+
+    # --- la vista mira por dentro a los nodos finales ---------------------
+    # El paquete del agente ya está puesto en el invitado (el interior de los nodos
+    # finales, más arriba); aquí se espera, con tope, a que el poll de configuración de
+    # la vista lo haya visto. Va después del registro y no antes: la ficha del nodo
+    # tiene que existir para poder mirarla. Si el agente no aparece, esta tarea falla y
+    # el apply con ella: un laboratorio que no se puede mirar por dentro se dice, no se
+    # deja pasar como si estuviera.
+    - name: apply · la vista mira por dentro a los nodos finales
+      include_tasks: ../tasks/netxms_agente.yml
+      vars:
+        equipos: "{{ plan.nodes | selectattr('netxms_address') | list }}"
       when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
 
     # --- el mapa del laboratorio en lo que observa el sitio -----------------

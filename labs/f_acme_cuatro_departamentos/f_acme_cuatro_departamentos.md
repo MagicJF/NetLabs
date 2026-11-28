@@ -186,6 +186,6 @@ Address spaces: `10.50.0.0/16`, `10.60.0.0/16`, `198.51.100.0/24`
 | `f_swa4p3_wsp8p1` | `swa4p3` | `wsp8p1` | `10.60.66.0/24` |
 | `f_swa4p4_svs4p1` | `swa4p4` | `svs4p1` | `10.60.66.0/24` |
 
-Configured areas: `addresses`, `dhcp_server`, `dns`, `nat`, `routes`, `services`, `snmp`, `users`.
+Configured areas: `addresses`, `agente`, `dhcp_server`, `dns`, `nat`, `routes`, `services`, `snmp`, `users`.
 
 <!-- netlabs:end -->
