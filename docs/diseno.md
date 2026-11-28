@@ -823,6 +823,20 @@ hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.
   entero en vez de quedar medio destruido.
 - NetXMS no configura nodos: lo que se configure se configura por la vía normal de cada uno.
 
+### 7.1. Qué se enciende y en qué orden
+
+Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 0019):
+
+- **P0.** SNMP v3 en lugar de la comunidad en claro, los registros de los equipos recogidos por la
+  vista, y el **poll de topología** encendido —hoy sin ejecutar—.
+- **P1.** La topología L2 real por la **tabla del puente (FDB)**, no por LLDP: el LLDP de MikroTik no
+  lo lee bien la vista. Con ella delante, se contrasta con el plano del motor (ADR 0007).
+- **P2.** **Agente** en los nodos finales Linux —CPU, memoria, procesos—. En RouterOS no existe.
+- El **descubrimiento automático de red** se queda apagado: el inventario lo declara el motor.
+- Las capacidades de un equipo las detecta el **poll de configuración**: tras cambiar RouterOS hay que
+  forzarlo para que la ficha deje de mentir.
+- OSPF, VRRP, BFD y 802.1x son **laboratorios**, no monitorización: se modelan para poder romperlos.
+
 ---
 
 ## 8. El informe de una ejecución
