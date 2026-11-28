@@ -19,6 +19,7 @@ import ipaddress
 import json
 import os
 import shlex
+from collections import Counter
 from urllib.parse import urlsplit
 
 from identity import (LabError, ROS_SECRET, SNMP_V3_AUTENTICACION, SNMP_V3_CIFRADO,
@@ -2791,16 +2792,23 @@ def netxms_topologia_contraste(lab: dict, nodes: list | None, censo: list | None
     (ADR 0019): lo que aprende de cada puerto lo guarda en la interfaz como su vecina
     —`peerNodeId`/`peerInterfaceId`— y dice con qué lo supo (`peerDiscoveryProtocol`). Aquí se
     lee esa vecindad —la interfaz vecina la traduce el censo, el equipo vecino lo traduce el
-    registro— y se cruza con los cables del plano, que se comparan por el par de equipos que
-    unen (no por el puerto: el plano dibuja el cable entre dos equipos, y es eso lo que la
-    tabla del puente enseña).
+    registro— y se cruza con los cables del plano.
+
+    Cada cable del plano cuenta por separado, y lo que la vista ve se cuenta por el par de
+    **interfaces** de cada enlace, no por el par de equipos: la declaración permite unir los
+    mismos dos equipos por varios puertos de la misma red, y dos cables así son dos enlaces
+    distintos que la vista ve por sus puntas. Contarlos por el equipo los confundiría en uno y
+    el que falta pasaría por visto; contar los vistos por su par de puntas mantiene la
+    distinción sin tener que traducir el puerto del plano a la interfaz de la vista (que un
+    nodo final Linux no comparte con el equipo: se llama a sí mismo, no `etherN`).
 
     El juicio de quién discrepa sale de cómo ve la vista: **no inventa enlaces** —los aprende
     del puente—, así que un enlace que ve y el plano no declara es del plano la falta
-    (`el_plano`). Y un cable que el plano declara y la vista no ve **sólo la delata cuando sus
-    dos puntas son equipos de red**, que siempre hablan y por tanto dejan rastro en el puente:
-    si una punta es un nodo final, la vista puede no haberlo visto hablar, y entonces no se
-    concluye (`sin_concluir`) en vez de culpar a quien no consta.
+    (`sobran`). Y un cable que el plano declara y la vista no ve **sólo la delata cuando sus
+    dos puntas son equipos de red que la vista sondea y ya están en ella**, que siempre hablan
+    y por tanto dejan rastro en el puente: si una punta es un nodo final, no está en la vista,
+    o el equipo no enciende su sondeo, no consta que debiera hablar, y entonces no se concluye
+    (`sin_concluir`) en vez de culpar a quien no consta.
     """
     objetos, fuera = netxms_objetos_de(nodes, censo)
     rol_de = {int(numero): rol for rol, numero in objetos.items()}
@@ -2809,9 +2817,10 @@ def netxms_topologia_contraste(lab: dict, nodes: list | None, censo: list | None
     hijos_de = _hijos_por_equipo(fichas)
 
     # Lo que ve la vista: por cada equipo del plano presente en ella, cada interfaz suya con
-    # su vecina. El par se ordena para que el cable valga lo mismo mirado desde una punta que
-    # desde la otra, y se guarda con qué lo supo la vista.
-    vistos, soporte_de = set(), {}
+    # su vecina. El enlace se guarda por el par de puntas ordenado —para que valga lo mismo
+    # mirado desde una que desde la otra y no se cuente dos veces—, con qué lo supo la vista,
+    # y de qué par de equipos es.
+    vistos, soporte_de, nodo_de = set(), {}, {}
     for node in nodes or []:
         rol = str(node.get("role") or node.get("name") or "")
         suyo = objetos.get(rol)
@@ -2826,31 +2835,51 @@ def netxms_topologia_contraste(lab: dict, nodes: list | None, censo: list | None
                 # Su vecina no es un equipo de este laboratorio (o es ella misma): no es un
                 # hueco del plano y no se cuenta.
                 continue
-            par = (rol, vecino) if rol <= vecino else (vecino, rol)
+            suya = (rol, int(numero))
+            vecina = (vecino, int(detalle.get("peerInterfaceId") or 0))
+            par = (suya, vecina) if suya <= vecina else (vecina, suya)
             vistos.add(par)
             soporte_de.setdefault(par, int(detalle.get("peerDiscoveryProtocol") or 0))
+            nodo_de[par] = (rol, vecino) if rol <= vecino else (vecino, rol)
 
-    declarados = set()
+    # Los cables declarados, cada uno contado por separado y por el par de equipos que une.
+    declarados = []
     for cable in lab.get("links") or []:
         a = str((cable.get("a") or {}).get("node") or "")
         z = str((cable.get("z") or {}).get("node") or "")
         if a and z:
-            declarados.add((a, z) if a <= z else (z, a))
+            declarados.append((a, z) if a <= z else (z, a))
+    declarados.sort()
+
+    # Los enlaces vistos por par de equipos: uno por cada par de puntas distinto, así que dos
+    # cables paralelos cuentan como dos.
+    vistos_por_nodo = Counter(nodo_de[par] for par in vistos)
+    soporte_por_nodo = {}
+    for par, soporte in soporte_de.items():
+        soporte_por_nodo.setdefault(nodo_de[par], soporte)
 
     confirmados, faltan = [], {"la_vista": [], "sin_concluir": []}
-    for par in sorted(declarados):
-        if par in vistos:
-            confirmados.append(list(par))
+    for nodo_par in declarados:
+        if vistos_por_nodo[nodo_par] > 0:
+            vistos_por_nodo[nodo_par] -= 1
+            confirmados.append(list(nodo_par))
             continue
-        # La vista no ve el cable: sólo la delata si sus dos puntas son equipos que sondea.
-        if all(_es_equipo_de_red(tipo_de.get(p)) for p in par):
-            faltan["la_vista"].append(list(par))
+        # No se ve el cable: sólo se le achaca a la vista cuando sus dos puntas son equipos
+        # que ella sondea y ya están en ella.
+        if all(_es_equipo_de_red(tipo_de.get(p))
+               and _la_vista_sondea(tipo_de.get(p) or {})
+               and p in objetos for p in nodo_par):
+            faltan["la_vista"].append(list(nodo_par))
         else:
-            faltan["sin_concluir"].append(list(par))
-    sobran = [{"cable": list(par),
-               "soporte": NETXMS_PROTOCOLO_NOMBRES.get(soporte_de.get(par),
-                                                       str(soporte_de.get(par) or ""))}
-              for par in sorted(vistos - declarados)]
+            faltan["sin_concluir"].append(list(nodo_par))
+    # Lo que la vista ve y el plano no declara (o declara de menos): los enlaces que sobran,
+    # uno por cada par de puntas visto que quedó sin casar.
+    sobran = []
+    for nodo_par, cuantos in sorted(vistos_por_nodo.items()):
+        soporte = soporte_por_nodo.get(nodo_par)
+        nombre = NETXMS_PROTOCOLO_NOMBRES.get(soporte, str(soporte or "")) if soporte else ""
+        for _ in range(cuantos):
+            sobran.append({"cable": list(nodo_par), "soporte": nombre})
 
     return {
         "equipos_en_la_vista": len(objetos),

@@ -853,9 +853,9 @@ Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 00
 - **P0.** SNMP v3 en lugar de la comunidad en claro, los registros de los equipos recogidos por la
   vista, y el **poll de topología** —que este § daba por «sin ejecutar» y **ya está encendido**: no
   hay interruptor global que apagar, va por temporizador (`Topology.PollingInterval`, 1800 s) y el flag
-  por equipo está en `false`. Lo que pasa es que **corre y no ve nada** (`physical_links` vacío): lo que
-  queda no es encenderlo, es averiguar por qué no descubre un solo enlace de capa 2 (ADR 0019)—. La
-  parte de SNMP está hecha: la
+  por equipo está en `false`. **Corre y sí descubre** la capa 2: lo que pasa es que la deja en la
+  vecindad de cada interfaz y no en `physical_links`, que es una tabla manual —eso lo resolvió el P1
+  (ADR 0026)—. La parte de SNMP está hecha: la
   identidad se declara **una vez, en el entorno** (`observabilidad.snmp`, `version: 3`), y el
   laboratorio sólo dice si se mira al equipo; el motor crea en cada RouterOS una entrada
   `/snmp/community` con `security: private` —autenticación y cifrado—, acota **todas** las
@@ -866,9 +866,10 @@ Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 00
   RouterOS llama `AES`, y a la comunidad de v2c la llama `authName`—, por el grupo SNMP del equipo
   (`/objects/{id}/snmp`): sin eso, retirar las comunidades en claro dejaría a la vista sin poder
   sondear y el cambio sería decorativo por el otro lado. Va en el alta y se corrige después con un
-  `PATCH` de fusión, así que un `apply` repetido no escribe. Quedan de esta parte la recogida de
-  registros y el poll de topología. Lo que no cambia es dónde vive: la consola pública no está en el
-  camino del motor, que habla con la vista por su API desde dentro de su invitado (`management.api`).
+  `PATCH` de fusión, así que un `apply` repetido no escribe. Queda de esta parte la recogida de
+  registros; el poll de topología ya está encendido y lo lee el P1. Lo que no cambia es dónde vive: la
+  consola pública no está en el camino del motor, que habla con la vista por su API desde dentro de su
+  invitado (`management.api`).
 - **P1.** La topología L2 real por la **tabla del puente (FDB)**, no por LLDP: el LLDP de MikroTik no
   lo lee bien la vista. Con ella delante, se contrasta con el plano del motor (ADR 0004). **Está hecha**
   (ADR 0026): lo medido es que la vista **ya descubre** la capa 2 por la FDB —el `physical_links`
@@ -884,7 +885,7 @@ Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 00
   partir de `lab["links"]` (`mapa.contenido`), es decir, de la **declaración**, y el motor además da
   por resueltas las alarmas de sus propios equipos al converger (`netxms_alarmas_propias`): son
   canales que el motor también escribe. El contraste **independiente** del cableado es el P1
-  —topología L2 real contra el plano, por la tabla del puente—, y aún no está (ADR 0019). Declarar
+  —topología L2 real contra el plano, por la tabla del puente—, y **ya está** (ADR 0026). Declarar
   el inventario no es pintar el resultado (ADR 0020). Un rastreo abierto, además, no añade rigor:
   arrastra los equipos de los demás laboratorios que comparten el espacio de gestión. Lo que sí caza
   el descubrimiento —lo que existe y no está declarado— se busca con un **barrido acotado** al plano
@@ -952,8 +953,10 @@ cambia el punto de partida:
   `snmp: {enabled: true}` en el equipo, que es lo que hace que la vista lo sondee y, con ello, lea su
   FDB. `contrastar: false` lo apaga y no se gasta ni una llamada al API.
 - **El contraste dice quién discrepa, y no actúa.** Compara la vecindad que la vista ve con los
-  cables de `lab["links"]` (por el par de equipos que unen). La vista **no inventa enlaces** —los
-  aprende del puente—, así que un enlace que ve y el plano no declara es **del plano** la falta; y un
+  cables de `lab["links"]` —cada cable declarado cuenta por separado, y lo que la vista ve se cuenta
+  por el par de interfaces de cada enlace, para no confundir en uno dos cables paralelos entre los
+  mismos equipos—. La vista **no inventa enlaces** —los aprende del puente—, así que un enlace que ve
+  y el plano no declara es **del plano** la falta; y un
   cable que el plano declara y la vista no ve sólo la delata **a la vista** cuando sus **dos puntas
   son equipos que el motor sondea** —cruzan tramas siempre, dejan rastro en el puente—. Si una punta
   es un **nodo final**, el puente sólo lo ve cuando habla, y entonces **no se concluye** en vez de

@@ -14,8 +14,10 @@
 # LÍMITES:     no enciende el sondeo de topología —es de la vista, no del motor— ni actúa
 #              sobre la discrepancia: la dice, y un equipo del plano que la vista no conozca
 #              se nombra en vez de callarse. No pide el detalle de interfaces que no son de un
-#              equipo de este laboratorio, y no adivina el puerto: contrasta por el par de
-#              equipos que el cable une, que es lo que la tabla del puente enseña.
+#              equipo de este laboratorio, y no adivina el puerto: el contraste es por el par de
+#              equipos que el cable une —lo que la tabla del puente enseña—, contando cada cable
+#              por separado y lo visto por el par de interfaces de cada enlace, para no fundir en
+#              uno dos cables paralelos entre los mismos equipos.
 # VER:         docs/diseno.md §7; docs/decisiones/0019-la-observabilidad-por-partes.md y
 #              docs/decisiones/0026-la-topologia-la-dice-la-tabla-del-puente.md
 

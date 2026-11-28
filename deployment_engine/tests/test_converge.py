@@ -1735,8 +1735,10 @@ class ElContrasteDeLaTopologiaDeCapa2(unittest.TestCase):
     """
 
     NODOS = [
-        {"role": "rta1", "name": "rta1", "type": "router", "mgmt_address": "10.30.0.101"},
-        {"role": "swc1", "name": "swc1", "type": "switch", "mgmt_address": "10.30.0.102"},
+        {"role": "rta1", "name": "rta1", "type": "router", "mgmt_address": "10.30.0.101",
+         "configure": {"snmp": {"enabled": True}}},
+        {"role": "swc1", "name": "swc1", "type": "switch", "mgmt_address": "10.30.0.102",
+         "configure": {"snmp": {"enabled": True}}},
         {"role": "wsp1", "name": "wsp1", "type": "workstation", "mgmt_address": "10.30.0.103"},
         {"role": "wsp2", "name": "wsp2", "type": "workstation", "mgmt_address": "10.30.0.104"},
     ]
@@ -1801,6 +1803,64 @@ class ElContrasteDeLaTopologiaDeCapa2(unittest.TestCase):
         c = self.con_vista()
         self.assertEqual(c["faltan"]["sin_concluir"], [["swc1", "wsp2"]])
         self.assertEqual(c["faltan"]["la_vista"], [])
+
+    def test_un_cable_entre_equipos_sin_sondeo_no_se_le_achaca_a_la_vista(self):
+        # rta1 y swc1 son equipos de red, pero si el laboratorio no enciende su sondeo
+        # (`configure.snmp`) la vista no los mira: que no vea su cable no prueba un fallo de
+        # descubrimiento, así que se deja sin concluir en vez de culparla.
+        nodos = [{k: v for k, v in n.items() if k != "configure"} for n in self.NODOS]
+        c = converge.netxms_topologia_contraste(
+            self.LAB, nodos, self.CENSO, self.FICHAS, self.INTERFACES,
+            [d for d in self.VISTOS if d["id"] in (502, 601)])
+        self.assertEqual(c["faltan"]["la_vista"], [])
+        self.assertEqual(c["faltan"]["sin_concluir"], [["rta1", "swc1"], ["swc1", "wsp2"]])
+
+    def test_un_cable_cuya_punta_no_esta_en_la_vista_no_se_le_achaca_a_la_vista(self):
+        # Un equipo que la vista aún no conoce no puede dejar rastro en el puente: su ausencia
+        # ya se dice en `fuera_de_la_vista`, así que el cable no se le achaca al descubrimiento.
+        lab = {"links": [{"a": {"node": "rta1", "port": 1}, "z": {"node": "swc1", "port": 1}}]}
+        nodos = [n for n in self.NODOS if n["role"] in ("rta1", "swc1")]
+        censo = [o for o in self.CENSO if o["name"] != "swc1"]
+        c = converge.netxms_topologia_contraste(
+            lab, nodos, censo, self.FICHAS, self.INTERFACES, [])
+        self.assertEqual(c["faltan"]["la_vista"], [])
+        self.assertEqual(c["faltan"]["sin_concluir"], [["rta1", "swc1"]])
+        self.assertEqual(c["fuera_de_la_vista"], ["swc1"])
+
+    def test_dos_cables_entre_los_mismos_equipos_cuentan_como_dos(self):
+        # La declaración permite unir los mismos dos switches por varios puertos de la misma
+        # red. Son dos cables, no uno: si la vista sólo ve uno, el otro sigue faltando y el
+        # contraste no puede dar por bueno el par.
+        lab = {"links": [
+            {"a": {"node": "swc1", "port": 1}, "z": {"node": "rta1", "port": 1}},
+            {"a": {"node": "swc1", "port": 2}, "z": {"node": "rta1", "port": 2}},
+        ]}
+        detalles = [d for d in self.VISTOS if d["id"] in (436, 501)]
+        c = self.con_vista(detalles=detalles, lab=lab)
+        self.assertEqual(c["cables_declarados"], 2)
+        self.assertEqual(c["confirmados"], [["rta1", "swc1"]])
+        self.assertEqual(c["faltan"]["la_vista"], [["rta1", "swc1"]])
+        self.assertFalse(c["coincide"])
+
+    def test_dos_cables_paralelos_que_la_vista_ve_se_confirman_los_dos(self):
+        # La vista ve cada cable por el par de interfaces que une: dos cables entre los mismos
+        # equipos son dos enlaces distintos, y el contraste los cuenta como dos.
+        lab = {"links": [
+            {"a": {"node": "swc1", "port": 1}, "z": {"node": "rta1", "port": 1}},
+            {"a": {"node": "swc1", "port": 2}, "z": {"node": "rta1", "port": 2}},
+        ]}
+        detalles = [
+            {"id": 436, "peerNodeId": 421, "peerInterfaceId": 501, "peerDiscoveryProtocol": 1},
+            {"id": 501, "peerNodeId": 420, "peerInterfaceId": 436, "peerDiscoveryProtocol": 1},
+            {"id": 437, "peerNodeId": 421, "peerInterfaceId": 502, "peerDiscoveryProtocol": 1},
+            {"id": 502, "peerNodeId": 420, "peerInterfaceId": 437, "peerDiscoveryProtocol": 1},
+        ]
+        c = self.con_vista(detalles=detalles, lab=lab)
+        self.assertEqual(c["cables_declarados"], 2)
+        self.assertEqual(c["cables_vistos"], 2)
+        self.assertEqual(c["confirmados"], [["rta1", "swc1"], ["rta1", "swc1"]])
+        self.assertEqual(c["faltan"], {"la_vista": [], "sin_concluir": []})
+        self.assertTrue(c["coincide"])
 
     def test_un_cable_que_la_vista_ve_y_el_plano_no_declara_es_del_plano_la_falta(self):
         # La vista no inventa enlaces: si ve rta1 unido a wsp1 y el plano no lo declara, al
