@@ -412,7 +412,10 @@ que la documentación:
   la red que no es—; que lo cruce un cable fino se admite, porque una cabecera arrinconada al fondo
   del área no la lee nadie (ADR 0015);
 - cada **equipo de red** del laboratorio donde el plano lo pone —el router en la frontera de
-  las redes que une, el switch del núcleo en el centro—, dibujado con su **icono** y con el hueco
+  las redes que une, el switch del núcleo en el centro—, dibujado con su **icono** —la imagen del
+  propio objeto, que el motor le fija al registrarlo según el **tipo** de su rol y no deja que la
+  vista adivine: un servidor y un puesto, los dos nodos genéricos, salen con dibujos distintos, y un
+  router y un switch lo hacen de forma explícita (ADR 0023)— y con el hueco
   que de verdad ocupa su símbolo (el plano lo escribe en `data-ancho` y `data-alto`): con un hueco
   fijo de 100×100, el icono de un puesto se comía el bloque de direcciones de su área; sin etiqueta
   de nombre e IP al lado ni cartel de patas: con veintiséis equipos, una ficha por equipo tapa el
