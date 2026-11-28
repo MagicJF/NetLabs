@@ -1749,17 +1749,27 @@ def netxms_config_cmd(api: str, nombre: str) -> list:
     return netxms_cmd(api, NETXMS_RUTA_CONFIG.format(nombre), metodo="PUT")
 
 
-def netxms_registro_ops(declarado: dict | None, actuales: list | None, api: str) -> dict:
+def netxms_registro_ops(declarado: dict | None, actuales: list | None, api: str,
+                        escuchando: bool | None = None) -> dict:
     """Lo que hay que escribir para que la vista recoja los registros como el entorno declara.
 
     `actuales` es lo que devolvió `GET /server-config` —la lista entera, que es una lectura y no
-    una por variable—. Devuelve `{"ops": [...], "reiniciar": bool}`.
+    una por variable—. `escuchando` es si hay algo escuchando de verdad el puerto declarado, que
+    lo mide quien llama (la variable no lo dice). Devuelve `{"ops": [...], "reiniciar": bool}`.
 
     El reinicio no se adivina: cada variable dice si su cambio lo exige (`needServerRestart`),
     así que sólo se reinicia cuando de verdad se ha escrito algo que lo pide, y nunca por una
     escritura que no cambió nada. Si la variable no aparece en la lectura —no está o no es
     visible—, se da por hecho que el cambio exige reinicio: ante la duda, que el cambio surta
     efecto, porque lo contrario es dejarlo apagado creyendo que está encendido.
+
+    Pero el valor escrito **no es la escucha en pie**, y la vista no tiene ningún campo que diga
+    «esto está escrito y todavía no en vigor» —medido: la lectura sólo trae el valor—: una pasada
+    que escriba y se corte antes de reiniciar dejaría el valor correcto y la escucha apagada, y la
+    siguiente pasada, al ver el valor correcto, no reiniciaría jamás. Por eso, cuando se declaró
+    encendida y **no hay nadie escuchando el puerto**, se reinicia aunque no hubiera nada que
+    escribir. Sin poder medirlo (`escuchando is None`) no se reinicia: un reinicio a ciegas en cada
+    pasada sería peor que el problema.
 
     Sin declaración no se toca nada: encender una escucha que nadie ha pedido es una decisión del
     entorno, no del motor (ADR 0019). El laboratorio no declara esto —ni sus equipos—: el qué se
@@ -1768,9 +1778,8 @@ def netxms_registro_ops(declarado: dict | None, actuales: list | None, api: str)
     if not declarado:
         return {"ops": [], "reiniciar": False}
     por_nombre = {v.get("name"): v for v in (actuales or []) if isinstance(v, dict)}
-    deseado = {
-        NETXMS_REGISTRO_ESCUCHA: "1" if declarado.get("recoger") else "0",
-    }
+    encender = bool(declarado.get("recoger"))
+    deseado = {NETXMS_REGISTRO_ESCUCHA: "1" if encender else "0"}
     if declarado.get("puerto") is not None:
         deseado[NETXMS_REGISTRO_PUERTO] = str(declarado["puerto"])
     ops: list[dict] = []
@@ -1779,10 +1788,9 @@ def netxms_registro_ops(declarado: dict | None, actuales: list | None, api: str)
         actual = por_nombre.get(nombre)
         if actual is not None and str(actual.get("value", "")) == valor:
             continue
-        encender = valor == "1"
         if nombre == NETXMS_REGISTRO_ESCUCHA:
             efecto = ("que la vista escuche los registros de los equipos"
-                      if encender else "que la vista deje de escuchar registros de los equipos")
+                      if valor == "1" else "que la vista deje de escuchar registros de los equipos")
         else:
             efecto = f"que la vista escuche los registros en el puerto {valor}"
         ops.append({"cmd": netxms_config_cmd(api, nombre),
@@ -1790,6 +1798,10 @@ def netxms_registro_ops(declarado: dict | None, actuales: list | None, api: str)
                     "effect": efecto})
         # Desconocida o presente: si no se pudo leer, se reinicia por si acaso.
         reiniciar = reiniciar or bool((actual or {}).get("needServerRestart", True))
+    # El valor dice lo que está escrito; la escucha dice lo que pasa. Si se declaró encendida y no
+    # hay nadie escuchando, falta el reinicio —lo escriba esta pasada o una anterior que se cortó—.
+    if encender and escuchando is False:
+        reiniciar = True
     return {"ops": ops, "reiniciar": reiniciar}
 
 

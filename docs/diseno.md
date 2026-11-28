@@ -886,6 +886,13 @@ al arrancar**. De ahí que la decisión (ADR 0021) no sea «escribir una variabl
   variable asume que sí**: ante la duda, que el cambio surta efecto, porque creer encendido lo que
   está apagado engaña. Después espera a que el servicio vuelva a atender antes de darlo por bueno,
   que un reinicio que no levanta dejaría el despliegue en verde y la vista muerta.
+- **El valor escrito no es la escucha en pie, y se mide.** La lectura no trae ningún campo que diga
+  «esto está escrito y todavía no en vigor», así que una pasada que escriba y se corte antes de
+  reiniciar deja el valor correcto y la escucha apagada, y la pasada siguiente —al ver el valor
+  correcto— no reiniciaría **jamás**. Se llegó ahí, y por eso el motor no se fía del valor: mira el
+  puerto (`ss -lun`) y, si el entorno pidió escuchar y no hay nadie escuchando, falta el reinicio
+  aunque no hubiera nada que escribir. Lo que no se puede medir no se suple reiniciando a ciegas:
+  reiniciar el servicio en cada pasada sería peor que el problema.
 - **Falta la otra mitad, y va aparte:** que los equipos **manden** sus registros a la vista (en
   RouterOS, la acción de registro con destino remoto) y la comprobación de que un mensaje entra y
   se guarda. La escucha queda puesta; el tráfico, todavía no.

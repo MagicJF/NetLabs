@@ -7,6 +7,10 @@
 #              El **reinicio del servicio** no se adivina: la propia variable dice si su cambio lo
 #              exige (`needServerRestart`), y sólo se reinicia si de verdad se escribió algo que lo
 #              pide. Una escritura que no cambió nada no reinicia jamás.
+#              Pero el valor escrito no es la escucha en pie: se **mide el puerto** (`ss`), porque
+#              una pasada que escriba y se corte antes de reiniciar dejaría el valor correcto y la
+#              escucha apagada, y la siguiente pasada, al ver el valor correcto, no reiniciaría
+#              nunca. Si no se puede medir, no se reinicia a ciegas.
 #              Sin declaración en el entorno, este fichero no toca nada.
 # VER:         docs/diseno.md §7; docs/decisiones/0021-el-registro-lo-escucha-la-vista.md
 
@@ -33,12 +37,39 @@
     netxms_configs: "{{ interior.stdout | default('[]', true) | from_json }}"
   no_log: true
 
+# --- medir la escucha (el valor dice lo escrito; esto, lo que pasa) ---------
+- name: netxms · el puerto en el que el entorno quiere los registros
+  ansible.builtin.set_fact:
+    netxms_registro_puerto: "{{ env.observabilidad.registro.puerto | default(514) }}"
+
+# `ss -lun` sin más: el puerto se busca en la salida con una expresión, no con `grep` dentro de un
+# `sh -c` —cada capa de comillas es una trampa, y aquí sobran—. Si `ss` no está o falla, no se
+# miente: se deja sin medir, y sin medida el plan no reinicia a ciegas.
+- name: netxms · mirar si hay algo escuchando de verdad el puerto de los registros
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · mirar si hay algo escuchando el puerto de los registros"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_falla: false
+    interior_imprime: false
+    comando: ["ss", "-lun"]
+
+- name: netxms · la escucha, medida
+  ansible.builtin.set_fact:
+    netxms_escucha: >-
+      {{ interior.rc | default(1) | int == 0
+         and (interior.stdout | default('') | split
+              | select('match', '.*:' ~ (netxms_registro_puerto | string) ~ '$')
+              | list | length) > 0 }}
+
 # --- la diferencia con lo declarado ----------------------------------------
 - name: netxms · la diferencia entre lo declarado y lo que la vista tiene puesto
   ansible.builtin.set_fact:
     netxms_registro_plan: >-
       {{ env.observabilidad.registro | default({}) | netlabs_netxms_registro_ops(
-           netxms_configs | default([], true), netxms_api) }}
+           netxms_configs | default([], true), netxms_api, netxms_escucha) }}
   no_log: true
 
 - name: netxms · lo que hay que cambiar para que la vista recoja los registros
@@ -61,8 +92,9 @@
   no_log: true
   when: netxms_registro_plan.ops | length > 0
 
-# El servicio sólo lee esta variable al arrancar: si se escribió, hay que reiniciarlo. Que haga
-# falta lo dice la propia variable, no una lista de nombres que el motor mantenga a mano.
+# El servicio sólo lee esta variable al arrancar: si se escribió —o si se declaró encendida y no
+# hay nadie escuchando—, hay que reiniciarlo. Que haga falta lo dice la propia variable y la
+# medida del puerto, no una lista de nombres que el motor mantenga a mano.
 - name: netxms · reiniciar el servicio para que el cambio surta efecto
   include_tasks: interior_ssh.yml
   vars:
@@ -71,7 +103,7 @@
     objetivo: 127.0.0.1
     interior_escribe: true
     interior_cambia_salida: true
-    comando: "{{ netlabs_netxms_reinicio_cmd() }}"
+    comando: "{{ none | netlabs_netxms_reinicio_cmd }}"
   when: netxms_registro_plan.reiniciar | bool
 
 # Y no se da por bueno hasta que vuelve a atender: un servicio que se reinició y no levanta deja
@@ -83,5 +115,20 @@
     interior_salto: false
     objetivo: 127.0.0.1
     interior_escribe: false
-    comando: "{{ ['/bin/sh', '-c', 'for i in $(seq 1 40); do ss -ltn 2>/dev/null | grep -q \":8000\" && echo LISTO && exit 0; sleep 3; done; exit 1'] }}"
+    interior_falla: false
+    interior_imprime: false
+    comando: >-
+      {{ ['/bin/sh', '-c',
+          'for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do'
+          ~ ' ss -ltn 2>/dev/null | grep -q ":8000" && echo LISTO && exit 0; sleep 3;'
+          ~ ' done; exit 1'] }}
   when: netxms_registro_plan.reiniciar | bool
+
+- name: netxms · el servicio volvió, pero no atiende
+  ansible.builtin.fail:
+    msg: >-
+      El servicio de gestión se reinició pero no vuelve a atender en su puerto: la vista se ha
+      quedado en pie de barro. Mira el servicio dentro del invitado antes de seguir.
+  when: >-
+    netxms_registro_plan.reiniciar | bool
+    and 'LISTO' not in (interior.stdout | default(''))

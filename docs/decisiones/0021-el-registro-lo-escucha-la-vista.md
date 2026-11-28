@@ -45,6 +45,19 @@ de las mentiras de una vista.
 levanta dejaría el despliegue en verde y la vista muerta. El paso no se da por bueno hasta que el
 servicio vuelve a escuchar.
 
+**5. El valor escrito no es la escucha en pie: se mide.** Esto se aprendió a golpes, y por eso está
+escrito. La lectura de la configuración no trae ningún campo que diga «este valor está escrito y
+todavía no en vigor», así que **el valor correcto no demuestra nada**: una pasada que escriba la
+variable y se corte antes de reiniciar —un fallo a mitad, un corte, un `apply` que muere en la tarea
+siguiente— deja el valor correcto y la escucha apagada, y la pasada siguiente, al ver el valor
+correcto, no reiniciaría **jamás**. El motor se quedaba con una escucha apagada que creía encendida.
+
+Por eso, además de la variable, se mira el puerto (`ss -lun`): si el entorno declaró escuchar y **no
+hay nadie escuchando**, falta el reinicio aunque no hubiera nada que escribir, lo escriba esta pasada
+o una anterior que se cortó. Y lo que no se puede medir no se suple con un reinicio a ciegas: si no
+hay forma de mirar el puerto, no se reinicia —reiniciar el servicio de la vista en cada pasada, con
+todos los laboratorios mirando, sería peor que el problema—.
+
 ## Lo que esto no hace todavía
 
 Enciende la escucha, que es la mitad que estaba apagada, pero **el registro no llega solo**: falta
@@ -56,6 +69,8 @@ lo demás, y no cambian nada de lo de arriba: cuando se declaren, la escucha ya 
 
 - El laboratorio no declara nada nuevo, y no debe: `observabilidad.registro` vive en el entorno.
 - Un `apply` normal no reinicia la vista. Sólo reinicia la primera vez —cuando la escucha pasa de
-  apagada a encendida— y sólo si alguien cambia el puerto. A partir de ahí, silencio.
+  apagada a encendida—, cuando alguien cambia el puerto, y cuando se declaró encenderla y no hay
+  nadie escuchando el puerto (lo que delata una pasada que se cortó antes de reiniciar). A partir de
+  ahí, silencio: un servicio en pie con su escucha puesta no se toca.
 - El motor deja de tener conocimiento propio sobre qué variables reinician el servicio: se muda a la
   propia vista, que es quien lo sabe y quien lo cambia de versión.

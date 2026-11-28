@@ -2221,9 +2221,9 @@ class LaEscuchaDeLosRegistros(unittest.TestCase):
         return [{"name": "Syslog.EnableListener", "value": escucha, "needServerRestart": reinicio},
                 {"name": "Syslog.ListenPort", "value": puerto, "needServerRestart": reinicio}]
 
-    def plan(self, declarado=None, actuales=None):
+    def plan(self, declarado=None, actuales=None, escuchando=None):
         return converge.netxms_registro_ops(
-            self.DECLARADO if declarado is None else declarado, actuales, self.API)
+            self.DECLARADO if declarado is None else declarado, actuales, self.API, escuchando)
 
     def test_una_escucha_apagada_se_enciende_y_pide_reinicio(self):
         plan = self.plan(actuales=self.configs(escucha="0"))
@@ -2236,6 +2236,35 @@ class LaEscuchaDeLosRegistros(unittest.TestCase):
 
     def test_una_escucha_ya_encendida_no_produce_ni_llamada_ni_reinicio(self):
         plan = self.plan(actuales=self.configs(escucha="1"))
+        self.assertEqual(plan["ops"], [])
+        self.assertFalse(plan["reiniciar"])
+
+    def test_el_valor_correcto_con_la_escucha_apagada_reinicia(self):
+        """El agujero que se midió: escribir el valor y cortarse antes de reiniciar.
+
+        La vista no tiene ningún campo que diga «esto está escrito y todavía no en vigor», así que
+        el valor correcto no demuestra nada: manda que haya alguien escuchando el puerto. Sin esto,
+        la pasada siguiente vería el valor correcto y no reiniciaría jamás.
+        """
+        plan = self.plan(actuales=self.configs(escucha="1"), escuchando=False)
+        self.assertEqual(plan["ops"], [])
+        self.assertTrue(plan["reiniciar"])
+
+    def test_el_valor_correcto_con_la_escucha_en_pie_no_toca_nada(self):
+        plan = self.plan(actuales=self.configs(escucha="1"), escuchando=True)
+        self.assertEqual(plan["ops"], [])
+        self.assertFalse(plan["reiniciar"])
+
+    def test_sin_poder_medir_la_escucha_no_se_reinicia_a_ciegas(self):
+        """Un `ss` que no está o que falla no es excusa para reiniciar el servicio en cada pasada."""
+        plan = self.plan(actuales=self.configs(escucha="1"), escuchando=None)
+        self.assertEqual(plan["ops"], [])
+        self.assertFalse(plan["reiniciar"])
+
+    def test_apagada_y_sin_escucha_no_reinicia_por_la_medida(self):
+        """La medida sólo empuja a reiniciar cuando el entorno pidió escuchar, no cuando pidió callar."""
+        plan = self.plan(declarado={"recoger": False}, actuales=self.configs(escucha="0"),
+                         escuchando=False)
         self.assertEqual(plan["ops"], [])
         self.assertFalse(plan["reiniciar"])
 

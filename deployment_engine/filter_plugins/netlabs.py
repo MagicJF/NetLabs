@@ -205,9 +205,9 @@ class FilterModule:
             # La configuración del propio servicio: la escucha de registros se declara en el
             # entorno y el motor la deja puesta, reiniciando sólo si de verdad hace falta.
             "netlabs_netxms_configs_cmd": lambda api: converge.netxms_configs_cmd(api),
-            "netlabs_netxms_registro_ops": lambda declarado, actuales, api:
-                converge.netxms_registro_ops(declarado, actuales, api),
-            "netlabs_netxms_reinicio_cmd": lambda: converge.netxms_reinicio_cmd(),
+            "netlabs_netxms_registro_ops": lambda declarado, actuales, api, escuchando=None:
+                converge.netxms_registro_ops(declarado, actuales, api, escuchando),
+            "netlabs_netxms_reinicio_cmd": lambda _=None: converge.netxms_reinicio_cmd(),
             # El mapa a medida: el del laboratorio, colocado como el plano.
             "netlabs_netxms_raices_cmd": lambda api: converge.netxms_raices_cmd(api),
             "netlabs_netxms_hijos_cmd": lambda api, id_objeto:
