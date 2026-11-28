@@ -837,7 +837,15 @@ Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 00
 - **P1.** La topología L2 real por la **tabla del puente (FDB)**, no por LLDP: el LLDP de MikroTik no
   lo lee bien la vista. Con ella delante, se contrasta con el plano del motor (ADR 0007).
 - **P2.** **Agente** en los nodos finales Linux —CPU, memoria, procesos—. En RouterOS no existe.
-- El **descubrimiento automático de red** se queda apagado: el inventario lo declara el motor.
+- El **descubrimiento automático de red** se queda apagado: el inventario lo declara el motor. No se
+  pierde con ello ninguna comprobación, porque la vista **no recibe del motor ni un dato de estado**:
+  el estado, las interfaces, los enlaces, las alarmas y los contadores salen de sus propias polls
+  —ICMP, configuración, SNMP y SSH—, y un equipo que el motor cree sano sale **en rojo** si no
+  contesta. Declarar el inventario no es pintar el resultado (ADR 0020). Un rastreo abierto, además,
+  no añade rigor: arrastra los equipos de los demás laboratorios que comparten el espacio de gestión.
+  Lo que sí caza el descubrimiento —lo que existe y no está declarado— se busca con un **barrido
+  acotado** al espacio de gestión del laboratorio, **a demanda** y sin borrar nada por su cuenta: se
+  nombra, no se actúa solo.
 - Las capacidades de un equipo las detecta el **poll de configuración**: tras cambiar RouterOS hay que
   forzarlo para que la ficha deje de mentir.
 - OSPF, VRRP, BFD y 802.1x son **laboratorios**, no monitorización: se modelan para poder romperlos.
