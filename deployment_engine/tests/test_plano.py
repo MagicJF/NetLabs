@@ -331,6 +331,22 @@ class TestPlanoAnidado(unittest.TestCase):
             for otro, otra in list(cajas.items())[i + 1:]:
                 self.assertFalse(se_pisan(caja, otra),
                                  f"{rol} y {otro} se dibujan uno encima del otro")
+        # Y la salida sigue a SU router: al separarlos a lo largo del techo, la nube
+        # tiene que moverse con él o deja de estar sobre el equipo que la alcanza. Una
+        # nube reanclada a la sede —donde la dejó `_asentar_salidas`— ya no se lee como
+        # la salida de ese router.
+        salidas = {
+            m.group(1): float(m.group(2)) + float(m.group(3)) / 2
+            for m in re.finditer(
+                r'<g data-area="([^"]*)" data-x="([\d.-]+)" data-y="[\d.-]+" '
+                r'data-ancho="([\d.-]+)"[^>]*data-nube="1"', svg)
+        }
+        for rol, titulo in (("rte1", "Salida NY"), ("rte2", "Salida TK"),
+                            ("rte3", "Salida BS")):
+            self.assertIn(titulo, salidas, f"falta la salida «{titulo}»")
+            centro_router = (cajas[rol][0] + cajas[rol][2]) / 2
+            self.assertAlmostEqual(salidas[titulo], centro_router, delta=0.5,
+                                   msg=f"«{titulo}» no queda sobre {rol}")
 
     def test_ninguna_area_se_sale_del_lienzo(self):
         """Una salida anclada fuera de la raíz no puede quedar recortada por el SVG.

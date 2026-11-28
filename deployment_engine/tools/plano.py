@@ -923,8 +923,15 @@ def _repartir_asomados(borde: list[tuple[str, Region, Region, float]],
         xs = [centro + minimo * (i - (len(borde) - 1) / 2) for i in range(len(borde))]
     else:
         xs = [x0 + paso * (i + 1) for i in range(len(borde))]
-    for (rol, caja, _, _), x in zip(borde, xs):
+    for (rol, caja, nube, _), x in zip(borde, xs):
         casa_de[rol].dentro[rol] = (x, caja.y)
+        if nube.exit:
+            # La salida vive sobre la vertical del router que la alcanza —así se lee
+            # como la de ESA sede y no como una nube centrada—, y el router acaba de
+            # moverse: sin reanclarla, la nube se quedaría sobre la sede, donde la dejó
+            # `_asentar_salidas`, y la salida dejaría de estar sobre su propio equipo.
+            # La nube no tiene equipos ni hijas, así que basta con asentarla en su sitio.
+            _repartir(nube, x - nube.ancho / 2, nube.y)
 
 
 def _asentar_salidas(raiz: Region, sede_de_salida: dict[int, Region]) -> None:
