@@ -155,7 +155,7 @@ def _quote(text: str) -> str:
 
 def ros_ops(node: dict, current: dict, routeros_clave: str,
             secrets: dict | None = None, mgmt_cidr: str | None = None,
-            observabilidad: dict | None = None) -> list[dict]:
+            observabilidad: dict | None = None, dns: dict | None = None) -> list[dict]:
     """Las llamadas REST que llevan el router de lo que hay a lo declarado.
 
     `current` es lo que devolvieron las lecturas de ROS_READS. Cada llamada lleva
@@ -166,6 +166,10 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
     servicio. Con qué se mira —SNMP v3, o la comunidad v2c en claro— lo declara el
     entorno (`observabilidad.snmp`, ADR 0019), no el laboratorio: sólo lectura y
     restringido a la red de gestión en ambos casos.
+
+    DNS es igual (ADR 0023): el laboratorio declara `dns: {enabled}` y nada más, y el
+    resolutor aguas arriba sale del entorno (`dns.servers`), que es quien conoce una
+    dirección alcanzable desde la salida de cada sede.
     """
     ops: list[dict] = []
     configure = node.get("configure") or {}
@@ -223,7 +227,7 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
     if "nat" in configure:
         ops += _nat_ops(node, configure["nat"], current.get("nat") or [])
     if "dns" in configure:
-        ops += _dns_ops(configure["dns"], current.get("dns") or {})
+        ops += _dns_ops(configure["dns"], current.get("dns") or {}, dns)
     if "users" in configure:
         ops += _user_ops(configure["users"], current.get("users") or [], routeros_clave)
     return ops
@@ -738,32 +742,45 @@ def _nat_ops(node: dict, declaradas: list, actuales: list) -> list[dict]:
     return ops
 
 
-def _dns_ops(declarado: dict, actual: dict) -> list[dict]:
-    """El resolutor del router: a quién pregunta y si atiende a los suyos.
+def _dns_ops(declarado: dict, actual: dict, entorno: dict | None) -> list[dict]:
+    """El resolutor del router: a quién pregunta y si atiende a los suyos (ADR 0023).
 
     RouterOS no tiene un objeto por servidor: `/ip/dns` es un ajuste único, con la
-    lista en una sola cadena separada por comas. Un router con salida real resuelve
-    por la puerta de esa salida, y `allow_remote_requests` es lo que hace que los
-    puestos que lo tienen de servidor —los que sirve su DHCP— resuelvan también.
+    lista en una sola cadena separada por comas. El laboratorio sólo declara **si** sus
+    sedes resuelven (`dns: {enabled}`); con qué resolutor lo hacen sale del entorno
+    (`dns.servers`), que es quien conoce una dirección alcanzable por la salida de cada
+    sede. Un router que resuelve tiene que **atender** las peticiones de su red
+    (`allow_remote_requests`): es lo que hace que los puestos que sirve su DHCP resuelvan
+    contra él sin que se toque nada dentro del invitado.
     """
     ops = []
-    servidores = declarado.get("servers")
-    if servidores is not None:
-        deseado = (",".join(servidores) if isinstance(servidores, (list, tuple))
-                   else str(servidores))
+    if declarado.get("enabled"):
+        servidores = (entorno or {}).get("servers") or []
+        if not servidores:
+            raise LabError(
+                "el laboratorio declara que sus sedes resuelven (`dns`) y el entorno no "
+                "declara `dns.servers`: no hay a quién preguntar")
+        deseado = ",".join(str(s) for s in servidores)
         ahora = str(actual.get("servers") or "").replace(" ", "")
         if ahora != deseado:
             ops.append({"method": "POST", "path": "/rest/ip/dns/set",
                         "body": {"servers": deseado},
                         "effect": f"resolver -> {deseado}"})
-    atiende = declarado.get("allow_remote_requests")
-    if atiende is not None:
-        ahora = str(actual.get("allow-remote-requests", "")).lower() in ("true", "yes")
-        if ahora != bool(atiende):
+        if str(actual.get("allow-remote-requests", "")).lower() not in ("true", "yes"):
             ops.append({"method": "POST", "path": "/rest/ip/dns/set",
-                        "body": {"allow-remote-requests": "yes" if atiende else "no"},
-                        "effect": f"el resolutor {'atiende' if atiende else 'no atiende'} a la red"})
+                        "body": {"allow-remote-requests": "yes"},
+                        "effect": "el resolutor atiende a la red"})
+    elif str(actual.get("allow-remote-requests", "")).lower() in ("true", "yes"):
+        # El laboratorio no lo quiere y ahora sí atiende: se deja de atender a la red.
+        ops.append({"method": "POST", "path": "/rest/ip/dns/set",
+                    "body": {"allow-remote-requests": "no"},
+                    "effect": "el resolutor no atiende a la red"})
     return ops
+
+
+def _resuelve(node: dict) -> bool:
+    """¿El router resuelve para su red? Lo dice su área `dns` (ADR 0023)."""
+    return bool(((node.get("configure") or {}).get("dns") or {}).get("enabled"))
 
 
 def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
@@ -811,14 +828,31 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
                             "effect": f"servidor de direcciones en {iface} ({nombre})"})
 
         cidr = _network_cidr(node, red)
+        # La red servida anuncia, además de la puerta, quién resuelve: si el router
+        # resuelve (ADR 0023) se anuncia a sí mismo, y los puestos lo aprenden por DHCP
+        # sin que se toque nada dentro del invitado. Si no resuelve, no se anuncia —y se
+        # retira un anuncio viejo— para no mandar a los puestos a un resolutor que no
+        # atiende.
+        anunciado = str(redes.get(cidr, {}).get("dns-server") or "").replace(" ", "")
+        cuerpo_red = {"address": cidr, "gateway": gateway}
+        if _resuelve(node):
+            cuerpo_red["dns-server"] = gateway
         if cidr not in redes:
             ops.append({"method": "PUT", "path": "/rest/ip/dhcp-server/network",
-                        "body": {"address": cidr, "gateway": gateway},
+                        "body": cuerpo_red,
                         "effect": f"red servida {cidr} por {gateway}"})
-        elif redes[cidr].get("gateway") != gateway:
-            ops.append({"method": "PATCH", "path": f"/rest/ip/dhcp-server/network/{redes[cidr]['.id']}",
-                        "body": {"gateway": gateway},
-                        "effect": f"red servida {cidr} por {gateway}"})
+        else:
+            cambios = {}
+            if redes[cidr].get("gateway") != gateway:
+                cambios["gateway"] = gateway
+            if _resuelve(node) and anunciado != gateway:
+                cambios["dns-server"] = gateway
+            elif not _resuelve(node) and anunciado == gateway:
+                cambios["dns-server"] = ""
+            if cambios:
+                ops.append({"method": "PATCH", "path": f"/rest/ip/dhcp-server/network/{redes[cidr]['.id']}",
+                            "body": cambios,
+                            "effect": f"red servida {cidr} por {gateway}"})
 
         for reserva in item.get("leases") or []:
             comentario = f"{PREFIX}reserva-{reserva['role']}"
