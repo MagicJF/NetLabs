@@ -908,6 +908,19 @@ al arrancar**. De ahí que la decisión (ADR 0021) no sea «escribir una variabl
   RouterOS, la acción de registro con destino remoto) y la comprobación de que un mensaje entra y
   se guarda. La escucha queda puesta; el tráfico, todavía no.
 
+### 7.3. El aspecto de la consola no lo pone el sitio
+
+El tema (claro/oscuro) de la consola **no es una palanca del servidor y el motor no lo declara**
+(ADR 0023). Lo elige cada navegador en una preferencia local del cliente (`CurrentTheme` en su
+`PreferenceStore`), y en la consola web esa preferencia vive en el directorio de estado del
+contenedor, atada a una cookie del navegador. La configuración del servicio —`GET /server-config`,
+las mismas variables que el motor sí escribe (ADR 0021)— **no expone ningún tema**: medido en la
+instalación, 438 variables y ninguna que gobierne el aspecto de la consola (`Server.Color` es el
+distintivo del servidor, y `Objects.NetworkMaps.DefaultBackgroundColor`, el fondo de un mapa). Y en
+la consola web desplegada el oscuro no se aplica por un **fallo conocido** de NetXMS (NX-2569), no
+por una mala configuración: quien quiera oscuro usa la consola de escritorio o la consola web nueva
+(Vue). Antes de declarar una palanca nueva en el entorno, se comprueba que el servidor la expone.
+
 ---
 
 ## 8. El informe de una ejecución
