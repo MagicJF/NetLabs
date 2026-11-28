@@ -824,8 +824,10 @@ hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.
   histórico y alertas.
 - **Equipos de red:** alcanzables por su dirección de gestión; se vigilan por SNMP (el propio
   equipo expone su estado) y por ICMP.
-- **Nodos finales:** alcanzables por las rutas derivadas hacia las redes del laboratorio; se
-  vigilan por ICMP y aparecen como hojas del segmento de su router. Sin agente en esta fase.
+- **Nodos finales:** alcanzables por las rutas derivadas hacia las redes del laboratorio; aparecen como
+  hojas del segmento de su router y se vigilan por ICMP. Cuando el laboratorio lo declara
+  (`agente: {enabled: true}`), el motor pone además el **agente de NetXMS** dentro del invitado y la
+  vista le lee **CPU, memoria, disco y procesos** (§7.4): un nodo final deja de ser un «responde».
 - Un laboratorio desplegado aparece **porque lo declarado basta** para saber a quién alcanzar.
 - Al destruir un laboratorio **no queda nada suyo en la vista**: sus equipos registrados y su
   mapa se retiran con lo demás, por la marca que llevan (ADR 0014). Lo que es persistente es el
@@ -861,7 +863,10 @@ Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 00
   camino del motor, que habla con la vista por su API desde dentro de su invitado (`management.api`).
 - **P1.** La topología L2 real por la **tabla del puente (FDB)**, no por LLDP: el LLDP de MikroTik no
   lo lee bien la vista. Con ella delante, se contrasta con el plano del motor (ADR 0007).
-- **P2.** **Agente** en los nodos finales Linux —CPU, memoria, procesos—. En RouterOS no existe.
+- **P2.** **Agente** en los nodos finales Linux —CPU, memoria, disco y procesos— (ADR 0027, §7.4).
+  En RouterOS no existe: por eso su ficha pone «No» y ahí no hay nada que activar. El laboratorio
+  enciende el área `agente` de su nodo; con qué se instala lo declara el entorno
+  (`observabilidad.agente`), y quien lo detecta es el poll de configuración de la vista.
 - El **descubrimiento automático de red** se queda apagado: el inventario lo declara el motor. No se
   pierde con ello la comprobación que importa —estado, interfaces, contadores y alcance salen de las
   polls de la vista, y un equipo que el motor cree sano sale **en rojo** si no contesta—, pero
@@ -920,6 +925,38 @@ distintivo del servidor, y `Objects.NetworkMaps.DefaultBackgroundColor`, el fond
 la consola web desplegada el oscuro no se aplica por un **fallo conocido** de NetXMS (NX-2569), no
 por una mala configuración: quien quiera oscuro usa la consola de escritorio o la consola web nueva
 (Vue). Antes de declarar una palanca nueva en el entorno, se comprueba que el servidor la expone.
+
+### 7.4. El agente de la vista en los nodos finales Linux
+
+Un nodo final no habla SNMP —con SNMP la vista le sacaría las interfaces, no la salud—, así que su
+CPU, su memoria, su disco y sus procesos se leen con el **agente nativo** de NetXMS, que corre dentro
+del invitado. Ese agente lo pone el motor desde la declaración; no se instala a mano en ninguna
+máquina (ADR 0027).
+
+- **Lo enciende el laboratorio, lo instala el sitio.** El nodo declara `configure: {agente: {enabled:
+  true}}`, igual que un RouterOS declara `snmp`; **con qué** se instala —el paquete y el repositorio
+  del agente— vive en el entorno (`observabilidad.agente`), porque mirar no es cosa de un
+  laboratorio: un nodo no elige cómo se le mira. La validación rechaza un laboratorio que declare el
+  paquete, el área `agente` en un equipo de red (donde no hay agente que poner) y el área en el
+  invitado de gestión (que ya es la vista y ya lleva el suyo).
+- **Se expande a las áreas que el motor ya converge.** El plan convierte ese `agente: {enabled}` en
+  el vocabulario de siempre —un repositorio, un paquete, un fichero de configuración y un servicio—,
+  y el interior del invitado se converge con las mismas tareas que cualquier Linux: el agente no
+  estrena una vía de escritura, y el segundo `apply` no escribe.
+- **El agente lee un solo fichero, y el motor escribe el que declara.** El paquete de la imagen no
+  trae el agente (por eso se añade su repositorio) y el agente lee **sólo** `/etc/nxagentd.conf`
+  (medido: no hay directorio de fragmentos). El motor lo escribe con `[CORE] Servers=<espacio de
+  gestión>`: la lista de **sólo lectura** —`ControlServers` daría además ejecutar acciones y
+  `MasterServers` reescribir esa misma configuración—, porque CPU, memoria, disco y procesos se leen.
+- **No se fuerza el sondeo: se espera con tope, y agotarlo es un fallo.** El API de esta versión no
+  tiene sondeo forzado (`POST /objects/{id}/poll/{tipo}` responde 404: medido, ADR 0019), así que el
+  motor no pide una pasada: mira la ficha del nodo hasta que el **poll de configuración** de la
+  vista —cada ~30 s— diga que hay agente (`capabilities.isNativeAgent`). Se sale en el instante en que
+  lo dice y, si el tope se agota, la tarea **falla y lo dice** con el equipo y el tiempo esperado
+  delante: no se tapa con `failed_when: false`. Un laboratorio que no se puede mirar por dentro no
+  está desplegado.
+- **Un nodo que la vista ya ve no produce ninguna llamada.** La comprobación es la ficha, así que la
+  segunda pasada no escribe: la idempotencia se mantiene también aquí.
 
 ---
 

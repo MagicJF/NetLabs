@@ -1,0 +1,78 @@
+# PROPÓSITO:   la vista mira por dentro a los nodos finales Linux: CPU, memoria, disco y
+#              procesos por el agente nativo, no sólo «responde / no responde». El motor
+#              lo pone (el paquete y su configuración van en el interior del invitado, y
+#              el laboratorio sólo declara el área `agente`); aquí se comprueba que la
+#              vista lo ha **visto**.
+# INVARIANTES: se llama con `curl` desde DENTRO del invitado de gestión, por la puerta de
+#              siempre (interior_ssh.yml: SSH a su dirección, sin salto).
+#              No se fuerza ningún sondeo: el API de esta versión no lo tiene
+#              (`POST /objects/{id}/poll/{tipo}` responde 404, medido en el P0; ADR 0019).
+#              Se **espera con tope** a que el poll de configuración de la vista —cada
+#              ~30 s— vea el agente, y agotar el tope es un fallo que se dice, no un
+#              aviso que se tapa: la tarea sale con error y el `apply` con ella.
+#              Un nodo cuya ficha ya dice que la vista lo sondea como agente no produce
+#              ninguna llamada: el segundo `apply` no escribe.
+# VER:         docs/diseno.md §7; docs/decisiones/0019-la-observabilidad-por-partes.md,
+#              docs/decisiones/0027-*.md
+
+# Los nodos finales del laboratorio que declaran el agente. Es un filtro y no un
+# `selectattr` de Jinja: el criterio —nodo final con el área `agente` encendida— se
+# decide en un solo sitio, el mismo que usa `netxms_agente_ops` para mirar las fichas.
+- name: netxms · los nodos finales que declaran el agente de la vista
+  ansible.builtin.set_fact:
+    netxms_agente_nodos: "{{ equipos | netlabs_netxms_agente_nodos }}"
+  no_log: true
+
+- name: netxms · los que ya están en la vista, para leer su ficha
+  ansible.builtin.set_fact:
+    netxms_agente_ids: "{{ netxms_agente_nodos | netlabs_netxms_ids(netxms_censo) }}"
+  no_log: true
+
+# La ficha se lee de los que interesan —los nodos finales con agente—, y no de todo el
+# censo: leer las de todos los laboratorios para escribir uno sería leer de más.
+- name: netxms · leer la ficha de los nodos con agente
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · leer {{ netxms_agente_ids | length }} ficha(s) de agente"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_agente_ids | netlabs_netxms_fichas_cuerpo(netxms_api) }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_fichas_cmd }}"
+  when: netxms_agente_ids | length > 0
+
+- name: netxms · las fichas de los nodos con agente
+  ansible.builtin.set_fact:
+    netxms_agente_fichas: "{{ (interior.stdout | default('{}', true) | from_json).objects | default([], true) }}"
+  no_log: true
+  when: netxms_agente_ids | length > 0
+
+- name: netxms · lo que falta para que la vista mire por dentro a los nodos
+  ansible.builtin.set_fact:
+    netxms_agente_plan: >-
+      {{ netxms_agente_nodos | netlabs_netxms_agente_ops(
+           netxms_censo, netxms_agente_fichas | default([], true), netxms_api) }}
+  no_log: true
+
+- name: netxms · esperar al agente en los nodos que aún no lo tienen
+  ansible.builtin.debug:
+    msg: "{{ netxms_agente_plan | map(attribute='effect') | list }}"
+  when: netxms_agente_plan | length > 0
+
+- name: netxms · esperar con tope a que la vista vea el agente
+  include_tasks: interior_ssh.yml
+  vars:
+    interior_descripcion: "netxms · {{ netxms_op.effect }}"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: true
+    interior_secreto: "{{ netxms_testigo }}\n"
+    interior_imprime: true
+    comando: "{{ netxms_op.cmd }}"
+  loop: "{{ netxms_agente_plan }}"
+  loop_control: {loop_var: netxms_op, label: "{{ netxms_op.effect }}"}
+  # El sondeo con tope falla con error si el agente no aparece: la tarea falla y el
+  # `apply` con ella. Un laboratorio desplegado que no se puede mirar por dentro no
+  # está desplegado, y eso se dice aquí en vez de dejarlo pasar.
+  when: netxms_agente_plan | length > 0

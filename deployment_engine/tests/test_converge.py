@@ -15,6 +15,7 @@ RAIZ = pathlib.Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(RAIZ / "deployment_engine" / "tools"))
 
 import converge  # noqa: E402
+import identity  # noqa: E402
 import mapa  # noqa: E402
 from identity import LabError  # noqa: E402
 
@@ -2550,6 +2551,135 @@ class LosGuionesQueSeLlevanElTestigo(unittest.TestCase):
                 self.assertEqual(lineas[2], "EOF",
                                  f"{nombre}: el cierre no está solo, así que el heredoc traga la llamada")
                 self.assertIn("curl", lineas[3], f"{nombre}: la llamada no queda detrás del cierre")
+
+
+class LaVistaMiraPorDentroAlNodoFinal(unittest.TestCase):
+    """P2 de la observabilidad (ADR 0019): el agente de la vista en el nodo final Linux.
+
+    El motor no fuerza el sondeo —el API de esta versión no lo tiene: `POST
+    /objects/{id}/poll/{tipo}` responde 404, medido en el P0—, así que **espera con
+    tope** a que el poll de configuración de la vista vea el agente, y agotar el tope es
+    un fallo que se dice. Un nodo cuya ficha ya lo dice no produce ninguna llamada: el
+    segundo `apply` no escribe.
+    """
+
+    def nodo(self, role="wsp1", tipo="workstation"):
+        return {"role": role, "name": role, "type": tipo, "netxms_address": "10.50.55.50",
+                "configure": {"agente": {"enabled": True}}}
+
+    def censo(self, role="wsp1", id_objeto=7, direccion="10.50.55.50"):
+        return [{"id": id_objeto, "name": role, "ipAddress": {"address": direccion}}]
+
+    def ficha(self, id_objeto=7, agente=False):
+        return [{"id": id_objeto, "capabilities": {"isNativeAgent": agente}}]
+
+    def test_sin_el_area_encendida_no_hay_nada_que_esperar(self):
+        nodo = self.nodo()
+        nodo["configure"] = {}
+        self.assertEqual(
+            converge.netxms_agente_ops([nodo], self.censo(), [], "http://vista/api/v1"), [])
+
+    def test_un_equipo_de_red_no_lleva_agente(self):
+        # El agente es de los nodos finales Linux: en un equipo de red no hay nada que
+        # activar (ADR 0019), y por eso el tipo lo deja fuera.
+        self.assertEqual(
+            converge.netxms_agente_ops([self.nodo(tipo="router")], self.censo(), [],
+                                       "http://vista/api/v1"), [])
+
+    def test_un_nodo_que_la_vista_ya_ve_no_pide_nada(self):
+        self.assertEqual(
+            converge.netxms_agente_ops([self.nodo()], self.censo(), self.ficha(agente=True),
+                                       "http://vista/api/v1"), [])
+
+    def test_un_nodo_que_la_vista_no_ve_pide_esperar_con_tope(self):
+        ops = converge.netxms_agente_ops([self.nodo()], self.censo(), self.ficha(),
+                                         "http://vista/api/v1")
+        self.assertEqual(len(ops), 1)
+        # La orden dice qué se espera y de quién, y mira la ficha del objeto correcto.
+        self.assertIn("wsp1", ops[0]["effect"])
+        self.assertIn("10.50.55.50", ops[0]["effect"])
+        self.assertIn("CPU, memoria, disco y procesos", ops[0]["effect"])
+        self.assertIn("/objects/7", ops[0]["cmd"][2])
+        self.assertIn("isNativeAgent", ops[0]["cmd"][2])
+
+    def test_el_sondeo_del_agente_agota_el_tope_y_lo_dice(self):
+        # Agotar el tope es un fallo, no un aviso: el sondeo sale con error y con el
+        # motivo delante —el equipo y el tiempo esperado—, y quien lo ejecuta falla.
+        script = converge.netxms_agente_cmd("http://vista/api/v1", 7, intentos=3, espera=1)[2]
+        self.assertIn('while [ "$i" -lt 3 ]', script)
+        self.assertIn("no ha visto el agente", script)
+        self.assertIn("exit 1", script)
+        # Y no espera a ciegas: se sale en el instante en que la ficha lo dice.
+        self.assertIn("exit 0", script)
+
+    def test_un_nodo_que_todavia_no_esta_en_la_vista_no_pide_nada(self):
+        # Su alta la hizo esta misma pasada: su ficha no existe todavía, y pedir el
+        # sondeo de un objeto que no está sería errar por adelantado.
+        self.assertEqual(
+            converge.netxms_agente_ops([self.nodo()], [], [], "http://vista/api/v1"), [])
+
+    def test_la_segunda_pasada_no_escribe(self):
+        # El poll de configuración ya lo ha visto y la ficha lo dice: el motor no vuelve
+        # a pedir nada. La primera pasada, con la ficha mintiendo, sí pedía esperar.
+        primera = converge.netxms_agente_ops([self.nodo()], self.censo(), self.ficha(),
+                                             "http://vista/api/v1")
+        segunda = converge.netxms_agente_ops([self.nodo()], self.censo(), self.ficha(agente=True),
+                                             "http://vista/api/v1")
+        self.assertEqual(len(primera), 1)
+        self.assertEqual(segunda, [])
+
+
+class ElAgenteSeExpandeYNoSeRepite(unittest.TestCase):
+    """El área `agente` de un nodo final, expandida y convergida dos veces seguidas.
+
+    Demuestra las dos mitades de la idempotencia de P2: la primera pasada pide escribir
+    —el repositorio del sitio, el paquete, su configuración y su servicio—, y la segunda,
+    con lo declarado ya dentro del invitado, **no pide nada**. El motor no estrena una vía
+    de escritura: el agente se converge con los mismos verbos que cualquier Linux.
+    """
+
+    def test_la_segunda_pasada_no_pide_escribir_nada(self):
+        env = entorno()
+        configure = {"agente": {"enabled": True}}
+        identity._expandir_agente(configure, env)
+        # El área declarada sigue viéndose en la ficha del nodo; lo que se expande son
+        # las otras cuatro, no se sustituye lo que declaró el laboratorio.
+        self.assertEqual(configure["agente"], {"enabled": True})
+        repo = configure["repositories"][0]
+        fichero = configure["files"][0]
+        self.assertEqual(repo["name"], "netxms")
+        self.assertEqual(fichero["path"], identity.NXAGENTE_CONF)
+        nodo = {"role": "wsp1", "name": "wsp1", "type": "workstation",
+                "configure": configure}
+
+        primera = converge.linux_ops(nodo, {"hostname": "wsp1"})
+        self.assertTrue(primera)
+        efectos = " · ".join(op["effect"] for op in primera)
+        self.assertIn("repositorio netxms", efectos)
+        self.assertIn("netxms-agent", efectos)
+        self.assertIn(identity.NXAGENTE_CONF, efectos)
+
+        estado = {
+            "hostname": "wsp1",
+            "repositories": {repo["name"]: converge._repo_line(repo) + "\n"},
+            "repos_ok": {repo["name"]: converge._sha256(converge._repo_line(repo))},
+            "packages": {"netxms-agent": "7.0.5-1+trixie"},
+            "files": {fichero["path"]: converge._sha256(fichero["content"])},
+            "modes": {fichero["path"]: "644"},
+            # El sondeo de una segunda pasada ya convergida trae dos hechos más, y los dos
+            # hacen falta para que el estado no mienta. El servicio quedó `enabled` (lo dejó
+            # su propia alta) y su configuración quedó **releída**: la unidad sólo vuelve a
+            # leer el fichero con el `try-restart`, y haberlo escrito no es que lo haya
+            # releído. Por eso el motor guarda aparte la marca de la recarga completada, y
+            # un fichero que coincide **sin** su marca no es «ya convergido»: es una pasada
+            # que se cortó antes de reiniciar, y entonces el motor debe volver a pedirlo
+            # (el valor escrito no demuestra el efecto — ADR 0021). Sin estas dos claves el
+            # `estado` describiría un interior a medias, no uno limpio.
+            "reloads": {fichero["path"]: converge._sha256(fichero["content"])},
+            "enabled": {"netxms-agent": "enabled"},
+            "services": {"netxms-agent": "active"},
+        }
+        self.assertEqual(converge.linux_ops(nodo, estado), [])
 
 
 if __name__ == "__main__":

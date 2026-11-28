@@ -2037,6 +2037,104 @@ def netxms_icono_de(nodo: dict) -> str:
     return NETXMS_ICONO_POR_TIPO.get(str(nodo.get("type")), NETXMS_ICONO_POR_DEFECTO)
 
 
+# El agente de la vista en un nodo final Linux (P2, ADR 0019). El paquete lo pone el
+# motor —el laboratorio sólo enciende el área—, y quien lo detecta es el poll de
+# configuración de la vista, que corre cada ~30 s. Se espera con un tope de
+# NETXMS_AGENTE_INTENTOS × NETXMS_AGENTE_ESPERA segundos; agotarlo es un fallo que se
+# dice, no un aviso que se tapa.
+NETXMS_AGENTE_INTENTOS = 20
+NETXMS_AGENTE_ESPERA = 15
+
+
+def _la_vista_mira_por_dentro(node: dict) -> bool:
+    """Si un nodo final declara el agente de la vista: se le mira por dentro, no por ICMP."""
+    if node.get("type") not in ("server", "workstation"):
+        return False
+    return bool(((node.get("configure") or {}).get("agente") or {}).get("enabled"))
+
+
+def netxms_agente_nodos(nodes: list[dict]) -> list[dict]:
+    """Los nodos del laboratorio que declaran el agente: se les mira por dentro."""
+    return [n for n in nodes or [] if _la_vista_mira_por_dentro(n)]
+
+
+def netxms_agente_cmd(api: str, id_objeto, intentos: int = NETXMS_AGENTE_INTENTOS,
+                      espera: int = NETXMS_AGENTE_ESPERA) -> list:
+    """Sondear con tope hasta que la vista vea el agente del equipo; agotarlo es fallar.
+
+    Las capacidades de un equipo las detecta el **poll de configuración** de la vista, y
+    el API de esta versión no tiene sondeo forzado (`POST /objects/{id}/poll/{tipo}`
+    responde 404: medido en el P0, ADR 0019). Así que no se pide un sondeo: se **espera**
+    a que la vista lo haya hecho, mirando su ficha hasta que deje de decir que no hay
+    agente. Sale en el instante en que lo ve, y si el tope se agota sale con error —el
+    fallo se dice, no se tapa—, que es lo que hace fallar a la tarea que lo ejecuta.
+    """
+    idn = int(id_objeto)
+    script = (
+        "IFS= read -r t || true; exec 3<<EOF\n"
+        "Authorization: Bearer $t\n"
+        "EOF\n"
+        "i=0\n"
+        f"while [ \"$i\" -lt {int(intentos)} ]; do\n"
+        f"  if curl -sS {NETXMS_TOPE} --fail-with-body -X GET -H @/dev/fd/3 "
+        f"{api}/objects/{idn} | grep -q '\"isNativeAgent\": *true'; then\n"
+        "    echo \"la vista sondea el equipo "
+        f"{idn} como agente: CPU, memoria, disco y procesos\"\n"
+        "    exit 0\n"
+        "  fi\n"
+        "  i=$((i+1))\n"
+        f"  sleep {int(espera)}\n"
+        "done\n"
+        f"echo \"la vista no ha visto el agente del equipo {idn} en "
+        f"{int(intentos) * int(espera)} s\" >&2\n"
+        "exit 1"
+    )
+    return _sh(script)
+
+
+def netxms_agente_ops(nodes: list[dict], encontrados: list | None, detalles: list | None,
+                      api: str, intentos: int = NETXMS_AGENTE_INTENTOS,
+                      espera: int = NETXMS_AGENTE_ESPERA) -> list[dict]:
+    """Lo que falta para que la vista mire **por dentro** a los nodos finales del laboratorio.
+
+    Un nodo final que declara el agente, ya está en la vista y cuya ficha todavía no dice
+    que lo tenga produce una operación: esperar con tope a que el poll de configuración
+    lo vea. Uno que ya lo tiene no produce ninguna —el segundo `apply` no escribe—, y uno
+    que aún no está registrado tampoco: lo dio de alta esta misma pasada, y su ficha se
+    lee en la siguiente, que es cuando el agente del invitado ya existe.
+    """
+    if not any(_la_vista_mira_por_dentro(n) for n in nodes or []):
+        return []
+    direccion_de: dict = {}
+    for objeto in encontrados or []:
+        nombre = str(objeto.get("name") or "").strip()
+        if nombre:
+            direccion_de.setdefault(nombre, {})[
+                str((objeto.get("ipAddress") or {}).get("address") or "")] = objeto.get("id")
+    leidos: dict = {}
+    for detalle in detalles or []:
+        if isinstance(detalle, dict) and detalle.get("id") is not None:
+            leidos[int(detalle["id"])] = detalle
+    ops: list[dict] = []
+    for node in nodes or []:
+        if not _la_vista_mira_por_dentro(node):
+            continue
+        direccion = _direccion_de(node)
+        nombre = str(node.get("name") or node.get("role"))
+        id_objeto = (direccion_de.get(nombre) or {}).get(str(direccion))
+        if id_objeto is None:
+            continue
+        ficha = leidos.get(int(id_objeto)) or {}
+        if (ficha.get("capabilities") or {}).get("isNativeAgent"):
+            continue
+        ops.append({
+            "cmd": netxms_agente_cmd(api, id_objeto, intentos, espera),
+            "effect": (f"esperar a que la vista sondee {nombre} ({direccion}) como agente: "
+                       "CPU, memoria, disco y procesos"),
+        })
+    return ops
+
+
 def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | None,
                api: str, secrets: dict | None = None,
                puerto: int = NETXMS_PUERTO_SSH, vivas: list | None = None,
