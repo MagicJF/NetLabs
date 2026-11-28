@@ -1623,6 +1623,30 @@ def _gateway_for(lab: dict, network: str) -> str:
     raise LabError(f"la red {network!r} no está declarada y no tiene puerta")
 
 
+def _tarjetas_del_config(config) -> dict[int, str | None] | None:
+    """Las tarjetas que un invitado tiene ESCRITAS en su config, por índice.
+
+    Proxmox guarda cada tarjeta en una clave `netN` con pares `clave=valor`; el
+    puente es lo que dice por dónde sale. Se devuelve `None` cuando el config no se
+    leyó —un invitado sin config no se compara— y un diccionario vacío cuando se leyó
+    y no tiene ninguna tarjeta, que sí es una diferencia.
+    """
+    if not isinstance(config, dict):
+        return None
+    tarjetas = {}
+    for clave, valor in config.items():
+        coincidencia = re.fullmatch(r"net(\d+)", str(clave))
+        if not coincidencia:
+            continue
+        puente = None
+        for parte in str(valor or "").split(","):
+            if parte.strip().startswith("bridge="):
+                puente = parte.split("=", 1)[1].strip()
+                break
+        tarjetas[int(coincidencia.group(1))] = puente
+    return tarjetas
+
+
 def _diferencia_del_invitado(built: dict, existing: dict) -> dict | None:
     """Qué hay que hacer con un invitado que ya existe, sin tocar a los demás.
 
@@ -1637,8 +1661,9 @@ def _diferencia_del_invitado(built: dict, existing: dict) -> dict | None:
       como aquí no hay globo de memoria, se para un momento y vuelve a arrancar. Su
       disco no se toca: no pierde lo que tenía dentro.
     - `guest_recreate`: lo que no se cambia en caliente de ninguna manera —de máquina
-      virtual a contenedor, o el nombre, que es el del rol—: se retira ese y se
-      vuelve a crear ese, y sólo ese.
+      virtual a contenedor, el nombre, que es el del rol, o las tarjetas, que el motor
+      no migra y que dicen por dónde habla cada pata—: se retira ese y se vuelve a
+      crear ese, y sólo ese.
     """
     if int(existing["vmid"]) != built["vmid"]:
         raise LabError(
@@ -1654,6 +1679,21 @@ def _diferencia_del_invitado(built: dict, existing: dict) -> dict | None:
     if motivo:
         return {"op": "guest_recreate", "vmid": built["vmid"], "name": built["name"],
                 "type": existing.get("type"), "built": built, "motivo": motivo}
+
+    # Las tarjetas tampoco se cambian en caliente sin dejar de ser las que el invitado
+    # tiene: si la declaración nueva usa otra pata para la gestión o para la salida, el
+    # invitado viejo seguiría hablando por la tarjeta de antes. Se rehace SÓLO éste,
+    # que es lo que vuelve a poner cada tarjeta en su sitio sin tocar a los demás.
+    # Un invitado de control se ADOPTA, no se crea: rehacerlo sería tirar el invitado
+    # que sostiene la gestión del sitio. Sus tarjetas se dan por buenas aunque el
+    # config diga otra cosa; lo que el motor converge en él es su interior, por SSH.
+    tarjetas = _tarjetas_del_config(existing.get("config_interfaces"))
+    if not built.get("control") and tarjetas is not None:
+        esperadas = {int(i["index"]): i.get("bridge") for i in built.get("interfaces") or []}
+        if tarjetas != esperadas:
+            return {"op": "guest_recreate", "vmid": built["vmid"], "name": built["name"],
+                    "type": existing.get("type"), "built": built,
+                    "motivo": "sus tarjetas no son las declaradas"}
 
     # Los valores ESCRITOS en su config mandan; los del clúster son de en marcha y no
     # ven el cambio que aún no se ha aplicado (a un invitado encendido se le cambia la

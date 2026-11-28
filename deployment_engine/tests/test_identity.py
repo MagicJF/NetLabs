@@ -563,6 +563,33 @@ class Rechazos(unittest.TestCase):
         self.assertEqual(paso["tenia"]["memory"], 200)
         self.assertTrue(any("memoria 200 ->" in e for e in plan["effects"]), plan["effects"])
 
+    def test_una_tarjeta_distinta_rehace_solo_ese_invitado(self):
+        """Una tarjeta que no es la declarada rehace ese invitado y sólo ese.
+
+        Demuestra que la diferencia mira las tarjetas del config: un router que ya
+        existía con la gestión en otra pata conserva el acceso REST y se queda sin la
+        salida nueva si el plan no lo dice. Con las tarjetas iguales no hay paso; con
+        una cambiada, se rehace sólo ese invitado.
+        """
+        primero = identity.plan(mundo(), laboratorio(), entorno())
+        built = next(n for n in primero["nodes"] if n["role"] == "rte1")
+        viejos = [{
+            "vmid": built["vmid"], "name": "rte1", "type": "qemu",
+            "pool": "b_router_dos_puestos", "status": "running",
+            "config_cores": built["cores"], "config_memory": built["memory"],
+            "config_interfaces": {
+                f"net{i['index']}": f"virtio=BC:24:00:00:00:00,bridge={i['bridge']}"
+                for i in built["interfaces"]
+            },
+        }]
+        plan = identity.plan(mundo(invitados=viejos), laboratorio(), entorno())
+        self.assertEqual([s for s in plan["steps"] if s["op"] == "guest_recreate"], [])
+        viejos[0]["config_interfaces"]["net2"] = "virtio=BC:24:00:00:00:00,bridge=vmbr_otro"
+        plan = identity.plan(mundo(invitados=viejos), laboratorio(), entorno())
+        rehacer = [s for s in plan["steps"] if s["op"] == "guest_recreate"]
+        self.assertEqual([s["vmid"] for s in rehacer], [built["vmid"]])
+        self.assertIn("tarjetas", rehacer[0]["motivo"])
+
     def test_cambiar_de_contenedor_a_maquina_rehace_solo_ese_invitado(self):
         # Lo que no se cambia en caliente se rehace, pero rehacer no es destruir el
         # laboratorio: el paso lleva el vmid exacto y no arrastra a ningún otro.

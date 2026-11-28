@@ -32,6 +32,12 @@ def netlabs_con_config(mundo: dict, configuraciones: dict) -> dict:
         if dato:
             nuevo["config_cores"] = int(dato.get("cores") or invitado.get("cores") or 1)
             nuevo["config_memory"] = int(dato.get("memory") or 0)
+            # Las tarjetas se leen del mismo config: sin ellas, un invitado que ya
+            # existía conserva las de antes y la configuración nueva le habla a una
+            # interfaz que no es la que cree. Sólo se pega lo que se leyó; un invitado
+            # sin config no se inventa tarjetas.
+            if "net" in dato:
+                nuevo["config_interfaces"] = dato["net"]
         salida["invitados"].append(nuevo)
     return salida
 
