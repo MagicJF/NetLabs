@@ -830,16 +830,22 @@ hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.
 Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 0019):
 
 - **P0.** SNMP v3 en lugar de la comunidad en claro, los registros de los equipos recogidos por la
-  vista, y el **poll de topología** encendido —hoy sin ejecutar—. La parte de SNMP está hecha: la
+  vista, y el **poll de topología** encendido —el §7 lo daba por «sin ejecutar», y por el código de la
+  versión instalada no hay interruptor global que apagar: hay que medirlo en la instalación antes de
+  darlo por hecho (ADR 0019)—. La parte de SNMP está hecha: la
   identidad se declara **una vez, en el entorno** (`observabilidad.snmp`, `version: 3`), y el
   laboratorio sólo dice si se mira al equipo; el motor crea en cada RouterOS una entrada
   `/snmp/community` con `security: private` —autenticación y cifrado—, acota **todas** las
   identidades a la red de gestión y **apaga las comunidades v2c**, porque mientras una siga viva el
   equipo sigue contestando en claro y la migración sería decorativa. La rama v2c se conserva para un
-  equipo que no sepa v3, y se elige con una palabra (`version: 2`), no por equipo. Quedan de esta
-  parte la recogida de registros y el poll de topología. Lo que no cambia es dónde vive: la consola
-  pública no está en el camino del motor, que habla con la vista por su API desde dentro de su
-  invitado (`management.api`).
+  equipo que no sepa v3, y se elige con una palabra (`version: 2`), no por equipo. La **misma**
+  identidad se le dice a la vista, traducida a su idioma —la instalación llama `AES-128` a lo que
+  RouterOS llama `AES`, y a la comunidad de v2c la llama `authName`—, por el grupo SNMP del equipo
+  (`/objects/{id}/snmp`): sin eso, retirar las comunidades en claro dejaría a la vista sin poder
+  sondear y el cambio sería decorativo por el otro lado. Va en el alta y se corrige después con un
+  `PATCH` de fusión, así que un `apply` repetido no escribe. Quedan de esta parte la recogida de
+  registros y el poll de topología. Lo que no cambia es dónde vive: la consola pública no está en el
+  camino del motor, que habla con la vista por su API desde dentro de su invitado (`management.api`).
 - **P1.** La topología L2 real por la **tabla del puente (FDB)**, no por LLDP: el LLDP de MikroTik no
   lo lee bien la vista. Con ella delante, se contrasta con el plano del motor (ADR 0007).
 - **P2.** **Agente** en los nodos finales Linux —CPU, memoria, procesos—. En RouterOS no existe.
