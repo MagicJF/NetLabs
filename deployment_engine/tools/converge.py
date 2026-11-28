@@ -2027,14 +2027,14 @@ NETXMS_ICONO_POR_TIPO = {
 NETXMS_ICONO_POR_DEFECTO = "904e7291-ee3f-41b7-8132-2bd29288ecc8"
 
 
-def netxms_icono_de(node: dict) -> str:
+def netxms_icono_de(nodo: dict) -> str:
     """La imagen con la que la vista dibuja a este equipo, según su tipo.
 
     El tipo es la parte del rol que dice qué es el equipo —sale del nombre y no de una
     lista de equipos de un laboratorio—. Un tipo desconocido no rompe el alta: se dibuja
     como el nodo genérico.
     """
-    return NETXMS_ICONO_POR_TIPO.get(str(node.get("type")), NETXMS_ICONO_POR_DEFECTO)
+    return NETXMS_ICONO_POR_TIPO.get(str(nodo.get("type")), NETXMS_ICONO_POR_DEFECTO)
 
 
 def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | None,

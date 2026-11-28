@@ -1573,11 +1573,11 @@ class ElIconoQueLaVistaDibuja(unittest.TestCase):
     API = "http://127.0.0.1:8000/v1"
     SECRETS = {"routeros_clave": "s3cr3t", "linux_clave": "l1nux"}
 
-    def equipo(self, role, tipo, address):
+    def equipo(self, rol, tipo, direccion):
         return {
-            "role": role, "name": role, "type": tipo,
-            "description": f"netlabs lab=b_prueba role={role}",
-            "interfaces": [{"index": 0, "network": "ny", "address": address}],
+            "role": rol, "name": rol, "type": tipo,
+            "description": f"netlabs lab=b_prueba role={rol}",
+            "interfaces": [{"index": 0, "network": "ny", "address": direccion}],
             "configure": {},
         }
 
