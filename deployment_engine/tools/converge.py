@@ -1441,6 +1441,14 @@ def linux_ops(node: dict, current: dict, credenciales: dict | None = None) -> li
         tiene_activo = servicios_ahora.get(service, "unknown")
         quiere_arranque = "enabled" if activo else "disabled"
         tiene_arranque = habilitado_ahora.get(service, "unknown")
+        # Una unidad que no existe no está habilitada: `systemctl is-enabled` la llama
+        # `not-found` (medido en Debian 13). Sin esto, apagar un servicio que no llegó a
+        # instalarse —el agente de la vista, en un nodo que lo declara `enabled: false` y
+        # nunca lo tuvo— generaba un `systemctl disable --now` que sale con error por
+        # apagar lo que no está. Se compara por lo que significa, no por cómo se llama;
+        # encenderlo sigue pidiendo la unidad, y ahí el error sí se dice.
+        if tiene_arranque == "not-found":
+            tiene_arranque = "disabled"
         if tiene_activo == quiere_activo and tiene_arranque == quiere_arranque:
             continue
         # `restart` y no `start`: un servicio que ya está en bucle de reinicio por
@@ -2070,12 +2078,18 @@ def netxms_agente_cmd(api: str, id_objeto, intentos: int = NETXMS_AGENTE_INTENTO
     fallo se dice, no se tapa—, que es lo que hace fallar a la tarea que lo ejecuta.
     """
     idn = int(id_objeto)
+    # El descriptor del testigo se prepara **dentro de cada vuelta**: un heredoc se
+    # consume al leerlo —en el `sh` de Debian es una tubería—, así que el que se prepara
+    # una sola vez deja a las vueltas siguientes sin `Authorization` y un agente que
+    # aparezca después de la primera consulta no se puede comprobar. El testigo se lee
+    # una vez de la entrada y viaja por el descriptor, nunca en la línea de órdenes.
     script = (
-        "IFS= read -r t || true; exec 3<<EOF\n"
-        "Authorization: Bearer $t\n"
-        "EOF\n"
+        "IFS= read -r t || true\n"
         "i=0\n"
         f"while [ \"$i\" -lt {int(intentos)} ]; do\n"
+        "exec 3<<EOF\n"
+        "Authorization: Bearer $t\n"
+        "EOF\n"
         f"  if curl -sS {NETXMS_TOPE} --fail-with-body -X GET -H @/dev/fd/3 "
         f"{api}/objects/{idn} | grep -q '\"isNativeAgent\": *true'; then\n"
         "    echo \"la vista sondea el equipo "

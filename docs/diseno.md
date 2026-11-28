@@ -682,10 +682,10 @@ su router.
   el router como siguiente salto. Esa ruta se **deriva**: espacio declarado por el laboratorio
   + dirección de gestión de su router. Se da de alta con `apply` y se retira con `destroy`; no
   la teclea nadie.
-- En esta fase se observan **por ICMP** (disponibilidad) y aparecen en la topología como lo que
-  son: hojas del segmento que el router publica. **Sin agente dentro**: por eso no hay CPU,
-  memoria ni procesos de esos nodos. Es el precio consciente de no instalar nada en ellos, y se
-  puede revisar más adelante (§12).
+- Se observan **por ICMP** (disponibilidad) y aparecen en la topología como lo que son: hojas del
+  segmento que el router publica. Un laboratorio puede además pedir que se mire **por dentro** del
+  nodo —CPU, memoria, disco y procesos— encendiendo el área `agente` de ese nodo (§7.4); sin ella el
+  nodo se queda en «responde», que es el precio consciente de no instalar nada en él.
 
 ### 4.3. Lo que esto implica (y hay que asumir)
 
@@ -698,8 +698,10 @@ su router.
    realidad— y no un defecto que haya que sortear.
 3. **Los espacios de direcciones de los laboratorios deben ser disjuntos**, o las rutas de
    NetXMS se pisan. Ya es regla de la declaración.
-4. **Un nodo final no necesita entrada desde fuera**: si algún día necesita un agente, éste
-   sale hacia el servidor; no requiere que el servidor entre.
+4. **Un nodo final no necesita entrada desde fuera del laboratorio**: lo que la vista le pregunta
+   —ICMP, o su agente— lo pregunta desde la red de gestión, por la ruta derivada del punto
+   anterior. El agente no abre una puerta hacia fuera: acepta como lectora a esa red y a nadie más
+   (§7.4).
 5. **Menos piezas por laboratorio**: una pata por equipo de red, ninguna por nodo final, y una
    ruta por red declarada — derivada, no escrita a mano.
 
@@ -957,6 +959,17 @@ máquina (ADR 0027).
   está desplegado.
 - **Un nodo que la vista ya ve no produce ninguna llamada.** La comprobación es la ficha, así que la
   segunda pasada no escribe: la idempotencia se mantiene también aquí.
+- **Apagarlo también es declararlo, y el área exige una dirección.** `agente: {enabled: false}` no es
+  lo mismo que no declarar el área: la ausente dice «este nodo no se mira por dentro» y no pide nada;
+  la apagada dice «deja de mirarlo», y eso es una diferencia que hay que escribir —el servicio del
+  agente, de baja— o el nodo que lo tenía encendido se queda con el servicio activo y la vista
+  siguiéndole las métricas. Como el interior del invitado se converge por SSH, el área —encendida o
+  apagada— necesita una dirección estable: la validación rechaza un nodo que pida la dirección por
+  DHCP sin reserva, en vez de dejar que la puerta del interior se abra contra un nulo **después** de
+  haber creado el invitado. Y no admite una segunda verdad: si el nodo declara a mano el mismo
+  repositorio, el mismo paquete, el mismo fichero de configuración o el mismo servicio, se rechaza
+  —dos entradas para el mismo ajuste se deshacen la una a la otra en cada pasada, porque `linux_ops`
+  las compara las dos contra la misma lectura del invitado—.
 
 ---
 
@@ -1059,11 +1072,9 @@ YAML como única verdad; derivar la identidad en vez de guardarla; una sola vía
 protocolo; la documentación generada y comprobada; y el hábito de no dar nada por bueno sin la
 salida real del comando que lo prueba.
 
-**Lo que se deja para más adelante, con su porqué:** el **agente** de monitorización dentro de
-los nodos finales (daría CPU, memoria y procesos, a cambio de instalar y mantener una pieza más
-en cada invitado; hoy basta con saber si el nodo está vivo y cómo está su segmento) y las
-**máquinas virtuales con cloud-init** (los contenedores cubren el caso, y el primer arranque de
-un router ya lo resuelve el agente: en este hipervisor la vía de metadatos está cerrada, §3.8).
+**Lo que se deja para más adelante, con su porqué:** las **máquinas virtuales con cloud-init** (los
+contenedores cubren el caso, y el primer arranque de un router ya lo resuelve el agente: en este
+hipervisor la vía de metadatos está cerrada, §3.8).
 
 ---
 

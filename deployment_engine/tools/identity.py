@@ -352,8 +352,17 @@ def _expandir_agente(configure: dict, env: dict) -> None:
 
     El área `agente` se queda en el `configure` del plan: quien mire la ficha del nodo
     tiene que ver que declaró el agente, no cuatro áreas sueltas que nadie declaró.
+
+    `enabled: false` **no es** lo mismo que no declarar el área: es pedir que el agente
+    deje de correr. Un nodo que ya lo tenía encendido —de una declaración anterior— se
+    quedaría con el servicio activo y habilitado para siempre, porque el área apagada no
+    se expandiría a nada. Por eso el área apagada declara el servicio **de baja** y nada
+    más: ni repositorio, ni paquete, ni fichero (apagar no necesita con qué instalarlo).
     """
-    if not (configure.get("agente") or {}).get("enabled"):
+    agente = configure.get("agente") or {}
+    if not agente.get("enabled"):
+        if "agente" in configure:
+            configure.setdefault("services", {})[NXAGENTE_SERVICIO] = False
         return
     ajustes = _agente_del_entorno(env)
     espacio = env["management"]["address_space"]
@@ -383,6 +392,38 @@ def _expandir_agente(configure: dict, env: dict) -> None:
         "restart": NXAGENTE_SERVICIO,
     })
     configure.setdefault("services", {})[NXAGENTE_SERVICIO] = True
+
+
+def _validate_agente_no_pisa(node: dict, env: dict) -> None:
+    """El área `agente` no admite una segunda verdad para el mismo ajuste.
+
+    La expansión añade un repositorio, un paquete, un fichero y un servicio; si el nodo
+    ya declara uno de ellos con el mismo nombre —o un fichero en la misma ruta—, el plan
+    llevaría las dos entradas. `linux_ops` compara cada una contra la **misma** lectura
+    del invitado, así que no pueden coincidir las dos: cada pasada escribiría lo que la
+    anterior deshizo, y el interior no convergería nunca. Se rechaza antes de desplegar,
+    nombrando el ajuste que choca; elegir una de las dos en silencio es una decisión que
+    nadie recordaría.
+    """
+    configure = node.get("configure") or {}
+    if not (configure.get("agente") or {}).get("enabled"):
+        return
+    ajustes = _agente_del_entorno(env)
+    repo, paquete = ajustes["repositorio"], ajustes["paquete"]
+    chocan = [f"el repositorio {repo['name']!r}"
+              for r in configure.get("repositories") or [] if r.get("name") == repo["name"]]
+    chocan += [f"el paquete {paquete!r}"
+               for p in configure.get("packages") or [] if p == paquete]
+    chocan += [f"el fichero {NXAGENTE_CONF!r}"
+               for f in configure.get("files") or [] if f.get("path") == NXAGENTE_CONF]
+    chocan += [f"el servicio {NXAGENTE_SERVICIO!r}"
+               for s in configure.get("services") or {} if s == NXAGENTE_SERVICIO]
+    if chocan:
+        raise LabError(
+            f"el nodo {node.get('role')!r} enciende el área 'agente' y declara además "
+            f"{', '.join(chocan)}: el agente lo pone el área, y dos entradas para el mismo "
+            "ajuste se deshacen la una a la otra en cada pasada"
+        )
 
 
 def validate(lab: dict, env: dict) -> None:
@@ -522,6 +563,10 @@ def validate(lab: dict, env: dict) -> None:
     roles = set()
     for node in nodes:
         _validate_node(node, by_name, roles, {n["name"] for n in lab["networks"] if n.get("exit")})
+        # El área `agente` expande a un repositorio, un paquete, un fichero y un servicio:
+        # si el nodo ya declara alguno de ellos, el plan llevaría dos verdades para el
+        # mismo ajuste y se rechaza aquí, antes de desplegar nada.
+        _validate_agente_no_pisa(node, env)
         roles.add(node["role"])
 
     for node in nodes:
@@ -884,6 +929,19 @@ def _validate_node(node: dict, networks: dict, roles: set, salidas: set | None =
             )
     for area, body in configure.items():
         _validate_area(role, area, body, networks, salidas, nets)
+
+    # Un nodo que declara el área `agente` se converge por SSH contra su dirección: ahí
+    # se instala el paquete y ahí se apaga su servicio. Un `dhcp` sin reserva todavía no
+    # tiene ninguna —el servidor se la dará cuando arranque—, así que la puerta del
+    # interior se abriría contra un nulo **después** de haber creado el invitado. Se
+    # rechaza aquí, que es gratis; el área ausente sigue significando «sin agente».
+    if "agente" in configure and address == "dhcp" and node.get("reserve") is None:
+        raise LabError(
+            f"el nodo {role!r} declara el área 'agente' y pide la dirección por DHCP sin "
+            "reserva: el agente se instala y se comprueba por SSH contra su dirección, y "
+            "un `dhcp` sin `reserve` no tiene ninguna hasta que arranca. Declara una "
+            "dirección estática o una reserva"
+        )
 
 
 def _validate_area(role: str, area: str, body, networks: dict, salidas=None,

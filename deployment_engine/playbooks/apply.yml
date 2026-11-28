@@ -314,7 +314,11 @@
         linux_descripcion: "{{ linux_nodo.name }}"
       when:
         - linux_nodo.type in ['server', 'workstation']
-        - linux_nodo.configure | default({}) | get('agente', {}) | get('enabled', false)
+        # El área `agente` **declarada** —encendida o apagada— es la que dice si este nodo
+        # tiene interior que converger: apagarla es pedir que el agente deje de correr, y
+        # esa diferencia también hay que escribirla (el área ausente es la que no pide
+        # nada). Un área declarada sin `enabled` no llega aquí: la validación la rechaza.
+        - linux_nodo.configure.agente is defined
 
     # --- el registro de los equipos en lo que observa el sitio -------------
     # Va después del interior del router y no antes: la credencial que se registra es

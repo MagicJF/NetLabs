@@ -2532,25 +2532,54 @@ class LosGuionesQueSeLlevanElTestigo(unittest.TestCase):
             ),
             "leer un objeto": converge.netxms_objeto_cmd(self.API, 7),
             "dar de alta un equipo": converge.netxms_crear_cmd(self.API),
+            "esperar al agente en un nodo final": converge.netxms_agente_cmd(
+                self.API, 7, intentos=3, espera=1
+            ),
         }
 
     def test_la_cabecera_entrega_el_testigo_leido_de_la_entrada(self):
         for nombre, cmd in self.guiones().items():
             with self.subTest(guion=nombre):
                 lineas = cmd[2].strip("'").split("\n")
-                self.assertTrue(lineas[0].startswith("IFS= read -r t"),
+                self.assertTrue(any(l.startswith("IFS= read -r t") for l in lineas),
                                 f"{nombre}: el testigo ya no se lee de la entrada")
-                self.assertEqual(lineas[1], "Authorization: Bearer $t",
-                                 f"{nombre}: la cabecera no entrega lo que se leyó")
+                self.assertIn("Authorization: Bearer $t", lineas,
+                              f"{nombre}: la cabecera no entrega lo que se leyó")
 
     def test_el_heredoc_se_cierra_solo_en_su_linea_y_antes_de_la_llamada(self):
         for nombre, cmd in self.guiones().items():
             with self.subTest(guion=nombre):
                 lineas = cmd[2].strip("'").split("\n")
-                self.assertIn("<<EOF", lineas[0], f"{nombre}: no lleva testigo por descriptor")
-                self.assertEqual(lineas[2], "EOF",
-                                 f"{nombre}: el cierre no está solo, así que el heredoc traga la llamada")
-                self.assertIn("curl", lineas[3], f"{nombre}: la llamada no queda detrás del cierre")
+                abren = [i for i, linea in enumerate(lineas) if "<<EOF" in linea]
+                self.assertTrue(abren, f"{nombre}: no lleva testigo por descriptor")
+                # El cierre va solo en su línea —si no, el heredoc se traga la llamada— y la
+                # llamada queda justo detrás. Se busca el heredoc en vez de contar líneas
+                # desde el principio: un guion que reintenta lo prepara dentro de su vuelta.
+                for i in abren:
+                    self.assertEqual(lineas[i + 2], "EOF",
+                                     f"{nombre}: el cierre no está solo, así que el heredoc "
+                                     "traga la llamada")
+                    self.assertIn("curl", lineas[i + 3],
+                                  f"{nombre}: la llamada no queda detrás del cierre")
+
+    def test_el_testigo_se_vuelve_a_preparar_en_cada_vuelta(self):
+        """Un descriptor preparado una sola vez deja sin cabecera a las vueltas siguientes.
+
+        Medido: el heredoc del descriptor se consume al leerlo —en el `sh` de Debian es una
+        tubería—, así que la primera consulta se lleva el `Authorization` y las siguientes
+        salen sin él. Un guion que reintenta tiene que preparar el descriptor **dentro** de
+        la vuelta, o el agente que aparezca después de la primera no se puede comprobar.
+        """
+        for nombre, cmd in self.guiones().items():
+            with self.subTest(guion=nombre):
+                lineas = cmd[2].strip("'").split("\n")
+                vueltas = [i for i, linea in enumerate(lineas) if linea.startswith("while ")]
+                if not vueltas:
+                    continue
+                preparado = next(i for i, linea in enumerate(lineas) if "<<EOF" in linea)
+                self.assertGreater(preparado, vueltas[0],
+                                   f"{nombre}: el descriptor se prepara una sola vez, así que "
+                                   "las vueltas siguientes consultan sin Authorization")
 
 
 class LaVistaMiraPorDentroAlNodoFinal(unittest.TestCase):
@@ -2680,6 +2709,59 @@ class ElAgenteSeExpandeYNoSeRepite(unittest.TestCase):
             "services": {"netxms-agent": "active"},
         }
         self.assertEqual(converge.linux_ops(nodo, estado), [])
+
+
+class ApagarElAgenteDeLaVista(unittest.TestCase):
+    """El área `agente` apagada no es lo mismo que no declararla: es darlo de baja.
+
+    Un nodo que lo tenía encendido de una declaración anterior se quedaría con el servicio
+    activo y habilitado para siempre —la vista seguiría leyéndole las métricas— porque el
+    área apagada no se expandía a nada. La diferencia se declara (el servicio de baja) y se
+    converge con el mismo verbo que cualquier Linux; y no se vuelve a instalar el paquete ni
+    a escribir la configuración, que apagar no necesita.
+    """
+
+    def _nodo(self):
+        configure = {"agente": {"enabled": False}}
+        identity._expandir_agente(configure, entorno())
+        return {"role": "wsp1", "name": "wsp1", "type": "workstation", "configure": configure}
+
+    def test_el_area_apagada_solo_declara_el_servicio_de_baja(self):
+        configure = {"agente": {"enabled": False}}
+        identity._expandir_agente(configure, entorno())
+        # El área declarada sigue viéndose, y lo único que añade es el servicio apagado.
+        self.assertEqual(configure["agente"], {"enabled": False})
+        self.assertEqual(configure["services"], {identity.NXAGENTE_SERVICIO: False})
+        for area in ("repositories", "packages", "files"):
+            self.assertNotIn(area, configure)
+
+    def test_un_agente_en_pie_se_da_de_baja(self):
+        ops = converge.linux_ops(self._nodo(), {"hostname": "wsp1",
+                                                "services": {"netxms-agent": "active"},
+                                                "enabled": {"netxms-agent": "enabled"}})
+        self.assertEqual(len(ops), 1)
+        self.assertIn("netxms-agent", ops[0]["effect"])
+        self.assertIn("de baja", ops[0]["effect"])
+        self.assertIn("disable --now netxms-agent", ops[0]["cmd"][2])
+
+    def test_un_agente_que_ya_esta_apagado_no_pide_nada(self):
+        # La segunda pasada del mismo plan no escribe: es lo que hace que apagar converja.
+        self.assertEqual(
+            converge.linux_ops(self._nodo(), {"hostname": "wsp1",
+                                              "services": {"netxms-agent": "inactive"},
+                                              "enabled": {"netxms-agent": "disabled"}}), [])
+
+    def test_un_servicio_que_no_llego_a_instalarse_no_se_manda_apagar(self):
+        """Una unidad que no existe no está habilitada: `is-enabled` la llama `not-found`.
+
+        Medido en Debian 13: sin esto, un nodo que declara `agente: {enabled: false}` y
+        nunca tuvo el paquete generaba un `systemctl disable --now` que sale con error por
+        apagar lo que no está, y el `apply` se paraba en un nodo ya como debía estar.
+        """
+        self.assertEqual(
+            converge.linux_ops(self._nodo(), {"hostname": "wsp1",
+                                              "services": {"netxms-agent": "inactive"},
+                                              "enabled": {"netxms-agent": "not-found"}}), [])
 
 
 if __name__ == "__main__":

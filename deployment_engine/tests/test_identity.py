@@ -1388,7 +1388,12 @@ class ElAgenteDeLaVista(unittest.TestCase):
 
     def _lab_con_agente(self, role="wsp1"):
         lab = copy.deepcopy(laboratorio())
-        next(n for n in lab["nodes"] if n["role"] == role)["configure"] = {"agente": {"enabled": True}}
+        nodo = next(n for n in lab["nodes"] if n["role"] == role)
+        # El agente se instala y se comprueba por SSH contra la dirección del nodo, así que
+        # el nodo tiene que tener una: un `dhcp` sin reserva todavía no la tiene, y el motor
+        # lo rechaza al validar. Aquí se le da una fija, fuera del rango de DHCP del router.
+        nodo["address"] = "10.44.1.50/24"
+        nodo["configure"] = {"agente": {"enabled": True}}
         return lab
 
     def _nodo(self, plan, role):
@@ -1464,3 +1469,75 @@ class ElAgenteDeLaVista(unittest.TestCase):
                          self._nodo(primero, "wsp1")["configure"])
         self.assertEqual([s for s in segundo["steps"]
                           if s["op"] not in ("rutas_converge", "netxms_registro", "netxms_mapa")], [])
+
+    def test_un_area_apagada_declara_el_servicio_de_baja(self):
+        """`enabled: false` no es lo mismo que no declarar el área: es darlo de baja.
+
+        El área ausente significa «este nodo no se mira por dentro» y no pide nada; el área
+        apagada significa «deja de mirarlo», y eso es una diferencia que hay que escribir o
+        el servicio se queda activo y habilitado para siempre. Se declara el servicio de
+        baja —con el mismo verbo que cualquier Linux— y nada más: apagar no necesita el
+        paquete ni la configuración.
+        """
+        lab = copy.deepcopy(laboratorio())
+        nodo = next(n for n in lab["nodes"] if n["role"] == "wsp1")
+        nodo["address"] = "10.44.1.50/24"
+        nodo["configure"] = {"agente": {"enabled": False}}
+        config = self._nodo(identity.plan(mundo(), lab, entorno()), "wsp1")["configure"]
+        self.assertEqual(config["agente"], {"enabled": False})
+        self.assertEqual(config["services"], {identity.NXAGENTE_SERVICIO: False})
+        for area in ("repositories", "packages", "files"):
+            self.assertNotIn(area, config)
+
+    def test_un_nodo_sin_direccion_no_puede_declarar_el_agente(self):
+        """El interior del invitado se converge por SSH contra su dirección.
+
+        Un `dhcp` sin reserva todavía no tiene ninguna, así que la puerta del interior se
+        abriría contra un nulo **después** de haber creado el invitado. Se rechaza al
+        validar, que es gratis y antes de tocar el hipervisor.
+        """
+        lab = copy.deepcopy(laboratorio())
+        # `wsp1` del laboratorio de verdad pide DHCP y no declara reserva.
+        next(n for n in lab["nodes"] if n["role"] == "wsp1")["configure"] = {"agente": {"enabled": True}}
+        with self.assertRaisesRegex(identity.LabError, "sin reserva"):
+            identity.plan(mundo(), lab, entorno())
+
+    def test_el_agente_no_pisa_lo_que_el_laboratorio_declara(self):
+        """Dos entradas para el mismo ajuste se deshacen la una a la otra en cada pasada.
+
+        `linux_ops` compara cada una contra la MISMA lectura del invitado: un repositorio
+        `netxms` con otra `suite`, o un fichero en la ruta de la configuración del agente,
+        no pueden coincidir los dos. Se rechaza antes de desplegar, con el ajuste que choca
+        delante, en vez de elegir una de las dos en silencio.
+        """
+        env = entorno()
+        choques = {
+            "repositorio": {"repositories": [
+                {"name": "netxms", "url": "https://otro.example/debian", "suite": "trixie",
+                 "components": "main"}]},
+            "fichero": {"files": [
+                {"path": identity.NXAGENTE_CONF, "content": "lo mío", "mode": "0644"}]},
+            "paquete": {"packages": ["netxms-agent"]},
+            "servicio": {"services": {"netxms-agent": False}},
+        }
+        for ajuste, extra in choques.items():
+            with self.subTest(ajuste=ajuste):
+                lab = self._lab_con_agente()
+                self._nodo_de(lab, "wsp1")["configure"].update(extra)
+                with self.assertRaisesRegex(identity.LabError, "el agente lo pone el área"):
+                    identity.plan(mundo(), lab, env)
+
+    def test_el_agente_apagado_no_choca_con_lo_que_el_laboratorio_declara(self):
+        # Apagado no expande ni repositorio ni fichero: no hay nada que pisar, y el nodo
+        # puede declarar lo suyo sin que el motor se lo rechace.
+        lab = copy.deepcopy(laboratorio())
+        nodo = next(n for n in lab["nodes"] if n["role"] == "wsp1")
+        nodo["address"] = "10.44.1.50/24"
+        nodo["configure"] = {"agente": {"enabled": False},
+                             "repositories": [{"name": "netxms", "url": "https://mio.example/debian",
+                                               "suite": "trixie", "components": "main"}]}
+        config = self._nodo(identity.plan(mundo(), lab, entorno()), "wsp1")["configure"]
+        self.assertEqual([r["url"] for r in config["repositories"]], ["https://mio.example/debian"])
+
+    def _nodo_de(self, lab, role):
+        return next(n for n in lab["nodes"] if n["role"] == role)
