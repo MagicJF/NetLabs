@@ -176,7 +176,7 @@ class FilterModule:
             "netlabs_ros_reads": lambda node: list(converge.ROS_READS),
             "netlabs_ros_clave": lambda node, secrets: converge.ros_clave(node, secrets),
             "netlabs_secreto": lambda secrets, nombre: converge.secreto(secrets, nombre),
-            "netlabs_ros_ops": lambda node, current, secret, secrets=None, cidr=None, observabilidad=None: converge.ros_ops(node, current, secret, secrets, cidr, observabilidad),
+            "netlabs_ros_ops": lambda node, current, secret, secrets=None, cidr=None, observabilidad=None, dns=None: converge.ros_ops(node, current, secret, secrets, cidr, observabilidad, dns),
             "netlabs_linux_ops": lambda node, current, credenciales=None: converge.linux_ops(node, current, credenciales),
             "netlabs_linux_probe": lambda node: converge.linux_probe(node),
             "netlabs_linux_probe_cmd": lambda node: converge.linux_probe_cmd(node),

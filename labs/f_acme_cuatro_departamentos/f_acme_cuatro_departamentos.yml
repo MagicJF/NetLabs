@@ -132,9 +132,10 @@ nodes:
       # Lo de dentro sale traducido: el mundo no sabe volver a 10.50.0.0/16.
       nat:
         - {out: ny_salida, action: masquerade}
-      # Resuelve hacia fuera —por su salida— y atiende a los suyos, que son los que
-      # tienen a este router por servidor.
-      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
+      # Resuelve y reenvía por la salida de su sede, y atiende a los suyos: los puestos
+      # que sirve su DHCP lo aprenden como servidor y no hay que tocarles nada. Con qué
+      # resolutor aguas arriba lo hace es del entorno (`dns.servers`), no del laboratorio.
+      dns: {enabled: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -158,7 +159,9 @@ nodes:
         - {destination: 0.0.0.0/0, gateway: 172.30.20.1}
       nat:
         - {out: tk_salida, action: masquerade}
-      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
+      # Resuelve por la salida de su sede —la única que sabe llegar al mundo— y atiende a
+      # los suyos: el resolutor aguas arriba lo declara el entorno (`dns.servers`).
+      dns: {enabled: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -207,7 +210,9 @@ nodes:
       dhcp_server:
         - {network: ny_ventas, pool: 10.50.55.100-10.50.55.199, gateway: 10.50.55.1}
       # Resuelve hacia fuera: es lo que hace que un puesto resuelva nombres.
-      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
+      # Resuelve por la salida de su sede —la única que sabe llegar al mundo— y atiende a
+      # los suyos: el resolutor aguas arriba lo declara el entorno (`dns.servers`).
+      dns: {enabled: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -229,7 +234,9 @@ nodes:
       dhcp_server:
         - {network: ny_ingenieria, pool: 10.50.66.100-10.50.66.199, gateway: 10.50.66.1}
       # Resuelve hacia fuera: es lo que hace que un puesto resuelva nombres.
-      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
+      # Resuelve por la salida de su sede —la única que sabe llegar al mundo— y atiende a
+      # los suyos: el resolutor aguas arriba lo declara el entorno (`dns.servers`).
+      dns: {enabled: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -251,7 +258,9 @@ nodes:
       dhcp_server:
         - {network: tk_ventas, pool: 10.60.55.100-10.60.55.199, gateway: 10.60.55.1}
       # Resuelve por la salida de su sede: es la única que sabe llegar al mundo.
-      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
+      # Resuelve por la salida de su sede —la única que sabe llegar al mundo— y atiende a
+      # los suyos: el resolutor aguas arriba lo declara el entorno (`dns.servers`).
+      dns: {enabled: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -273,7 +282,9 @@ nodes:
       dhcp_server:
         - {network: tk_ingenieria, pool: 10.60.66.100-10.60.66.199, gateway: 10.60.66.1}
       # Resuelve por la salida de su sede: es la única que sabe llegar al mundo.
-      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
+      # Resuelve por la salida de su sede —la única que sabe llegar al mundo— y atiende a
+      # los suyos: el resolutor aguas arriba lo declara el entorno (`dns.servers`).
+      dns: {enabled: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}

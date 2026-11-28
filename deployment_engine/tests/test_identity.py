@@ -1345,13 +1345,56 @@ class LaSalidaALaRedPublica(unittest.TestCase):
             identity.validate(lab, entorno())
         self.assertIn("no una red de este nodo", str(ctx.exception))
 
-    def test_el_resolutor_rechaza_lo_que_no_es_una_direccion(self):
+    def test_el_resolutor_no_lo_elige_el_laboratorio(self):
+        """El resolutor aguas arriba es del entorno: un laboratorio que lo fije se rechaza.
+
+        Igual que la identidad SNMP (ADR 0019), un sitio no elige con qué resuelve: la
+        dirección tiene que ser alcanzable por la salida de SU sede, y eso lo sabe el
+        entorno, no el laboratorio (ADR 0024). El laboratorio sólo dice si resuelve.
+        """
         lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
         next(n for n in lab["nodes"] if n["role"] == "rte1")["configure"]["dns"] = {
-            "servers": ["uno"]}
+            "servers": ["9.9.9.9"]}
         with self.assertRaises(identity.LabError) as ctx:
             identity.validate(lab, entorno())
-        self.assertIn("servidor DNS inválido", str(ctx.exception))
+        self.assertIn("resolutor aguas arriba vive en el entorno", str(ctx.exception))
+
+    def test_el_resolutor_del_laboratorio_es_solo_encendido_o_apagado(self):
+        """`dns` de un laboratorio es `{enabled}` y nada más, ni siquiera sin valer.
+
+        El área declara si la sede resuelve; con qué lo hace no es suyo. Un `enabled` que
+        no sea un booleano —el «sí» de la prisa— se rechaza al validar, no al aplicar.
+        """
+        lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
+        next(n for n in lab["nodes"] if n["role"] == "rte1")["configure"]["dns"] = {
+            "enabled": "sí"}
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.validate(lab, entorno())
+        self.assertIn("declara 'enabled' sí o no", str(ctx.exception))
+
+    def test_el_entorno_rechaza_un_resolutor_que_no_es_una_direccion(self):
+        """`dns.servers` del entorno se comprueba donde está escrito: no vale cualquier cosa.
+
+        Un resolutor mal escrito no se descubre al aplicar, sino aquí: la dirección a la
+        que los routers reenvían tiene que ser una dirección de verdad (ADR 0024).
+        """
+        env = copy.deepcopy(entorno())
+        env["dns"] = {"servers": ["uno"]}
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.validate_dns(env)
+        self.assertIn("resolutor inválido", str(ctx.exception))
+
+    def test_el_entorno_exige_al_menos_un_resolutor_si_declara_dns(self):
+        """Un bloque `dns` vacío no resuelve nada: la lista tiene que traer una dirección.
+
+        Sin al menos una dirección, los routers que resuelvan no tendrían a quién
+        preguntar y el fallo no se vería hasta que un puesto pidiera un nombre (ADR 0024).
+        """
+        env = copy.deepcopy(entorno())
+        env["dns"] = {"servers": []}
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.validate_dns(env)
+        self.assertIn("al menos una dirección", str(ctx.exception))
 
     def test_una_salida_a_la_que_le_falta_la_direccion_se_reapunta(self):
         """Si alguien quita la dirección del puente de una salida, el plan la repone.

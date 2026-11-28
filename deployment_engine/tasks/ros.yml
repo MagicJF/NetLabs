@@ -158,7 +158,10 @@
 
 - name: "RouterOS · calcular la diferencia de {{ router.name }}"
   ansible.builtin.set_fact:
-    ros_ops: "{{ router | netlabs_ros_ops(ros_current, ros_clave, secrets, env.management.address_space, env.observabilidad | default({})) }}"
+    ros_ops: >-
+      {{ router | netlabs_ros_ops(ros_current, ros_clave, secrets,
+         env.management.address_space, env.observabilidad | default({}),
+         env.dns | default({})) }}
   # `ros_ops` lleva el cuerpo de cada escritura, y una escritura —el alta de usuario, o la
   # identidad SNMP v3— contiene la clave: sin `no_log` el hecho entero se imprime con `-v` y
   # el lanzador lo guarda en logs/. El diagnóstico no se pierde: la tarea de abajo enseña la
@@ -289,7 +292,7 @@
       {{ router | netlabs_ros_ops(dict(ros_relecturas.results
            | map(attribute='ros_lectura') | map(attribute='clave') | zip(ros_relecturas.results | map(attribute='json')
            | list)), ros_clave, secrets, env.management.address_space,
-           env.observabilidad | default({})) }}
+           env.observabilidad | default({}), env.dns | default({})) }}
   # `ros_resto` es otra diferencia calculada: lleva los mismos cuerpos con clave que `ros_ops`.
   # Se calla el hecho; lo que se dice en voz alta —si queda algo— es su `effect`, más abajo.
   no_log: true
