@@ -676,3 +676,56 @@ class LasSalidasDeCadaSede(unittest.TestCase):
                         self.assertFalse(
                             plano._cruza(tramo, caja),
                             f"la pata de «{salida['titulo']}» cruza «{otro['titulo']}»")
+
+    def test_cada_salida_se_dibuja_sobre_el_router_de_su_sede(self):
+        """La salida de una sede no cuelga del centro: cuelga de ESA sede.
+
+        El router de borde que se asoma a la salida tiene también una pata en su sede, y
+        eso es lo que ata una nube a su sitio. Se demuestra que el centro de la nube cae
+        sobre la vertical de su router de borde —dentro de un píxel—, que las dos salidas
+        no comparten x (o se leerían como una sola apilada, sin saber cuál es de quién) y
+        que el tránsito del proveedor sigue siendo una banda centrada por encima de la
+        empresa, por donde pasan las dos sedes. La salida es de su sede; el tránsito, del
+        centro.
+        """
+        lab = laboratorio("f_acme_cuatro_departamentos")
+        svg = plano.plano(lab, "topologia")
+        areas, equipos = cajas_y_equipos(svg)
+        # Qué router se asoma a cada salida: el que tiene una pata en la red de la salida
+        # y otra en su sede. Es dato del laboratorio, no una suposición.
+        _, _, _, patas, _ = montar(lab)
+        router_de_salida: dict[str, str] = {}
+        nombre_de_titulo: dict[str, str] = {}
+        for clave, suyas in patas.items():
+            for red in suyas:
+                nombre_de_titulo[red.titulo] = red.nombre
+            salida = next((r for r in suyas if r.exit), None)
+            if salida is not None:
+                router_de_salida[salida.nombre] = clave
+        xy = {e["rol"]: (e["x"], e["y"]) for e in equipos}
+
+        salidas = [a for a in areas if a["nube"] and a["lema"]]
+        self.assertEqual(len(salidas), 2, "el laboratorio no tiene dos salidas")
+        centros = []
+        for salida in salidas:
+            rol = router_de_salida[nombre_de_titulo[salida["titulo"]]]
+            cx = salida["x"] + salida["ancho"] / 2
+            centros.append(round(cx, 1))
+            with self.subTest(salida=salida["titulo"]):
+                self.assertIn(rol, xy, f"{rol} no tiene símbolo en el plano")
+                self.assertAlmostEqual(
+                    cx, xy[rol][0], delta=1.0,
+                    msg=f"«{salida['titulo']}» no cae sobre la vertical de {rol}")
+        self.assertEqual(len(set(centros)), len(centros),
+                         f"las dos salidas comparten x: {centros}")
+
+        # El tránsito (la nube sin `exit`) sigue centrado y por encima de la empresa: la
+        # banda del techo, por donde se cruzan las dos sedes.
+        transito = next(a for a in areas if a["nube"] and not a["lema"])
+        empresa = min((a for a in areas if not a["nube"] and a["hijas"]),
+                      key=lambda a: a["y"])
+        self.assertAlmostEqual(transito["x"] + transito["ancho"] / 2,
+                               empresa["x"] + empresa["ancho"] / 2, delta=1.0,
+                               msg="el tránsito ya no está centrado sobre la empresa")
+        self.assertLessEqual(transito["y"] + transito["alto"], empresa["y"] + 0.5,
+                             "el tránsito ya no es una banda por encima de la empresa")

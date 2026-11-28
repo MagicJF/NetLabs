@@ -62,8 +62,12 @@ networks:
   # La salida a la red pública: `exit: true` la saca del plan de direcciones de ACME
   # —no es una red suya— y su puente lo pone el entorno, uno por sede, con la primera
   # dirección de su tramo (172.30.10.1 y 172.30.20.1) como puerta del hipervisor.
-  - {name: ny_salida, address: 172.30.10.0/24, title: Salida, shape: cloud, exit: true}
-  - {name: tk_salida, address: 172.30.20.0/24, title: Salida, shape: cloud, exit: true}
+  # Cada salida lleva el rótulo de SU sede y no uno genérico: son dos nubes distintas
+  # —una por sede— y sin distinguirlas el plano las dibujaría idénticas, sin decir cuál
+  # es la de quién. El título es de la nube, no de la sede: la sede se llama «New York»
+  # y «Tokyo», y la salida de cada una lo dice en su propio nombre.
+  - {name: ny_salida, address: 172.30.10.0/24, title: Salida de New York, shape: cloud, exit: true}
+  - {name: tk_salida, address: 172.30.20.0/24, title: Salida de Tokyo, shape: cloud, exit: true}
   # El área de la sede: el segmento donde se juntan el router de borde y los dos routers
   # de departamento. Las interfaces van con máscara /28 (10.50.0.0/28) y no con el /16
   # del área: con el /16 en la interfaz, cada router creería que el departamento de al
