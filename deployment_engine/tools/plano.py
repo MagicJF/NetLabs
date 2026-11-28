@@ -621,7 +621,11 @@ def _marcar_pasillos(raiz: Region, cruces: dict[str, list[Region]]) -> None:
                 if hija not in grupos:
                     continue
                 for otro in grupos:
-                    if otro is not hija and otro in region.hijas:
+                    # Una salida al exterior no es una hermana del dibujo: los routers
+                    # de borde cruzan la caja de la empresa para llegar a su nube, y
+                    # contarla como hermana convertía la empresa en una banda más, que
+                    # es justo lo que no es. Sólo las sedes cuentan.
+                    if otro is not hija and otro in region.hijas and not otro.nube:
                         quienes.add(rol)
                         hermanas.add(id(otro))
             if len(quienes) >= 2 and len(hermanas) >= 2:
