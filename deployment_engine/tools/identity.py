@@ -191,6 +191,31 @@ def tunnel_port(vmid: int) -> int:
 # Validación de la declaración
 # ---------------------------------------------------------------------------
 
+def _validate_registro(registro: dict) -> None:
+    """El bloque `observabilidad.registro`: si la vista escucha los registros de los equipos.
+
+    Se enciende una sola vez, para todo el sitio: el laboratorio no lo declara —un equipo no
+    elige quién le escucha—, igual que no elige con qué identidad se le sondea (ADR 0019).
+    """
+    if not isinstance(registro, dict):
+        raise LabError("'observabilidad.registro' tiene que ser un mapa")
+    sobran = set(registro) - {"recoger", "puerto"}
+    if sobran:
+        raise LabError(
+            f"'observabilidad.registro' no entiende {', '.join(sorted(sobran))}: es "
+            "{recoger, puerto}"
+        )
+    if "recoger" in registro and not isinstance(registro["recoger"], bool):
+        raise LabError(
+            f"'observabilidad.registro.recoger' es verdadero o falso; dice {registro['recoger']!r}"
+        )
+    puerto = registro.get("puerto")
+    if puerto is not None and not (isinstance(puerto, int) and 1 <= puerto <= 65535):
+        raise LabError(
+            f"'observabilidad.registro.puerto' es un puerto (1-65535); dice {puerto!r}"
+        )
+
+
 def validate_observabilidad(env: dict) -> None:
     """El bloque `observabilidad` del entorno: cómo se mira a los equipos (ADR 0019).
 
@@ -203,11 +228,15 @@ def validate_observabilidad(env: dict) -> None:
         return
     if not isinstance(bloque, dict):
         raise LabError("'observabilidad' del entorno tiene que ser un mapa")
-    sobran = set(bloque) - {"snmp"}
+    sobran = set(bloque) - {"snmp", "registro"}
     if sobran:
         raise LabError(
-            f"'observabilidad' del entorno no entiende {', '.join(sorted(sobran))}: es {{snmp}}"
+            f"'observabilidad' del entorno no entiende {', '.join(sorted(sobran))}: es "
+            "{snmp, registro}"
         )
+    registro = bloque.get("registro")
+    if registro is not None:
+        _validate_registro(registro)
     snmp = bloque.get("snmp")
     if snmp is None:
         return

@@ -1009,6 +1009,50 @@ class ElReinicioDeUnFichero(unittest.TestCase):
             identity.validate(lab, entorno())
 
 
+class LaEscuchaDeLosRegistrosSegunElEntorno(unittest.TestCase):
+    """Que la vista escuche los registros se declara en el entorno y se revisa donde está escrito.
+
+    Un equipo no elige quién le escucha, igual que no elige con qué se le sondea: si cada
+    laboratorio lo declarase, el mismo sitio recogería registros de unas máquinas y de otras no
+    (ADR 0021).
+    """
+
+    def test_el_entorno_de_verdad_declara_la_escucha(self):
+        env = entorno()
+        identity.validate_observabilidad(env)  # no levanta
+        self.assertIs(env["observabilidad"]["registro"]["recoger"], True)
+
+    def test_sin_registro_no_pasa_nada(self):
+        """El bloque es opcional: sin él, el motor no toca la escucha de la vista."""
+        env = entorno()
+        del env["observabilidad"]["registro"]
+        identity.validate_observabilidad(env)  # no levanta
+
+    def test_una_clave_de_mas_se_rechaza(self):
+        env = entorno()
+        env["observabilidad"]["registro"]["formato"] = "rfc5424"
+        with self.assertRaisesRegex(identity.LabError, "no entiende"):
+            identity.validate_observabilidad(env)
+
+    def test_recoger_es_verdadero_o_falso(self):
+        env = entorno()
+        env["observabilidad"]["registro"]["recoger"] = "si"
+        with self.assertRaisesRegex(identity.LabError, "verdadero o falso"):
+            identity.validate_observabilidad(env)
+
+    def test_el_puerto_es_un_puerto(self):
+        env = entorno()
+        env["observabilidad"]["registro"]["puerto"] = 99999
+        with self.assertRaisesRegex(identity.LabError, "1-65535"):
+            identity.validate_observabilidad(env)
+
+    def test_un_laboratorio_no_puede_declararlo(self):
+        lab = laboratorio("f_acme_cuatro_departamentos")
+        lab["registro"] = {"recoger": True}
+        with self.assertRaisesRegex(identity.LabError, "clave desconocida"):
+            identity.validate(lab, entorno())
+
+
 class LaIdentidadConLaQueSeMira(unittest.TestCase):
     """`observabilidad` es del entorno: se nombra una vez y se comprueba donde está escrito.
 

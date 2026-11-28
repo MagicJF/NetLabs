@@ -353,6 +353,15 @@
         equipos: "{{ plan.nodes | selectattr('netxms_address') | list }}"
       when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
 
+    # --- la escucha de registros en la vista -------------------------------
+    # Lo último que toca la vista, y a propósito: no es cosa de este laboratorio sino del
+    # mundo —el entorno declara si la vista recoge los registros de los equipos (ADR 0019)—, y
+    # si hay que escribirla el servicio se reinicia, así que va cuando ya no queda nada más
+    # hablándole. Sólo se escribe la diferencia; el reinicio lo pide la propia variable.
+    - name: apply · la vista escucha los registros de los equipos
+      include_tasks: ../tasks/netxms_registro.yml
+      when: env.observabilidad.registro | default({}) | length > 0
+
     # --- el interior de los nodos de control, por SSH ----------------------
     # Un nodo de control no tiene router ni DHCP: su interior se converge por SSH
     # con la misma puerta que usa el resto del motor. Sólo se escribe la diferencia.

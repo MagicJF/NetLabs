@@ -2205,5 +2205,70 @@ class LaTraduccionDeLaSalida(unittest.TestCase):
                                            {"allow-remote-requests": "true"}), [])
 
 
+class LaEscuchaDeLosRegistros(unittest.TestCase):
+    """La vista escucha los registros de los equipos, y sólo se toca lo que cambió.
+
+    La variable que lo enciende se lee con el resto de la configuración del servicio, y cada
+    variable dice si su cambio exige reiniciarlo: el motor no lleva su propia lista de nombres
+    que reinician, se lo pregunta a quien lo sabe (ADR 0021).
+    """
+
+    API = "http://127.0.0.1:8000/v1"
+    DECLARADO = {"recoger": True, "puerto": 514}
+
+    @staticmethod
+    def configs(escucha="0", puerto="514", reinicio=True):
+        return [{"name": "Syslog.EnableListener", "value": escucha, "needServerRestart": reinicio},
+                {"name": "Syslog.ListenPort", "value": puerto, "needServerRestart": reinicio}]
+
+    def plan(self, declarado=None, actuales=None):
+        return converge.netxms_registro_ops(
+            self.DECLARADO if declarado is None else declarado, actuales, self.API)
+
+    def test_una_escucha_apagada_se_enciende_y_pide_reinicio(self):
+        plan = self.plan(actuales=self.configs(escucha="0"))
+        self.assertEqual([o["effect"] for o in plan["ops"]],
+                         ["que la vista escuche los registros de los equipos"])
+        self.assertEqual(json.loads(plan["ops"][0]["cuerpo"]), {"value": "1"})
+        self.assertIn("/server-config/Syslog.EnableListener", " ".join(plan["ops"][0]["cmd"]))
+        self.assertIn("PUT", " ".join(plan["ops"][0]["cmd"]))
+        self.assertTrue(plan["reiniciar"])
+
+    def test_una_escucha_ya_encendida_no_produce_ni_llamada_ni_reinicio(self):
+        plan = self.plan(actuales=self.configs(escucha="1"))
+        self.assertEqual(plan["ops"], [])
+        self.assertFalse(plan["reiniciar"])
+
+    def test_un_puerto_distinto_se_corrige(self):
+        plan = self.plan(actuales=self.configs(escucha="1", puerto="1514"))
+        self.assertEqual(json.loads(plan["ops"][0]["cuerpo"]), {"value": "514"})
+        self.assertIn("Syslog.ListenPort", " ".join(plan["ops"][0]["cmd"]))
+
+    def test_una_variable_que_no_exige_reinicio_no_reinicia(self):
+        plan = self.plan(actuales=self.configs(escucha="0", reinicio=False))
+        self.assertEqual(len(plan["ops"]), 1)
+        self.assertFalse(plan["reiniciar"])
+
+    def test_una_variable_que_no_se_pudo_leer_se_reinicia_por_si_acaso(self):
+        """Ante la duda, que el cambio surta efecto: creer encendido lo que está apagado engaña."""
+        plan = self.plan(actuales=[])
+        self.assertEqual(len(plan["ops"]), 2)
+        self.assertTrue(plan["reiniciar"])
+
+    def test_apagarla_tambien_es_converger(self):
+        plan = self.plan(declarado={"recoger": False}, actuales=self.configs(escucha="1"))
+        self.assertEqual(json.loads(plan["ops"][0]["cuerpo"]), {"value": "0"})
+        self.assertIn("deje de escuchar", plan["ops"][0]["effect"])
+
+    def test_sin_declaracion_no_se_toca_nada(self):
+        self.assertEqual(self.plan(declarado={}, actuales=self.configs()),
+                         {"ops": [], "reiniciar": False})
+
+    def test_el_reinicio_dice_que_cambio(self):
+        cmd = " ".join(converge.netxms_reinicio_cmd())
+        self.assertIn("systemctl restart netxmsd", cmd)
+        self.assertIn("CAMBIO:1", cmd)
+
+
 if __name__ == "__main__":
     unittest.main()

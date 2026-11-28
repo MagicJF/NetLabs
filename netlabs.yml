@@ -76,3 +76,10 @@ observabilidad:
   snmp:
     version: 3
     credencial_from: secrets.snmp_v3
+  # Y los equipos mandan sus registros a la vista, que los escucha. Se declara aquí y no en un
+  # laboratorio por el mismo motivo que la identidad de arriba: no es de un sitio, es de cómo se
+  # mira a los equipos en todo el sitio. El puerto se puede omitir —514, el de siempre— y
+  # `recoger: false` apaga la escucha en vez de dejarla a medias.
+  registro:
+    recoger: true
+    puerto: 514

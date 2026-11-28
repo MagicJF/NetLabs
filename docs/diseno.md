@@ -868,6 +868,28 @@ Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 00
   forzarlo para que la ficha deje de mentir.
 - OSPF, VRRP, BFD y 802.1x son **laboratorios**, no monitorización: se modelan para poder romperlos.
 
+### 7.2. Los registros de los equipos: los escucha la vista, y lo enciende el entorno
+
+La vista nace con la escucha de registros apagada, y encenderla tiene dos partes incómodas: la
+variable vive **en la base del servicio** —no en su fichero de arranque— y el servicio **sólo la lee
+al arrancar**. De ahí que la decisión (ADR 0021) no sea «escribir una variable» sino dos cosas:
+
+- **Es del entorno, no del laboratorio.** Se declara en `observabilidad.registro` (`recoger`,
+  `puerto`), junto a la identidad con la que se sondea y por el mismo motivo: un equipo no elige
+  quién le escucha. La validación **rechaza** que un laboratorio lo declare.
+- **Se escribe sólo la diferencia, y por la vía del API.** Una lectura de todas las variables
+  (`GET /server-config`) y, por cada una que difiera, su `PUT /server-config/{nombre}`. Un `apply`
+  repetido no escribe nada.
+- **El reinicio lo dice la variable, no el motor.** Cada variable trae en la lectura si su cambio
+  exige reiniciar (`needServerRestart`); el motor no mantiene su propia lista de nombres que
+  reinician —se quedaría vieja—. Sólo reinicia si escribió algo que lo pide, y **si no pudo leer la
+  variable asume que sí**: ante la duda, que el cambio surta efecto, porque creer encendido lo que
+  está apagado engaña. Después espera a que el servicio vuelva a atender antes de darlo por bueno,
+  que un reinicio que no levanta dejaría el despliegue en verde y la vista muerta.
+- **Falta la otra mitad, y va aparte:** que los equipos **manden** sus registros a la vista (en
+  RouterOS, la acción de registro con destino remoto) y la comprobación de que un mensaje entra y
+  se guarda. La escucha queda puesta; el tráfico, todavía no.
+
 ---
 
 ## 8. El informe de una ejecución

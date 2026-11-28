@@ -1714,6 +1714,95 @@ def netxms_snmp_cmd(api: str, id_objeto) -> list:
     return netxms_cmd(api, NETXMS_RUTA_SNMP.format(int(id_objeto)), metodo="PATCH")
 
 
+# La configuración del propio servicio de la vista: `GET`/`PUT /server-config/{nombre}`. No es
+# un objeto del inventario sino una variable del servicio, y el API las trata como al resto: una
+# lectura y una escritura por nombre. Medido en la instalación: la lectura devuelve, además del
+# valor, si el cambio exige reiniciar el servicio (`needServerRestart`), así que el motor no
+# adivina cuándo hay que reiniciar — se lo pregunta a quien lo sabe.
+NETXMS_RUTA_CONFIGS = "/server-config"
+NETXMS_RUTA_CONFIG = "/server-config/{}"
+
+# Cómo se llama en el servicio lo que enciende la escucha de registros y dónde escucha. Los
+# nombres son suyos, no del motor: cambiarlos es cambiar de versión de la vista.
+NETXMS_REGISTRO_ESCUCHA = "Syslog.EnableListener"
+NETXMS_REGISTRO_PUERTO = "Syslog.ListenPort"
+
+
+def netxms_configs_cmd(api: str) -> list:
+    """Todas las variables de configuración visibles del servicio, de una vez.
+
+    Una sola lectura en vez de una por variable: el servicio las devuelve juntas y el motor
+    decide con esa foto si hay algo que escribir. Sin cuerpo —es una lectura—, y con el
+    testigo por el descriptor de siempre para que no se vea en la línea de órdenes.
+    """
+    return _sh(
+        "IFS= read -r t; exec 3<<EOF\n"
+        "Authorization: Bearer ***"
+        "EOF\n"
+        f"curl -sS {NETXMS_TOPE} --fail-with-body -X GET -H @/dev/fd/3 "
+        f"{api}{NETXMS_RUTA_CONFIGS}"
+    )
+
+
+def netxms_config_cmd(api: str, nombre: str) -> list:
+    """Escribir una variable de configuración del servicio; el valor va en el cuerpo."""
+    return netxms_cmd(api, NETXMS_RUTA_CONFIG.format(nombre), metodo="PUT")
+
+
+def netxms_registro_ops(declarado: dict | None, actuales: list | None, api: str) -> dict:
+    """Lo que hay que escribir para que la vista recoja los registros como el entorno declara.
+
+    `actuales` es lo que devolvió `GET /server-config` —la lista entera, que es una lectura y no
+    una por variable—. Devuelve `{"ops": [...], "reiniciar": bool}`.
+
+    El reinicio no se adivina: cada variable dice si su cambio lo exige (`needServerRestart`),
+    así que sólo se reinicia cuando de verdad se ha escrito algo que lo pide, y nunca por una
+    escritura que no cambió nada. Si la variable no aparece en la lectura —no está o no es
+    visible—, se da por hecho que el cambio exige reinicio: ante la duda, que el cambio surta
+    efecto, porque lo contrario es dejarlo apagado creyendo que está encendido.
+
+    Sin declaración no se toca nada: encender una escucha que nadie ha pedido es una decisión del
+    entorno, no del motor (ADR 0019). El laboratorio no declara esto —ni sus equipos—: el qué se
+    mira es del mundo.
+    """
+    if not declarado:
+        return {"ops": [], "reiniciar": False}
+    por_nombre = {v.get("name"): v for v in (actuales or []) if isinstance(v, dict)}
+    deseado = {
+        NETXMS_REGISTRO_ESCUCHA: "1" if declarado.get("recoger") else "0",
+    }
+    if declarado.get("puerto") is not None:
+        deseado[NETXMS_REGISTRO_PUERTO] = str(declarado["puerto"])
+    ops: list[dict] = []
+    reiniciar = False
+    for nombre, valor in deseado.items():
+        actual = por_nombre.get(nombre)
+        if actual is not None and str(actual.get("value", "")) == valor:
+            continue
+        encender = valor == "1"
+        if nombre == NETXMS_REGISTRO_ESCUCHA:
+            efecto = ("que la vista escuche los registros de los equipos"
+                      if encender else "que la vista deje de escuchar registros de los equipos")
+        else:
+            efecto = f"que la vista escuche los registros en el puerto {valor}"
+        ops.append({"cmd": netxms_config_cmd(api, nombre),
+                    "cuerpo": json.dumps({"value": valor}),
+                    "effect": efecto})
+        # Desconocida o presente: si no se pudo leer, se reinicia por si acaso.
+        reiniciar = reiniciar or bool((actual or {}).get("needServerRestart", True))
+    return {"ops": ops, "reiniciar": reiniciar}
+
+
+def netxms_reinicio_cmd() -> list:
+    """Reiniciar el servicio de la vista, y decirlo.
+
+    Va por la puerta del invitado (`interior_ssh.yml`) porque no es una llamada a su API sino un
+    servicio de dentro. Imprime `CAMBIO:1` para que el motor pueda distinguir «se reinició» de
+    «se intentó»: la puerta no da por bueno lo que no puede comprobar.
+    """
+    return _sh("systemctl restart netxmsd && echo CAMBIO:1")
+
+
 def _identidad_para_la_vista(identidad: dict | None) -> dict | None:
     """La identidad resuelta del entorno, dicha como la dice la vista.
 
