@@ -1104,6 +1104,27 @@ class LaIdentidadConLaQueSeMira(unittest.TestCase):
                                              "comunidad": "la-de-antes"}}}
             )
 
+    def test_la_topologia_de_capa_2_se_declara_en_el_entorno(self):
+        """El contraste de la capa 2 con el plano lo enciende el entorno, y sólo el entorno.
+
+        Demuestra que un laboratorio que lo intente se lleva el error donde está escrito, y
+        que el bloque admite sólo la llave que entiende (`contrastar`, que es booleana).
+        """
+        identity.validate_observabilidad(
+            {"observabilidad": {"topologia": {"contrastar": True}}})  # no levanta
+        identity.validate_observabilidad({"observabilidad": {"topologia": {}}})  # no levanta
+        with self.assertRaisesRegex(identity.LabError, "contrastar"):
+            identity.validate_observabilidad(
+                {"observabilidad": {"topologia": {"fuerza": True}}})
+        with self.assertRaisesRegex(identity.LabError, "verdadero o falso"):
+            identity.validate_observabilidad(
+                {"observabilidad": {"topologia": {"contrastar": "si"}}})
+
+    def test_el_entorno_de_verdad_contrasta_la_topologia(self):
+        env = entorno()
+        identity.validate_observabilidad(env)  # no levanta
+        self.assertIs(env["observabilidad"]["topologia"]["contrastar"], True)
+
     def test_el_laboratorio_no_elige_la_identidad(self):
         # `snmp: {enabled, community_from}` fue el contrato viejo: el laboratorio nombraba
         # la comunidad. Ahora eso vive en el entorno, y un laboratorio que lo intente lo lee.

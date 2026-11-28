@@ -1612,6 +1612,131 @@ class ElMapaAtaCadaCableASuInterfaz(unittest.TestCase):
         self.assertIn("/objects/search", converge.netxms_interfaces_cmd("http://x/v1")[2])
 
 
+class ElContrasteDeLaTopologiaDeCapa2(unittest.TestCase):
+    """La capa 2 que la vista descubre por el puente, contra los cables que declara el plano.
+
+    Demuestra el juicio: la vista **no inventa enlaces** —los aprende de la tabla de reenvío
+    del puente—, así que un enlace que ve y el plano no declara es del plano la falta; y un
+    cable que el plano declara y la vista no ve **sólo la delata cuando sus dos puntas son
+    equipos que la vista sondea**, porque un nodo final sólo aparece en el puente cuando habla.
+    """
+
+    NODOS = [
+        {"role": "rta1", "name": "rta1", "type": "router", "mgmt_address": "10.30.0.101"},
+        {"role": "swc1", "name": "swc1", "type": "switch", "mgmt_address": "10.30.0.102"},
+        {"role": "wsp1", "name": "wsp1", "type": "workstation", "mgmt_address": "10.30.0.103"},
+        {"role": "wsp2", "name": "wsp2", "type": "workstation", "mgmt_address": "10.30.0.104"},
+    ]
+    CENSO = [
+        {"id": 420, "name": "rta1", "ipAddress": {"address": "10.30.0.101"}},
+        {"id": 421, "name": "swc1", "ipAddress": {"address": "10.30.0.102"}},
+        {"id": 422, "name": "wsp1", "ipAddress": {"address": "10.30.0.103"}},
+        {"id": 423, "name": "wsp2", "ipAddress": {"address": "10.30.0.104"}},
+    ]
+    FICHAS = [
+        {"id": 420, "class": "Node", "children": [436, 437]},
+        {"id": 421, "class": "Node", "children": [501, 502, 503]},
+        {"id": 422, "class": "Node", "children": [601]},
+        {"id": 423, "class": "Node", "children": [602]},
+    ]
+    INTERFACES = [
+        {"id": 436, "class": "Interface", "name": "ether1"},
+        {"id": 437, "class": "Interface", "name": "ether2"},
+        {"id": 501, "class": "Interface", "name": "ether1"},
+        {"id": 502, "class": "Interface", "name": "ether2"},
+        {"id": 503, "class": "Interface", "name": "ether3"},
+        {"id": 601, "class": "Interface", "name": "unknown"},
+        {"id": 602, "class": "Interface", "name": "unknown"},
+        {"id": 999, "class": "Interface", "name": "ether9"},  # de otro laboratorio
+    ]
+    LAB = {"links": [
+        {"a": {"node": "rta1", "port": 1}, "z": {"node": "swc1", "port": 1}},
+        {"a": {"node": "swc1", "port": 2}, "z": {"node": "wsp1", "port": 1}},
+        {"a": {"node": "swc1", "port": 3}, "z": {"node": "wsp2", "port": 1}},
+    ]}
+    # Lo que la vista ha aprendido del puente: rta1 con swc1, y swc1 con wsp1 (FDB). El cable
+    # swc1-wsp2 no lo ha visto (nadie lo declara aún como visto).
+    VISTOS = [
+        {"id": 436, "peerNodeId": 421, "peerInterfaceId": 501, "peerDiscoveryProtocol": 1},
+        {"id": 501, "peerNodeId": 420, "peerInterfaceId": 436, "peerDiscoveryProtocol": 1},
+        {"id": 502, "peerNodeId": 422, "peerInterfaceId": 601, "peerDiscoveryProtocol": 1},
+        {"id": 601, "peerNodeId": 421, "peerInterfaceId": 502, "peerDiscoveryProtocol": 1},
+    ]
+
+    def con_vista(self, detalles=None, lab=None):
+        return converge.netxms_topologia_contraste(
+            lab or self.LAB, self.NODOS, self.CENSO, self.FICHAS, self.INTERFACES,
+            self.VISTOS if detalles is None else detalles)
+
+    def test_confirma_los_cables_que_la_vista_ve_y_no_cuenta_los_que_le_faltan(self):
+        c = self.con_vista()
+        self.assertEqual(c["confirmados"], [["rta1", "swc1"], ["swc1", "wsp1"]])
+        self.assertEqual(c["cables_vistos"], 2)
+        self.assertEqual(c["cables_declarados"], 3)
+        self.assertFalse(c["coincide"])
+
+    def test_un_cable_entre_dos_equipos_que_la_vista_sondea_y_no_ve_lo_delata_a_la_vista(self):
+        # rta1 y swc1 son router y switch: la vista los sondea y siempre hablan, así que no
+        # verlos unidos sólo puede ser del descubrimiento por el puente (o de que no están).
+        c = self.con_vista(detalles=[d for d in self.VISTOS if d["id"] in (502, 601)])
+        self.assertEqual(c["faltan"]["la_vista"], [["rta1", "swc1"]])
+        self.assertEqual(c["faltan"]["sin_concluir"], [["swc1", "wsp2"]])
+
+    def test_un_cable_con_un_nodo_final_que_no_habla_no_se_concluye(self):
+        # wsp2 es un puesto: sólo aparece en la tabla del puente cuando habla. Que la vista no
+        # lo vea no prueba que el cable falte, así que no se culpa a nadie.
+        c = self.con_vista()
+        self.assertEqual(c["faltan"]["sin_concluir"], [["swc1", "wsp2"]])
+        self.assertEqual(c["faltan"]["la_vista"], [])
+
+    def test_un_cable_que_la_vista_ve_y_el_plano_no_declara_es_del_plano_la_falta(self):
+        # La vista no inventa enlaces: si ve rta1 unido a wsp1 y el plano no lo declara, al
+        # plano le sobra un cable por dibujar. El soporte viaja con el hallazgo —la vista lo
+        # supo por la tabla de reenvío del puente—.
+        detalles = self.VISTOS + [
+            {"id": 437, "peerNodeId": 422, "peerInterfaceId": 601, "peerDiscoveryProtocol": 1},
+        ]
+        c = self.con_vista(detalles=detalles)
+        self.assertEqual(c["sobran"], [{"cable": ["rta1", "wsp1"], "soporte": "FDB"}])
+        self.assertFalse(c["coincide"])
+
+    def test_una_vecina_que_no_es_de_un_equipo_del_laboratorio_no_cuenta(self):
+        # La interfaz 999 es de otro laboratorio (no está en el censo de éste): un enlace con
+        # ella no es un hueco de este plano y no se cuenta como visto.
+        detalles = self.VISTOS + [
+            {"id": 503, "peerNodeId": 999, "peerInterfaceId": 999, "peerDiscoveryProtocol": 1},
+        ]
+        c = self.con_vista(detalles=detalles)
+        self.assertEqual(c["cables_vistos"], 2)
+        self.assertEqual(c["sobran"], [])
+
+    def test_cuando_la_vista_y_el_plano_dicen_lo_mismo_no_hay_discrepancia(self):
+        lab = {"links": [
+            {"a": {"node": "rta1", "port": 1}, "z": {"node": "swc1", "port": 1}},
+            {"a": {"node": "swc1", "port": 2}, "z": {"node": "wsp1", "port": 1}},
+        ]}
+        c = self.con_vista(lab=lab)
+        self.assertEqual(c["confirmados"], [["rta1", "swc1"], ["swc1", "wsp1"]])
+        self.assertEqual(c["faltan"], {"la_vista": [], "sin_concluir": []})
+        self.assertEqual(c["sobran"], [])
+        self.assertTrue(c["coincide"])
+
+    def test_solo_se_piden_las_interfaces_de_los_equipos_del_laboratorio(self):
+        # Ni `lo` ni la de gestión ni la de otro laboratorio: sólo las interfaces de los
+        # equipos del plano, que son las que la ficha de cada uno declara como hijas.
+        self.assertEqual(converge.netxms_interfaces_ids_de(
+            self.NODOS, self.CENSO, self.FICHAS, self.INTERFACES),
+            [436, 437, 501, 502, 503, 601, 602])
+
+    def test_el_entorno_es_quien_declara_si_se_contrasta(self):
+        self.assertTrue(converge.observabilidad_contrasta_topologia(
+            {"topologia": {"contrastar": True}}))
+        self.assertFalse(converge.observabilidad_contrasta_topologia({}))
+        self.assertFalse(converge.observabilidad_contrasta_topologia({"topologia": {}}))
+        self.assertFalse(converge.observabilidad_contrasta_topologia(
+            {"topologia": {"contrastar": False}}))
+
+
 class LaCuentaDelMapa(unittest.TestCase):
     """Lo que el mapa dice de sí mismo al escribirse: cuántas puntas quedaron atadas.
 

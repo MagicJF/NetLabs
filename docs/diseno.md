@@ -857,7 +857,12 @@ Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 00
   registros y el poll de topología. Lo que no cambia es dónde vive: la consola pública no está en el
   camino del motor, que habla con la vista por su API desde dentro de su invitado (`management.api`).
 - **P1.** La topología L2 real por la **tabla del puente (FDB)**, no por LLDP: el LLDP de MikroTik no
-  lo lee bien la vista. Con ella delante, se contrasta con el plano del motor (ADR 0007).
+  lo lee bien la vista. Con ella delante, se contrasta con el plano del motor (ADR 0004). **Está hecha**
+  (ADR 0026): lo medido es que la vista **ya descubre** la capa 2 por la FDB —el `physical_links`
+  vacío era la tabla equivocada, que es manual— y la deja en la **vecindad de cada interfaz**
+  (`peerNodeId`/`peerDiscoveryProtocol`), así que el motor no enciende nada: **lee** esa vecindad y la
+  contrasta con `lab["links"]`, diciendo quién discrepa. El contraste lo declara el entorno
+  (`observabilidad.topologia`); el laboratorio no dice nada nuevo (§7.4).
 - **P2.** **Agente** en los nodos finales Linux —CPU, memoria, procesos—. En RouterOS no existe.
 - El **descubrimiento automático de red** se queda apagado: el inventario lo declara el motor. No se
   pierde con ello la comprobación que importa —estado, interfaces, contadores y alcance salen de las
@@ -917,6 +922,35 @@ distintivo del servidor, y `Objects.NetworkMaps.DefaultBackgroundColor`, el fond
 la consola web desplegada el oscuro no se aplica por un **fallo conocido** de NetXMS (NX-2569), no
 por una mala configuración: quien quiera oscuro usa la consola de escritorio o la consola web nueva
 (Vue). Antes de declarar una palanca nueva en el entorno, se comprueba que el servidor la expone.
+
+### 7.4. La topología de capa 2 la dice la tabla del puente, y el motor la lee y la contrasta
+
+La fase P1 (ADR 0019) se ejecuta según el ADR 0026, y lo que se midió en el laboratorio desplegado
+cambia el punto de partida:
+
+- **`physical_links` está vacía porque no es la tabla del descubrimiento: es manual.** El poll de
+  topología de la vista **corre y sí ve**; deja lo que ve en la **vecindad de cada interfaz**
+  (`peerNodeId`/`peerInterfaceId`/`peerDiscoveryProtocol`, con `FDB` como origen), no en
+  `physical_links`. Así que el P1 no enciende nada —no existe el interruptor que lo apagaría, y va por
+  temporizador a 1800 s—: **lee esa vecindad del sitio correcto**.
+- **El contraste se declara en el entorno, no en el laboratorio.** `netlabs.yml` gana
+  `observabilidad.topologia: {contrastar: true}`, junto a `snmp` y `registro` y por el mismo motivo:
+  mirar no es cosa de un laboratorio. El laboratorio no declara nada nuevo: su mínimo sigue siendo
+  `snmp: {enabled: true}` en el equipo, que es lo que hace que la vista lo sondee y, con ello, lea su
+  FDB. `contrastar: false` lo apaga y no se gasta ni una llamada al API.
+- **El contraste dice quién discrepa, y no actúa.** Compara la vecindad que la vista ve con los
+  cables de `lab["links"]` (por el par de equipos que unen). La vista **no inventa enlaces** —los
+  aprende del puente—, así que un enlace que ve y el plano no declara es **del plano** la falta; y un
+  cable que el plano declara y la vista no ve sólo la delata **a la vista** cuando sus **dos puntas
+  son equipos que el motor sondea** —cruzan tramas siempre, dejan rastro en el puente—. Si una punta
+  es un **nodo final**, el puente sólo lo ve cuando habla, y entonces **no se concluye** en vez de
+  culpar a quien no consta. No se escribe nada: es una lectura, y una segunda pasada no toca la vista.
+- **La vista puede perder enlaces, y se dice.** Medido: de los 25 cables que declara el plano del
+  laboratorio de cuatro departamentos, la vista descubre 23. En los dos que no enlaza —`swc3↔rtp1` y
+  `swa2↔wsp4`— la MAC del otro extremo **sí está** en la tabla del puente del switch (`nxsnmpwalk`
+  contra el equipo), o sea que **los cables existen** y lo que falla es la correlación de la vista, no
+  el plano. El motivo exacto no se ha fijado y no se inventa una palanca por él: es una limitación
+  medida de la vista, y el contraste la nombra —a la vista, o «sin concluir»— en vez de taparla.
 
 ---
 

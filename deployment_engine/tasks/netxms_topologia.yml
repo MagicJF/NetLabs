@@ -1,0 +1,90 @@
+# PROPÓSITO:   la topología de capa 2 que ve la vista, contrastada con el plano. La vista la
+#              descubre por la tabla de reenvío del puente (FDB; no por LLDP —el de MikroTik
+#              no lo lee bien, y hay hilos del foro del servicio que lo cuentan—, ADR 0019):
+#              lo aprendido de cada puerto queda en la interfaz como su vecina, con qué lo
+#              supo. Aquí se lee esa vecindad y se cruza con los cables que declara el plano,
+#              diciendo cuál de los dos discrepa cuando no cuadran.
+# INVARIANTES: sólo lee; no escribe nada en la vista —el sondeo de topología lo lleva la
+#              propia vista—. Se llama con `curl` desde DENTRO del invitado de gestión, por la
+#              puerta de siempre, y va DESPUÉS del mapa (`netxms_mapa.yml`): reutiliza el
+#              censo, las fichas y el censo de interfaces que aquél ya releyó, y necesita los
+#              equipos ya dados de alta. El testigo de la sesión va por la entrada estándar y
+#              ninguna respuesta se imprime. Sólo corre si el entorno lo declara
+#              (`observabilidad.topologia`); sin él, no gasta ni una llamada al API.
+# LÍMITES:     no enciende el sondeo de topología —es de la vista, no del motor— ni actúa
+#              sobre la discrepancia: la dice, y un equipo del plano que la vista no conozca
+#              se nombra en vez de callarse. No pide el detalle de interfaces que no son de un
+#              equipo de este laboratorio, y no adivina el puerto: contrasta por el par de
+#              equipos que el cable une, que es lo que la tabla del puente enseña.
+# VER:         docs/diseno.md §7; docs/decisiones/0019-la-observabilidad-por-partes.md y
+#              docs/decisiones/0026-la-topologia-la-dice-la-tabla-del-puente.md
+
+# --- los números de las interfaces del laboratorio --------------------------
+# El censo de interfaces no dice de quién es cada una: se cruza con la ficha de cada equipo
+# —sus hijos— como en el mapa, y de ahí salen los números cuyo detalle hace falta leer. Se
+# piden sólo los suyos, no los de todos los laboratorios.
+- name: netxms · los números de las interfaces de los equipos del plano
+  ansible.builtin.set_fact:
+    netxms_interfaces_ids: >-
+      {{ equipos | netlabs_netxms_interfaces_ids(netxms_censo,
+         netxms_fichas | default([], true), netxms_interfaces | default([], true)) }}
+  no_log: true
+
+- name: netxms · leer el detalle de las interfaces, con su vecina
+  include_tasks: interior_ssh.yml
+  when: netxms_interfaces_ids | length > 0
+  vars:
+    interior_descripcion: "netxms · leer {{ netxms_interfaces_ids | length }} interfaz(ces)"
+    interior_salto: false
+    objetivo: 127.0.0.1
+    interior_escribe: false
+    interior_secreto: "{{ netxms_testigo }}\n{{ netxms_interfaces_ids | netlabs_netxms_fichas_cuerpo(netxms_api) }}"
+    interior_imprime: false
+    comando: "{{ netxms_api | netlabs_netxms_fichas_cmd }}"
+
+- name: netxms · el detalle de las interfaces que ve la vista
+  ansible.builtin.set_fact:
+    netxms_interfaces_detalle: >-
+      {{ (interior.stdout | default('{}', true) | from_json).objects | default([], true) }}
+  no_log: true
+  when: netxms_interfaces_ids | length > 0
+
+# --- el contraste con el plano ---------------------------------------------
+- name: netxms · la topología de capa 2 que ve la vista, contra el plano
+  ansible.builtin.set_fact:
+    netxms_topologia: >-
+      {{ lab | netlabs_netxms_topologia_contraste(equipos, netxms_censo,
+         netxms_fichas | default([], true), netxms_interfaces | default([], true),
+         netxms_interfaces_detalle | default([], true)) }}
+  no_log: true
+
+# El contraste se dice entero, con quién discrepa: la vista no inventa enlaces —los aprende
+# del puente—, así que un enlace que ve y el plano no declara es del plano la falta; y un
+# cable que el plano declara y la vista no ve sólo la delata cuando sus dos puntas son
+# equipos que sondea, porque un nodo final sólo aparece en el puente cuando habla.
+- name: netxms · la topología de capa 2 de la vista
+  ansible.builtin.debug:
+    msg: >-
+      topología L2 {{ lab.lab }}: la vista ve {{ netxms_topologia.cables_vistos }} de los
+      {{ netxms_topologia.cables_declarados }} cables del plano; {{ netxms_topologia.confirmados
+      | length }} confirmados.{% if netxms_topologia.sobran | length > 0 %} La vista ve cables
+      que el plano no declara —el plano está incompleto—: {{
+      netxms_topologia.sobran | map(attribute='cable') | list }} (vistos por {{
+      netxms_topologia.sobran | map(attribute='soporte') | list }}).{% endif %}{% if
+      netxms_topologia.faltan.la_vista | length > 0 %} El plano declara cables entre dos
+      equipos que la vista sondea y la vista no los ve: {{ netxms_topologia.faltan.la_vista }}
+      —o no están, o su descubrimiento por el puente se los perdió—.{% endif %}{% if
+      netxms_topologia.faltan.sin_concluir | length > 0 %} Sin concluir (una punta es un nodo
+      final, que sólo aparece en el puente cuando habla): {{ netxms_topologia.faltan.sin_concluir
+      }}.{% endif %}{% if netxms_topologia.coincide %} La vista y el plano dicen lo mismo.{%
+      endif %}
+
+# Un equipo del plano que la vista no conozca no se puede contrastar: se dice con su nombre,
+# porque un contraste al que le falta una punta sin decirlo es un contraste que miente.
+- name: netxms · equipos del plano fuera de la vista, para el contraste
+  ansible.builtin.debug:
+    msg: >-
+      el contraste no pudo mirar a {{ netxms_topologia.fuera_de_la_vista | join(', ') }}: no
+      están en la vista. Se registran en el paso anterior; si siguen faltando, la vista los
+      tiene con otras credenciales.
+  when: netxms_topologia.fuera_de_la_vista | length > 0

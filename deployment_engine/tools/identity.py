@@ -219,6 +219,30 @@ def _validate_registro(registro: dict) -> None:
         )
 
 
+def _validate_topologia(topologia: dict) -> None:
+    """El bloque `observabilidad.topologia`: si el motor contrasta la capa 2 con el plano.
+
+    La capa 2 la descubre la propia vista por la tabla de reenvío del puente (FDB, ADR 0019);
+    el motor no la enciende —el sondeo es de la vista— sino que la lee y la contrasta con lo
+    que declara el plano. Se enciende una sola vez, para todo el sitio: el laboratorio no
+    elige si su dibujo se comprueba, igual que no elige con qué identidad se le sondea ni
+    quién le escucha.
+    """
+    if not isinstance(topologia, dict):
+        raise LabError("'observabilidad.topologia' tiene que ser un mapa")
+    sobran = set(topologia) - {"contrastar"}
+    if sobran:
+        raise LabError(
+            f"'observabilidad.topologia' no entiende {', '.join(sorted(sobran))}: es "
+            "{contrastar}"
+        )
+    if "contrastar" in topologia and not isinstance(topologia["contrastar"], bool):
+        raise LabError(
+            f"'observabilidad.topologia.contrastar' es verdadero o falso; dice "
+            f"{topologia['contrastar']!r}"
+        )
+
+
 def validate_observabilidad(env: dict) -> None:
     """El bloque `observabilidad` del entorno: cómo se mira a los equipos (ADR 0019).
 
@@ -231,15 +255,18 @@ def validate_observabilidad(env: dict) -> None:
         return
     if not isinstance(bloque, dict):
         raise LabError("'observabilidad' del entorno tiene que ser un mapa")
-    sobran = set(bloque) - {"snmp", "registro"}
+    sobran = set(bloque) - {"snmp", "registro", "topologia"}
     if sobran:
         raise LabError(
             f"'observabilidad' del entorno no entiende {', '.join(sorted(sobran))}: es "
-            "{snmp, registro}"
+            "{snmp, registro, topologia}"
         )
     registro = bloque.get("registro")
     if registro is not None:
         _validate_registro(registro)
+    topologia = bloque.get("topologia")
+    if topologia is not None:
+        _validate_topologia(topologia)
     snmp = bloque.get("snmp")
     if snmp is None:
         return

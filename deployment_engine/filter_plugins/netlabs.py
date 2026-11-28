@@ -237,6 +237,16 @@ class FilterModule:
             "netlabs_netxms_alarma_resolver_cmd": lambda api, id_alarma:
                 converge.netxms_alarma_resolver_cmd(api, id_alarma),
             "netlabs_netxms_interfaces_cuerpo": lambda api=None: converge.netxms_interfaces_cuerpo(),
+            # La topología de capa 2: la vecindad que la vista descubre por el puente (FDB),
+            # contrastada con los cables que declara el plano (ADR 0019, P1).
+            "netlabs_observabilidad_contrasta_topologia": lambda observabilidad=None:
+                converge.observabilidad_contrasta_topologia(observabilidad),
+            "netlabs_netxms_interfaces_ids": lambda nodes, encontrados, fichas=None, interfaces=None:
+                converge.netxms_interfaces_ids_de(nodes, encontrados, fichas, interfaces),
+            "netlabs_netxms_topologia_contraste": lambda lab, nodes, encontrados, fichas=None,
+                interfaces=None, detalles=None:
+                converge.netxms_topologia_contraste(lab, nodes, encontrados, fichas,
+                                                    interfaces, detalles),
             "netlabs_netxms_mapa_ops": lambda lab, nodes, encontrados, actual, api, id_mapa,
                 fichas=None, interfaces=None, comentarios="", objeto=None: converge.netxms_mapa_ops(
                     lab, nodes, encontrados, actual, api, id_mapa, fichas, interfaces,
