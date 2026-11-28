@@ -189,7 +189,7 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
     area_snmp = configure.get("snmp")
     if area_snmp is not None:
         ops += _snmp_ops(current.get("snmp") or {}, current.get("snmp_community") or [],
-                         area_snmp, observabilidad_de(observabilidad, secrets), mgmt_cidr)
+                         area_snmp, observabilidad, secrets, mgmt_cidr)
 
     if "services" in configure:
         servicios = {s.get("name"): s for s in current.get("services") or []}
@@ -282,7 +282,8 @@ def observabilidad_de(bloque: dict | None, secrets: dict | None) -> dict | None:
 
 
 def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
-              identidad: dict | None, mgmt_cidr: str | None) -> list[dict]:
+              bloque: dict | None, secrets: dict | None,
+              mgmt_cidr: str | None) -> list[dict]:
     """El área `snmp` de un laboratorio: el servicio encendido, y con qué se mira.
 
     NetXMS no puede sacar el nombre, las interfaces ni las tablas de rutas y ARP de un
@@ -291,6 +292,11 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
     las declara el entorno (`observabilidad.snmp`, ADR 0019), porque mirar no es cosa de
     un laboratorio—, y el motor deriva lo que no se declara: sólo lectura, y sólo desde la
     red de gestión.
+
+    La identidad se resuelve **sólo** cuando el área la enciende: apagar el servicio —o
+    dejarlo como está— no necesita las claves del sitio, y resolverlas antes del corte hacía
+    que `snmp: {enabled: false}` fallara si `secrets.snmp_v3` faltaba o ya no valía, en vez
+    de apagar SNMP.
     """
     encendido_ahora = str(ajustes.get("enabled", "")).lower() in ("true", "yes")
     if not area["enabled"]:
@@ -300,6 +306,7 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
                      "effect": "SNMP apagado (el laboratorio no lo declara encendido)"}]
         return []
 
+    identidad = observabilidad_de(bloque, secrets)
     if identidad is None:
         raise LabError(
             "el laboratorio enciende SNMP y el entorno no declara `observabilidad.snmp`: "
@@ -1936,7 +1943,15 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
 
     altas: list[dict] = []
     identidades: list[dict] = []
-    de_la_vista = _identidad_para_la_vista(observabilidad_de(observabilidad, secrets))
+    # La identidad de sondeo se resuelve **sólo** si algún equipo de red del laboratorio
+    # declara SNMP encendido: un laboratorio que no lo usa —o que sólo registra puestos—
+    # no debe exigir las claves del sitio. Se resuelve una vez y se reutiliza en cada alta
+    # y en cada PATCH del grupo SNMP.
+    hay_snmp = any(((n.get("configure") or {}).get("snmp") or {}).get("enabled")
+                   and n.get("type") not in ("server", "workstation")
+                   for n in nodes or [])
+    de_la_vista = (_identidad_para_la_vista(observabilidad_de(observabilidad, secrets))
+                   if hay_snmp else None)
     for node, _candidatos, objeto in equipos:
         direccion = _direccion_de(node)
         nombre = node.get("name") or node.get("role")

@@ -732,6 +732,18 @@ class LaIdentidadV3(unittest.TestCase):
         self.assertEqual([(o["method"], o["body"]) for o in ops],
                          [("POST", {"enabled": "no"})])
 
+    def test_apagar_snmp_no_necesita_las_claves_del_sitio(self):
+        """`snmp: {enabled: false}` apaga el servicio aunque `secrets.snmp_v3` falte.
+
+        La identidad de sondeo sólo se resuelve cuando un equipo la declara encendida:
+        apagar no puede exigir las claves del sitio, o no se podría retirar SNMP de un
+        laboratorio cuyo secreto ya no vale (ADR 0019).
+        """
+        ops = converge.ros_ops(self.nodo({"enabled": False}), self.actual(enabled="true"),
+                               "clave", {}, self.CIDR, self.OBS)
+        self.assertEqual([(o["method"], o["body"]) for o in ops],
+                         [("POST", {"enabled": "no"})])
+
     def test_el_efecto_no_lleva_el_nombre_de_la_entrada_ni_las_claves(self):
         # El efecto se imprime antes de escribir: ni el nombre (que es el usuario) ni las
         # claves pueden aparecer en él.
@@ -2097,6 +2109,17 @@ class LaIdentidadConLaQueSondeaLaVista(unittest.TestCase):
         op = converge.netxms_ops([self.equipo()], [], [], self.API, self.SECRETS,
                                  observabilidad={})["ops"][0]
         self.assertNotIn("snmp", json.loads(op["cuerpo"]))
+
+    def test_un_laboratorio_sin_snmp_no_exige_las_claves_del_sitio(self):
+        """Registrar equipos sin SNMP no necesita la credencial: no se resuelve si nadie la usa.
+
+        Con el entorno declarando v3 pero ningún equipo encendiendo SNMP, `secrets` puede no
+        traer `snmp_v3`: registrar el equipo no debe fallar por una identidad que no se usa.
+        """
+        plan = converge.netxms_ops([self.equipo(area=None)], [], [], self.API,
+                                   {"routeros_clave": "s3cr3t"}, observabilidad=self.OBS)
+        self.assertEqual(len(plan["ops"]), 1)
+        self.assertNotIn("snmp", json.loads(plan["ops"][0]["cuerpo"]))
 
     def test_con_v2c_declarado_a_la_vista_se_le_dice_la_comunidad_del_entorno(self):
         """La comunidad es el `authName` de la vista: cambiarla es lo único que cambia."""
