@@ -76,6 +76,25 @@ observabilidad:
   snmp:
     version: 3
     credencial_from: secrets.snmp_v3
+
+  # El valor de esa credencial no se escribe aquí: vive en `secrets.yml`, que está en
+  # `.gitignore`. Es un mapa con estos cinco campos —y ninguno más—, y el motor lo comprueba
+  # al resolver la identidad (`deployment_engine/tools/converge.py`), no al leer este fichero:
+  #
+  #   snmp_v3:
+  #     usuario: nombre-seco            # 1..32 caracteres, sin espacios; en RouterOS ES el nombre
+  #     autenticacion: SHA256           # MD5 | SHA1 | SHA256 | SHA512
+  #     clave_autenticacion: *********  # 8 caracteres o más
+  #     cifrado: AES                    # DES | AES (`AES` es AES-128)
+  #     clave_cifrado: *********        # 8 caracteres o más
+  #
+  # Un equipo que no sepa v3 se mira con la comunidad v2c: entonces `version: 2` y
+  # `credencial_from: secrets.snmp_comunidad` arriba, y
+  # `snmp_comunidad: una-cadena-de-1-a-32-caracteres-sin-espacios` en `secrets.yml`.
+  # El `credencial_from` hay que cambiarlo también: de él sale el nombre de la clave que
+  # se resuelve, y con `secrets.snmp_v3` el motor buscaría una comunidad donde hay un
+  # bloque v3 y pararía antes de desplegar.
+
   # Y los equipos mandan sus registros a la vista, que los escucha. Se declara aquí y no en un
   # laboratorio por el mismo motivo que la identidad de arriba: no es de un sitio, es de cómo se
   # mira a los equipos en todo el sitio. El puerto se puede omitir —514, el de siempre— y
