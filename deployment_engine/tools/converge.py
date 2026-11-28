@@ -1667,6 +1667,15 @@ NETXMS_RUTA_CREAR = "/objects"
 # (medido: `PATCH` 200 y el grupo cambia).
 NETXMS_RUTA_SNMP = "/objects/{}/snmp"
 
+# La tabla de reenvío del puente (FDB) es lo que hace que la vista vea la capa 2 cuando el
+# equipo no publica LLDP —el de MikroTik no lo lee bien, y hay hilos en el foro del servicio
+# que lo cuentan (ADR 0019)—. La vista marca con qué lo supo en cada interfaz
+# (`peerDiscoveryProtocol`): este número es «tabla de reenvío» (medido en la instalación, el
+# texto que lo acompañaba era «FDB»). El motor no decide con el número: sólo dice con qué lo
+# supo la vista.
+NETXMS_PROTOCOLO_FDB = 1
+NETXMS_PROTOCOLO_NOMBRES = {1: "FDB"}
+
 # Cómo se llama el cifrado en cada sistema. El entorno declara la identidad en el idioma
 # de RouterOS —donde `AES` es AES-128— y la vista la escribe a la suya: medido contra la
 # instalación (`libnxsnmp`, `s_snmpPrivMethodNames`), admite `NONE|DES|AES-128|AES-192|
@@ -2707,17 +2716,7 @@ def netxms_interfaces_de(nodes: list[dict], censo: list | None, fichas: list | N
     objetos, _ = netxms_objetos_de(nodes, censo)
     nombre_de = {int(o["id"]): str(o.get("name") or "")
                  for o in interfaces or [] if o.get("id") is not None}
-    hijos_de = {}
-    for ficha in fichas or []:
-        if ficha.get("id") is None:
-            continue
-        hijos = []
-        for hijo in ficha.get("children") or []:
-            if isinstance(hijo, dict) and hijo.get("id") is not None:
-                hijos.append(int(hijo["id"]))
-            elif isinstance(hijo, int):
-                hijos.append(hijo)
-        hijos_de[int(ficha["id"])] = hijos
+    hijos_de = _hijos_por_equipo(fichas)
     salida = {}
     for node in nodes or []:
         rol = str(node.get("role") or node.get("name") or "")
@@ -2729,6 +2728,172 @@ def netxms_interfaces_de(nodes: list[dict], censo: list | None, fichas: list | N
         if suyas:
             salida[rol] = dict(sorted(suyas.items()))
     return salida
+
+
+def _hijos_por_equipo(fichas: list | None) -> dict:
+    """Los números de objeto de los hijos —las interfaces— de cada equipo, por su número.
+
+    La ficha de un equipo trae la lista de sus hijos; unos llegan como número y otros como
+    objeto con `id`. Es la única lectura que dice de quién es cada interfaz: el censo de
+    interfaces, solo, no lo dice.
+    """
+    hijos_de = {}
+    for ficha in fichas or []:
+        if ficha.get("id") is None:
+            continue
+        hijos = []
+        for hijo in ficha.get("children") or []:
+            if isinstance(hijo, dict) and hijo.get("id") is not None:
+                hijos.append(int(hijo["id"]))
+            elif isinstance(hijo, int):
+                hijos.append(hijo)
+        hijos_de[int(ficha["id"])] = hijos
+    return hijos_de
+
+
+def observabilidad_contrasta_topologia(bloque: dict | None) -> bool:
+    """Si el entorno pide contrastar la capa 2 de la vista con el plano (ADR 0019, P1).
+
+    Se declara en el entorno (`observabilidad.topologia.contrastar`) y no en el laboratorio:
+    mirar no es cosa de un laboratorio, igual que no elige con qué identidad se le sondea. Sin
+    la declaración, el motor no lee vecindad ninguna y no gasta llamadas al API.
+    """
+    return bool(((bloque or {}).get("topologia") or {}).get("contrastar", False))
+
+
+def netxms_interfaces_ids_de(nodes: list[dict], censo: list | None, fichas: list | None,
+                             interfaces: list | None) -> list:
+    """Los números de objeto de las interfaces de los equipos de este laboratorio.
+
+    Es lo que hace falta para pedir su detalle de una vez (`/objects/details`), que es donde
+    la vista dice quién cuelga de cada puerto. Se apoya en el cruce de `netxms_interfaces_de`
+    —el censo y la ficha—, no en otro.
+    """
+    por_equipo = netxms_interfaces_de(nodes, censo, fichas, interfaces)
+    return sorted({int(numero) for suyas in por_equipo.values() for numero in suyas.values()})
+
+
+def _es_equipo_de_red(node: dict | None) -> bool:
+    """Un equipo al que la vista mira por SNMP y que, por eso, siempre está hablando.
+
+    Un router, un switch o un firewall se sondean y cruzan tramas entre ellos; un nodo final
+    —un puesto, un servidor— sólo aparece en la tabla del puente cuando habla.
+    """
+    return str((node or {}).get("type") or "") in ("router", "switch", "firewall")
+
+
+def netxms_topologia_contraste(lab: dict, nodes: list | None, censo: list | None,
+                               fichas: list | None, interfaces: list | None,
+                               detalles: list | None) -> dict:
+    """El contraste entre la capa 2 que ve la vista y los cables que declara el plano.
+
+    La vista descubre la capa 2 por la tabla de reenvío del puente (FDB), no por LLDP
+    (ADR 0019): lo que aprende de cada puerto lo guarda en la interfaz como su vecina
+    —`peerNodeId`/`peerInterfaceId`— y dice con qué lo supo (`peerDiscoveryProtocol`). Aquí se
+    lee esa vecindad —la interfaz vecina la traduce el censo, el equipo vecino lo traduce el
+    registro— y se cruza con los cables del plano.
+
+    Cada cable del plano cuenta por separado, y lo que la vista ve se cuenta por el par de
+    **interfaces** de cada enlace, no por el par de equipos: la declaración permite unir los
+    mismos dos equipos por varios puertos de la misma red, y dos cables así son dos enlaces
+    distintos que la vista ve por sus puntas. Contarlos por el equipo los confundiría en uno y
+    el que falta pasaría por visto; contar los vistos por su par de puntas mantiene la
+    distinción sin tener que traducir el puerto del plano a la interfaz de la vista (que un
+    nodo final Linux no comparte con el equipo: se llama a sí mismo, no `etherN`).
+
+    El juicio de quién discrepa sale de cómo ve la vista: **no inventa enlaces** —los aprende
+    del puente—, así que un enlace que ve y el plano no declara es del plano la falta
+    (`sobran`). Y un cable que el plano declara y la vista no ve **sólo la delata cuando sus
+    dos puntas son equipos de red que la vista sondea y ya están en ella**, que siempre hablan
+    y por tanto dejan rastro en el puente: si una punta es un nodo final, no está en la vista,
+    o el equipo no enciende su sondeo, no consta que debiera hablar, y entonces no se concluye
+    (`sin_concluir`) en vez de culpar a quien no consta.
+    """
+    objetos, fuera = netxms_objetos_de(nodes, censo)
+    rol_de = {int(numero): rol for rol, numero in objetos.items()}
+    detalle_de = {int(d["id"]): d for d in detalles or [] if d.get("id") is not None}
+    tipo_de = {str(n.get("role") or n.get("name") or ""): n for n in nodes or []}
+    hijos_de = _hijos_por_equipo(fichas)
+
+    # Lo que ve la vista: por cada equipo del plano presente en ella, cada interfaz suya con
+    # su vecina. El enlace se guarda por el par de puntas ordenado —para que valga lo mismo
+    # mirado desde una que desde la otra y no se cuente dos veces—, con qué lo supo la vista,
+    # y de qué par de equipos es.
+    vistos, soporte_de, nodo_de = set(), {}, {}
+    for node in nodes or []:
+        rol = str(node.get("role") or node.get("name") or "")
+        suyo = objetos.get(rol)
+        if not suyo:
+            continue
+        for numero in hijos_de.get(int(suyo), []):
+            detalle = detalle_de.get(int(numero))
+            if not detalle:
+                continue
+            vecino = rol_de.get(int(detalle.get("peerNodeId") or 0))
+            if not vecino or vecino == rol:
+                # Su vecina no es un equipo de este laboratorio (o es ella misma): no es un
+                # hueco del plano y no se cuenta.
+                continue
+            suya = (rol, int(numero))
+            vecina = (vecino, int(detalle.get("peerInterfaceId") or 0))
+            par = (suya, vecina) if suya <= vecina else (vecina, suya)
+            vistos.add(par)
+            soporte_de.setdefault(par, int(detalle.get("peerDiscoveryProtocol") or 0))
+            nodo_de[par] = (rol, vecino) if rol <= vecino else (vecino, rol)
+
+    # Los cables declarados, cada uno contado por separado y por el par de equipos que une.
+    declarados = []
+    for cable in lab.get("links") or []:
+        a = str((cable.get("a") or {}).get("node") or "")
+        z = str((cable.get("z") or {}).get("node") or "")
+        if a and z:
+            declarados.append((a, z) if a <= z else (z, a))
+    declarados.sort()
+
+    # Los enlaces vistos por par de equipos: uno por cada par de puntas distinto, así que dos
+    # cables paralelos cuentan como dos. Se guarda cada par de puntas —con el soporte que la
+    # vista le dio— hasta el final, porque dos cables paralelos pueden haberse aprendido con
+    # protocolos distintos y atribuir a los dos el del primero sería inventar el soporte de uno.
+    vistos_de_nodo = {}
+    for par in sorted(vistos):
+        vistos_de_nodo.setdefault(nodo_de[par], []).append(par)
+
+    confirmados, faltan = [], {"la_vista": [], "sin_concluir": []}
+    for nodo_par in declarados:
+        casados = vistos_de_nodo.get(nodo_par)
+        if casados:
+            vistos_de_nodo[nodo_par] = casados[1:]
+            confirmados.append(list(nodo_par))
+            continue
+        # No se ve el cable: sólo se le achaca a la vista cuando sus dos puntas son equipos
+        # que ella sondea y ya están en ella.
+        if all(_es_equipo_de_red(tipo_de.get(p))
+               and _la_vista_sondea(tipo_de.get(p) or {})
+               and p in objetos for p in nodo_par):
+            faltan["la_vista"].append(list(nodo_par))
+        else:
+            faltan["sin_concluir"].append(list(nodo_par))
+    # Lo que la vista ve y el plano no declara (o declara de menos): los enlaces que sobran,
+    # uno por cada par de puntas visto que quedó sin casar, con el soporte que la vista le dio a
+    # ese par y no al del primero de ellos.
+    sobran = []
+    for nodo_par in sorted(vistos_de_nodo):
+        for par in vistos_de_nodo[nodo_par]:
+            soporte = soporte_de.get(par)
+            nombre = NETXMS_PROTOCOLO_NOMBRES.get(soporte, str(soporte or "")) if soporte else ""
+            sobran.append({"cable": list(nodo_par), "soporte": nombre})
+
+    return {
+        "equipos_en_la_vista": len(objetos),
+        "cables_declarados": len(declarados),
+        "cables_vistos": len(vistos),
+        "confirmados": confirmados,
+        "faltan": faltan,
+        "sobran": sobran,
+        "fuera_de_la_vista": list(fuera),
+        "coincide": not sobran and not faltan["la_vista"] and not faltan["sin_concluir"],
+    }
+
 
 
 BANDERAS_QUE_EL_MAPA_ENSENA = ("showStatusIcon", "showStatusFrame", "showStatusBackground")

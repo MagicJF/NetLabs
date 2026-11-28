@@ -340,6 +340,20 @@
         equipos: "{{ plan.nodes | selectattr('netxms_address') | list }}"
       when: plan.steps | selectattr('op', 'equalto', 'netxms_mapa') | list | length > 0
 
+    # --- el contraste de la topología de capa 2 con el plano ----------------
+    # La vista descubre la capa 2 por la tabla de reenvío del puente (ADR 0019); aquí se lee
+    # esa vecindad y se cruza con los cables del plano, diciendo cuál de los dos discrepa. Va
+    # después del mapa: reutiliza su censo, sus fichas y su censo de interfaces, ya releídos
+    # tras el registro. Sólo lee —no escribe nada en la vista— y sólo corre si el entorno lo
+    # declara (`observabilidad.topologia`).
+    - name: apply · el contraste de la topología de capa 2 con el plano
+      include_tasks: ../tasks/netxms_topologia.yml
+      vars:
+        equipos: "{{ plan.nodes | selectattr('netxms_address') | list }}"
+      when:
+        - plan.steps | selectattr('op', 'equalto', 'netxms_mapa') | list | length > 0
+        - env.observabilidad | default({}) | netlabs_observabilidad_contrasta_topologia
+
     # --- el marcador limpio en lo que observa el sitio ---------------------
     # Lo último que toca la vista: el registro da de alta y el mapa dibuja, y ninguna de
     # las dos resuelve las alarmas que la vista levantó por el camino —una MAC que cambió

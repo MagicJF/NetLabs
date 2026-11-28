@@ -117,3 +117,11 @@ observabilidad:
   registro:
     recoger: true
     puerto: 514
+
+  # Y la topología de capa 2 con la que se contrasta el dibujo del plano. Se declara aquí, y
+  # no en un laboratorio, por el mismo motivo que lo de arriba: la capa 2 la descubre el
+  # servicio de gestión por la tabla de reenvío del puente (FDB), no un laboratorio, y mirar
+  # no es cosa de un laboratorio (ADR 0019). El motor no enciende el sondeo —es del servicio—
+  # sino que lee lo que ve y lo cruza con los cables del plano; `contrastar: false` lo apaga.
+  topologia:
+    contrastar: true
