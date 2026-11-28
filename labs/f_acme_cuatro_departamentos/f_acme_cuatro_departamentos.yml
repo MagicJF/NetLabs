@@ -24,6 +24,12 @@
 # Nueva York (10.50.0.0/16), Tokio (10.60.0.0/16) y los cuatro departamentos. La jerarquía
 # es la del plano: el /24 dentro del /16 dentro del /12, como capas de cebolla.
 #
+# Cada sede sale además a la red pública por su cuenta, con su propia pata (`ny_salida`,
+# `tk_salida`): son dos tramos del espacio de salida del entorno (172.30.0.0/16), uno por
+# sede, y por ellos se navega de verdad. La nube del proveedor no desaparece por eso: es
+# la que lleva el tránsito entre sedes, que no tiene cable directo. Salir por el
+# proveedor y salir a internet son dos cosas distintas, y aquí se ven las dos.
+#
 # Dentro de cada sede, la red de la sede —`ny`, 10.50.0.0/16— es el segmento donde se
 # juntan el router de borde y los dos routers de departamento, y por eso lleva su switch,
 # `swc1`. Las interfaces de ese segmento van con máscara /28 (10.50.0.x): si llevaran el
@@ -52,7 +58,12 @@ networks:
   # cómo se dibuja —una nube, fuera de las áreas del cliente— porque no es un segmento
   # de ACME sino el exterior, al que cada sede se asoma por su cuenta. El proveedor
   # vive aquí dentro, y es quien enruta el tránsito entre las dos sedes.
-  - {name: transito, address: 198.51.100.0/24, title: Internet, shape: cloud}
+  - {name: transito, address: 198.51.100.0/24, title: Transito del proveedor, shape: cloud}
+  # La salida a la red pública: `exit: true` la saca del plan de direcciones de ACME
+  # —no es una red suya— y su puente lo pone el entorno, uno por sede, con la primera
+  # dirección de su tramo (172.30.10.1 y 172.30.20.1) como puerta del hipervisor.
+  - {name: ny_salida, address: 172.30.10.0/24, title: Salida, shape: cloud, exit: true}
+  - {name: tk_salida, address: 172.30.20.0/24, title: Salida, shape: cloud, exit: true}
   # El área de la sede: el segmento donde se juntan el router de borde y los dos routers
   # de departamento. Las interfaces van con máscara /28 (10.50.0.0/28) y no con el /16
   # del área: con el /16 en la interfaz, cada router creería que el departamento de al
@@ -99,18 +110,27 @@ nodes:
     type: router
     stage: 1
     resources: {cores: 1, memory: 256, disk: 1}
-    networks: [transito, ny]     # p1 = Internet, p2 = la red de Nueva York
+    networks: [transito, ny, ny_salida]   # p1 = proveedor, p2 = Nueva York, p3 = salida
     address: 198.51.100.2/26
     configure:
       addresses:
         - {network: transito, address: 198.51.100.2/26}
         - {network: ny, address: 10.50.0.1/28}
+        - {network: ny_salida, address: 172.30.10.2/24}
       # Los dos departamentos están detrás de su router: el de borde sólo aprende por
-      # dónde salir. La otra sede no tiene cable directo: sale por el proveedor.
+      # dónde salir. Lo que no es su sede ni la otra sede sale a internet por su propia
+      # pata; la otra sede va por el proveedor, que es quien tiene el tránsito.
       routes:
         - {destination: 10.50.55.0/24, gateway: 10.50.0.11}
         - {destination: 10.50.66.0/24, gateway: 10.50.0.12}
-        - {destination: 0.0.0.0/0, gateway: 198.51.100.1}
+        - {destination: 10.60.0.0/16, gateway: 198.51.100.1}
+        - {destination: 0.0.0.0/0, gateway: 172.30.10.1}
+      # Lo de dentro sale traducido: el mundo no sabe volver a 10.50.0.0/16.
+      nat:
+        - {out: ny_salida, action: masquerade}
+      # Resuelve hacia fuera —por su salida— y atiende a los suyos, que son los que
+      # tienen a este router por servidor.
+      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -120,16 +140,21 @@ nodes:
     type: router
     stage: 1
     resources: {cores: 1, memory: 256, disk: 1}
-    networks: [transito, tk]
+    networks: [transito, tk, tk_salida]
     address: 198.51.100.3/26
     configure:
       addresses:
         - {network: transito, address: 198.51.100.3/26}
         - {network: tk, address: 10.60.0.1/28}
+        - {network: tk_salida, address: 172.30.20.2/24}
       routes:
         - {destination: 10.60.55.0/24, gateway: 10.60.0.11}
         - {destination: 10.60.66.0/24, gateway: 10.60.0.12}
-        - {destination: 0.0.0.0/0, gateway: 198.51.100.1}
+        - {destination: 10.50.0.0/16, gateway: 198.51.100.1}
+        - {destination: 0.0.0.0/0, gateway: 172.30.20.1}
+      nat:
+        - {out: tk_salida, action: masquerade}
+      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -177,6 +202,8 @@ nodes:
         - {destination: 0.0.0.0/0, gateway: 10.50.0.1}
       dhcp_server:
         - {network: ny_ventas, pool: 10.50.55.100-10.50.55.199, gateway: 10.50.55.1}
+      # Resuelve hacia fuera: es lo que hace que un puesto resuelva nombres.
+      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -197,6 +224,8 @@ nodes:
         - {destination: 0.0.0.0/0, gateway: 10.50.0.1}
       dhcp_server:
         - {network: ny_ingenieria, pool: 10.50.66.100-10.50.66.199, gateway: 10.50.66.1}
+      # Resuelve hacia fuera: es lo que hace que un puesto resuelva nombres.
+      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -217,6 +246,8 @@ nodes:
         - {destination: 0.0.0.0/0, gateway: 10.60.0.1}
       dhcp_server:
         - {network: tk_ventas, pool: 10.60.55.100-10.60.55.199, gateway: 10.60.55.1}
+      # Resuelve por la salida de su sede: es la única que sabe llegar al mundo.
+      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
@@ -237,6 +268,8 @@ nodes:
         - {destination: 0.0.0.0/0, gateway: 10.60.0.1}
       dhcp_server:
         - {network: tk_ingenieria, pool: 10.60.66.100-10.60.66.199, gateway: 10.60.66.1}
+      # Resuelve por la salida de su sede: es la única que sabe llegar al mundo.
+      dns: {servers: [1.1.1.1, 9.9.9.9], allow_remote_requests: true}
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}

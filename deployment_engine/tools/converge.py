@@ -28,25 +28,44 @@ import plano
 
 # Las áreas de RouterOS que el motor sabe leer por REST. Son las mismas que valida
 # identity.AREAS["routeros"]: una lectura de más es una dependencia de más.
+# Cada lectura lleva su clave pegada: lo leído se ordena por lo que cada lectura ES, no
+# por el orden en que salió. Con una lista de rutas y otra de nombres —paralelas— basta
+# con que una se descuadre para que el diccionario entero se descoloque: el motor ve
+# entonces un equipo vacío y le propone escribir lo que ya tiene.
 ROS_READS = (
-    "/rest/system/identity",
-    "/rest/ip/address",
-    "/rest/ip/route",
-    "/rest/ip/pool",
-    "/rest/ip/dhcp-server",
-    "/rest/ip/dhcp-server/network",
-    "/rest/ip/service",
-    "/rest/user",
-    "/rest/snmp",
-    "/rest/snmp/community",
-    "/rest/interface/bridge",
-    "/rest/interface/bridge/port",
+    {"clave": "identity", "ruta": "/rest/system/identity"},
+    {"clave": "addresses", "ruta": "/rest/ip/address"},
+    {"clave": "routes", "ruta": "/rest/ip/route"},
+    {"clave": "pools", "ruta": "/rest/ip/pool"},
+    {"clave": "dhcp_servers", "ruta": "/rest/ip/dhcp-server"},
+    {"clave": "dhcp_networks", "ruta": "/rest/ip/dhcp-server/network"},
+    {"clave": "services", "ruta": "/rest/ip/service"},
+    {"clave": "users", "ruta": "/rest/user"},
+    {"clave": "snmp", "ruta": "/rest/snmp"},
+    {"clave": "snmp_community", "ruta": "/rest/snmp/community"},
+    {"clave": "bridges", "ruta": "/rest/interface/bridge"},
+    {"clave": "bridge_ports", "ruta": "/rest/interface/bridge/port"},
     # Las concesiones fijas de los nodos finales: una reserva no se puede leer del
     # invitado, vive en el servidor DHCP del router.
-    "/rest/ip/dhcp-server/lease",
+    {"clave": "dhcp_leases", "ruta": "/rest/ip/dhcp-server/lease"},
+    # La salida a la red pública: la traducción que la hace posible y el resolutor con
+    # el que los puestos resuelven de verdad.
+    {"clave": "nat", "ruta": "/rest/ip/firewall/nat"},
+    {"clave": "dns", "ruta": "/rest/ip/dns"},
 )
 
 PREFIX = "netlabs-"
+
+# Las condiciones de una regla de traducción: lo que RouterOS compara para decidir si
+# la regla toca un paquete. El motor sólo escribe `out-interface`, así que cualquier
+# otra puesta en la regla la hace traducir menos de lo declarado.
+CONDICIONES_NAT = (
+    "src-address", "dst-address", "src-address-list", "dst-address-list",
+    "src-port", "dst-port", "protocol", "in-interface", "in-interface-list",
+    "out-interface-list", "src-mac-address", "connection-mark", "packet-mark",
+    "routing-mark", "tcp-flags", "icmp-options", "connection-state", "dscp",
+    "content", "layer7-protocol", "tls-host",
+)
 
 # Las comunidades que RouterOS trae puestas de fábrica. Cualquier cliente que no se
 # configure manda una de estas; si el equipo las apaga, el cliente deja de ver nada.
@@ -196,6 +215,10 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
         ops += _dhcp_ops(node, configure["dhcp_server"], current)
     if "routes" in configure:
         ops += _route_ops(configure["routes"], current.get("routes") or [])
+    if "nat" in configure:
+        ops += _nat_ops(node, configure["nat"], current.get("nat") or [])
+    if "dns" in configure:
+        ops += _dns_ops(configure["dns"], current.get("dns") or {})
     if "users" in configure:
         ops += _user_ops(configure["users"], current.get("users") or [], routeros_clave)
     return ops
@@ -640,6 +663,94 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
         red, via = clave(ruta)
         ops.append({"method": "DELETE", "path": f"/rest/ip/route/{ruta['.id']}",
                     "effect": f"sobra la ruta {red} -> {via}"})
+    return ops
+
+
+def _sin_condiciones_extra(regla: dict) -> bool:
+    """Verdadero si la regla no lleva ninguna condición más que su pata de salida.
+
+    Las condiciones son lo que RouterOS compara para decidir si la regla toca un
+    paquete. El motor sólo escribe `out-interface`, así que cualquier otra puesta en la
+    regla —un `src-address`, un `protocol`— la hace traducir menos de lo declarado: no
+    es la del laboratorio aunque coincida en interfaz, acción y cadena, y se reemplaza
+    en vez de darla por buena.
+    """
+    return not any(str(regla.get(campo) or "") for campo in CONDICIONES_NAT)
+
+
+def _nat_ops(node: dict, declaradas: list, actuales: list) -> list[dict]:
+    """La traducción de la salida: lo que sale por la pata pública.
+
+    Un laboratorio con salida real tiene direcciones privadas dentro y el mundo fuera,
+    y sin traducir no vuelve nada. El laboratorio declara por dónde sale (`out`, el
+    nombre de una red suya, que se traduce a la pata que la lleva) y qué hace
+    (`action`, por defecto `masquerade`).
+
+    Sólo se escribe en la cadena `srcnat`, y sólo se reconoce como propio lo que lleva
+    el comentario del motor, igual que en las rutas: una regla puesta a mano no se
+    toca ni se pisa.
+    """
+    ops = []
+    nuestras = [r for r in actuales if str(r.get("comment", "")).startswith(PREFIX)]
+    sin_reclamar = list(nuestras)
+    for item in declaradas:
+        iface = interface_of(node, item["out"])
+        if iface is None:
+            raise LabError(
+                f"la salida {item['out']!r} de {node['name']} no es una red suya: "
+                "no hay pata por la que traducir"
+            )
+        accion = item.get("action", "masquerade")
+        igual = next((r for r in sin_reclamar
+                      if r.get("out-interface") == iface and r.get("action") == accion
+                      and r.get("chain") == "srcnat" and _sin_condiciones_extra(r)), None)
+        if igual is not None:
+            sin_reclamar.remove(igual)
+            # Una regla propia apagada con `disabled: true` no traduce: coincidir en
+            # interfaz, acción y cadena no basta. Se vuelve a encender, igual que se
+            # hace con una ruta propia que alguien apagó a mano.
+            if str(igual.get("disabled", "false")).lower() in ("true", "yes"):
+                ops.append({"method": "PATCH",
+                            "path": f"/rest/ip/firewall/nat/{igual['.id']}",
+                            "body": {"disabled": "no"},
+                            "effect": f"encender la traducción por {iface} ({accion})"})
+            continue
+        ops.append({"method": "PUT", "path": "/rest/ip/firewall/nat",
+                    "body": {"chain": "srcnat", "action": accion,
+                             "out-interface": iface, "comment": f"{PREFIX}salida"},
+                    "effect": f"traducir la salida por {iface} ({accion})"})
+
+    for regla in sin_reclamar:
+        ops.append({"method": "DELETE", "path": f"/rest/ip/firewall/nat/{regla['.id']}",
+                    "effect": f"sobra la traducción por {regla.get('out-interface')}"})
+    return ops
+
+
+def _dns_ops(declarado: dict, actual: dict) -> list[dict]:
+    """El resolutor del router: a quién pregunta y si atiende a los suyos.
+
+    RouterOS no tiene un objeto por servidor: `/ip/dns` es un ajuste único, con la
+    lista en una sola cadena separada por comas. Un router con salida real resuelve
+    por la puerta de esa salida, y `allow_remote_requests` es lo que hace que los
+    puestos que lo tienen de servidor —los que sirve su DHCP— resuelvan también.
+    """
+    ops = []
+    servidores = declarado.get("servers")
+    if servidores is not None:
+        deseado = (",".join(servidores) if isinstance(servidores, (list, tuple))
+                   else str(servidores))
+        ahora = str(actual.get("servers") or "").replace(" ", "")
+        if ahora != deseado:
+            ops.append({"method": "POST", "path": "/rest/ip/dns/set",
+                        "body": {"servers": deseado},
+                        "effect": f"resolver -> {deseado}"})
+    atiende = declarado.get("allow_remote_requests")
+    if atiende is not None:
+        ahora = str(actual.get("allow-remote-requests", "")).lower() in ("true", "yes")
+        if ahora != bool(atiende):
+            ops.append({"method": "POST", "path": "/rest/ip/dns/set",
+                        "body": {"allow-remote-requests": "yes" if atiende else "no"},
+                        "effect": f"el resolutor {'atiende' if atiende else 'no atiende'} a la red"})
     return ops
 
 

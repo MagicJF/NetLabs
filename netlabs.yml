@@ -44,6 +44,17 @@ management:
   # clave salen de `secrets.yml` (`credenciales.netxms`), nunca de aquí.
   api: http://127.0.0.1:8000/v1
 
+# La salida a la red pública: por dónde se asoma de verdad el laboratorio que la
+# declare. Tampoco es suya —es del entorno—, pero se crea una por sede y laboratorio
+# (`<letra>_<red>`), cada una con su tramo, para que dos sedes no compartan nunca el
+# mismo cable. La traducción y el filtro del nodo son de todo el espacio
+# (docs/decisiones/0018; el 0001 es el mismo caso con la red de gestión), así que no
+# se tocan por laboratorio: los pone una vez el propio motor que las crea.
+salida:
+  address_space: 172.30.0.0/16
+  # La pata pública del nodo: por aquí sale la traducción. El motor sólo la mira.
+  uplink: vmbr0
+
 # Rangos de identificadores: el más bajo libre del clúster, nunca uno ya usado.
 vmids:
   min: 100

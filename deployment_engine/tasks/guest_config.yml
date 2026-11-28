@@ -27,7 +27,9 @@
       {{ (config_recursos | default({})) | combine({
            invitado.vmid | string: {
              'cores': (pve_r.json.data.cores | default(1)) | int,
-             'memory': (pve_r.json.data.memory | default(0)) | int
+             'memory': (pve_r.json.data.memory | default(0)) | int,
+             'net': (pve_r.json.data | dict2items
+                     | selectattr('key', 'match', '^net[0-9]+$') | items2dict)
            }
          }) }}
   when: (pve_r.json is defined) and (pve_r.json.data is mapping) and

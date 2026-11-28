@@ -57,6 +57,21 @@ class LosRecursosEscritos(unittest.TestCase):
         self.assertNotIn("config_cores", salida["invitados"][1])
         self.assertNotIn("config_memory", salida["invitados"][1])
 
+    def test_pega_las_tarjetas_del_config_sin_inventarlas(self):
+        """Las tarjetas viajan con el config leído; sin config no se inventan.
+
+        Demuestra que la diferencia puede comparar las tarjetas de un invitado que ya
+        existe, y que un invitado sin config no se da por cambiado por la espalda.
+        """
+        mundo = {"invitados": [{"vmid": 100, "cores": 1}]}
+        salida = filtros.netlabs_con_config(mundo, {
+            "100": {"cores": 2, "memory": 2048,
+                    "net": {"net0": "virtio=BC:24:00:00:00:00,bridge=vmbr0"}}})
+        self.assertEqual(salida["invitados"][0]["config_interfaces"],
+                         {"net0": "virtio=BC:24:00:00:00:00,bridge=vmbr0"})
+        salida = filtros.netlabs_con_config(mundo, {"100": {"cores": 2, "memory": 2048}})
+        self.assertNotIn("config_interfaces", salida["invitados"][0])
+
 
 class LaHuellaDelMapaPorElFiltro(unittest.TestCase):
     """El comentario del mapa llega entero al motor: ahí viaja la huella de lo que escribió.

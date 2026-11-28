@@ -455,19 +455,28 @@ class ElMapaDelLaboratorio(unittest.TestCase):
                                      f"{nombre}: «{area['titulo']}» se fue al otro lado")
                 i += len(mapa.rotulos_de(area)[0])
 
-    def test_la_nube_dice_que_es_la_salida_y_no_un_bloque(self):
-        """La nube de Internet no lleva bloque de direcciones: lleva lo que es.
+    def test_solo_la_nube_de_salida_lleva_la_leyenda_y_las_demas_su_bloque(self):
+        """La nube que es salida no lleva bloque: lleva lo que es.
 
-        «Internet (/24)» con su rango se leía como un segmento más de la casa, y la nube es
-        justo lo contrario: la salida a la red pública.
+        «Internet (/24)» con su rango se leía como un segmento más de la casa, y una
+        salida es justo lo contrario: la salida a la red pública. Pero `shape: cloud` ya
+        no significa que la red dé acceso a internet —el tránsito del proveedor también
+        es una nube y no lo es—, así que sólo la red marcada con `exit: true` se anuncia
+        como la salida. Las demás nubes conservan su bloque, que sí las identifica.
         """
         for nombre in todos_los_laboratorios():
+            redes = laboratorio(nombre)["networks"]
+            titulos_de_salida = {n["title"] for n in redes if n.get("exit")}
             for area in [a for a in mapa.disposicion(plano.plano(laboratorio(nombre), "topologia"))["areas"]
                          if a["nube"]]:
-                self.assertEqual(area["subred"], "", f"{nombre}: {area['titulo']}")
-                self.assertEqual(area["lema"], "salida a la red pública", f"{nombre}")
-                self.assertEqual(mapa.rotulos_de(area)[0],
-                                 [area["titulo"], area["lema"]], f"{nombre}")
+                if area["titulo"] in titulos_de_salida:
+                    self.assertEqual(area["subred"], "", f"{nombre}: {area['titulo']}")
+                    self.assertEqual(area["lema"], "salida a la red pública", f"{nombre}")
+                    self.assertEqual(mapa.rotulos_de(area)[0],
+                                     [area["titulo"], area["lema"]], f"{nombre}")
+                else:
+                    self.assertNotEqual(area["subred"], "", f"{nombre}: {area['titulo']}")
+                    self.assertEqual(area["lema"], "", f"{nombre}: {area['titulo']}")
 
     def test_un_rotulo_mas_ancho_que_su_area_se_parte(self):
         """Si el texto no cabe a lo ancho, se parte y el grupo sigue cabiendo entero."""
