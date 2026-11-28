@@ -814,7 +814,7 @@ El área `dns` hace que el router de la sede **resuelva y reenvíe**: el laborat
 `dns: {enabled: true}` y **nada más**. Con qué resolutor aguas arriba lo hace lo declara una vez el
 **entorno** (`dns.servers`), porque una dirección que resuelva tiene que ser alcanzable por la pata
 de salida de **esa** sede —una decisión del entorno, no del laboratorio—, igual que la identidad
-SNMP (ADR 0023). El motor deriva lo que no se declara: el router atiende a los suyos
+SNMP (ADR 0024). El motor deriva lo que no se declara: el router atiende a los suyos
 (`allow-remote-requests`) y su servidor DHCP **anuncia al propio router** como servidor DNS en la
 opción de la red servida. Así los puestos y servidores del laboratorio —que ya toman su dirección por
 DHCP— quedan resueltos solos: **nada se toca dentro del invitado**.

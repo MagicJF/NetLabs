@@ -1,4 +1,4 @@
-# 0023 — El DNS lo da la red: resuelve el router de la sede y sus puestos lo aprenden por DHCP
+# 0024 — El DNS lo da la red: resuelve el router de la sede y sus puestos lo aprenden por DHCP
 
 **Fecha:** 28 de noviembre de 2026
 **Estado:** aceptada
