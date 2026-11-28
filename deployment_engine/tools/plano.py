@@ -885,11 +885,15 @@ def _repartir_asomados(borde: list[tuple[str, Region, Region, float]],
     que las envuelve no es más ancha que una sola sede y sus centros caen en la misma
     vertical: los tres routers de borde apuntan al mismo punto, se dibujan uno encima de
     otro y sus cables parecen salir de un solo equipo. Se reparten a lo largo del tramo
-    que el techo de la compañía y la nube tienen en común —la frontera por la que todos
+    que el techo de la compañía y las nubes tienen en común —la frontera por la que todos
     salen— sin repetir posiciones, y cada uno sigue asomando bajo su nube.
 
     Cada entrada del borde es (rol, caja, nube, ancho): el techo que pisa, la nube por la
-    que sale y el ancho de su símbolo, que manda sobre la separación mínima.
+    que sale y el ancho de su símbolo, que manda sobre la separación mínima. Los routers
+    se agrupan por el techo, no por la nube: aunque cada uno salga por una salida distinta
+    —tres sedes con tres `exit`—, todos pisan el mismo techo, así que separarlos es la
+    única forma de que sus símbolos no acaben en el mismo punto. Con la nube en la clave,
+    cada grupo tendría un solo router y ninguno separaría a los demás.
     """
     if len(borde) < 2:
         return
@@ -901,15 +905,16 @@ def _repartir_asomados(borde: list[tuple[str, Region, Region, float]],
         # Cada uno en la vertical de su sede, y ninguna coincide: ya no se tapan y
         # moverlos los despegaba de la sede que salen, que es lo que los identifica.
         return
-    _, caja, nube, _ = borde[0]
+    _, caja, _, _ = borde[0]
     guarda = max(SIMBOLO["internet"][0], 2 * HUECO_NUBE) / 2
-    # El tramo común: lo que el techo de la compañía y la nube comparten a la vez. Si no
-    # se solapan —la nube cae fuera de la caja—, se reparten sobre la nube, que es el
-    # borde por el que se lee la salida.
-    x0 = max(caja.x, nube.x + guarda)
-    x1 = min(caja.x + caja.ancho, nube.x + nube.ancho - guarda)
+    # El tramo común: lo que el techo de la compañía y TODAS las nubes comparten a la vez
+    # —una por router, porque cada uno puede salir por la suya—. Si no se solapan —alguna
+    # nube cae fuera de la caja—, se reparten sobre el propio techo, que es lo que de
+    # verdad comparten: es la frontera por la que todos se asoman.
+    x0 = max([caja.x] + [n.x + guarda for *_, n, _ in borde])
+    x1 = min([caja.x + caja.ancho] + [n.x + n.ancho - guarda for *_, n, _ in borde])
     if x1 <= x0:
-        x0, x1 = nube.x + guarda, nube.x + nube.ancho - guarda
+        x0, x1 = caja.x, caja.x + caja.ancho
     paso = (x1 - x0) / (len(borde) + 1)
     if paso < minimo:
         # El tramo no da para un diámetro por equipo: se usa el mínimo imprescindible y
@@ -987,9 +992,10 @@ def _plano_anidado(lab: dict) -> str:
     # Dos equipos pueden compartir frontera —los dos routers de borde, sin ir más
     # lejos—: se reparten a lo largo de ella en vez de dibujarse uno encima del otro.
     por_frontera: dict[tuple[int, int], list[str]] = {}
-    # Los routers que se asoman por el mismo techo a la misma nube se reparten juntos,
-    # y el reparto se hace al final: uno solo no sabe con quién comparte la frontera.
-    asomados: dict[tuple[int, int], list[tuple[str, Region, Region, float]]] = {}
+    # Los routers que se asoman desde el mismo techo se reparten juntos, aunque cada uno
+    # salga por una nube distinta: el reparto se hace al final, porque uno solo no sabe
+    # con quién comparte la frontera.
+    asomados: dict[int, list[tuple[str, Region, Region, float]]] = {}
     for rol, grupos in cruces.items():
         clave = tuple(sorted((id(grupos[0]), id(grupos[1]))))
         por_frontera.setdefault(clave, []).append(rol)
@@ -1025,8 +1031,8 @@ def _plano_anidado(lab: dict) -> str:
             izquierda, derecha = nube.x + guarda, nube.x + nube.ancho - guarda
             x = min(max(centro, izquierda), derecha) if derecha >= izquierda else centro
             # Posición provisional: la definitiva la fija el reparto de los que comparten
-            # techo y nube, que sólo puede hacerse cuando se conocen todos.
-            asomados.setdefault((id(caja), id(nube)), []).append(
+            # techo, que sólo puede hacerse cuando se conocen todos.
+            asomados.setdefault(id(caja), []).append(
                 (rol, caja, nube, max(SIMBOLO[por_nodo[rol]["type"]])))
             casa_de[rol].dentro[rol] = (x, caja.y)
             continue
@@ -1458,6 +1464,12 @@ def _plano_anidado(lab: dict) -> str:
 
     textos: list[str] = []
     puntos: list[tuple[float, float]] = [(0.0, 0.0), (raiz.ancho, raiz.alto)]
+    # El lienzo cuenta también las cajas: una salida anclada a la vertical de su sede
+    # puede caer fuera de la raíz —con su nube y su rótulo—, y sin contarla el SVG la
+    # recortaría por el borde. La raíz sola no basta: la nube desplazada vive fuera de ella.
+    for region in regiones:
+        puntos += [(region.x, region.y),
+                   (region.x + region.ancho, region.y + region.alto)]
     for region in regiones:
         for rol, (cx, cy) in region.dentro.items():
             piezas.append(_simbolo(tipos[rol], cx, cy, rol=rol))
