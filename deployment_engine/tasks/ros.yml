@@ -124,7 +124,7 @@
   # tiene (y RouterOS le contesta «already have»).
   ansible.builtin.set_fact:
     ros_current: >-
-      {{ dict(ros_lecturas.results | map(attribute='item') | map(attribute='clave')
+      {{ dict(ros_lecturas.results | map(attribute='ros_lectura') | map(attribute='clave')
               | zip(ros_lecturas.results | map(attribute='json') | list)) }}
 
 - name: "RouterOS · calcular la diferencia de {{ router.name }}"
@@ -231,8 +231,8 @@
 - name: "RouterOS · lo que se dijo y no quedó en {{ router.name }}"
   ansible.builtin.set_fact:
     ros_resto: >-
-      {{ router | netlabs_ros_ops(dict(ros_relecturas.results | map(attribute='item')
-           | map(attribute='clave') | zip(ros_relecturas.results | map(attribute='json')
+      {{ router | netlabs_ros_ops(dict(ros_relecturas.results
+           | map(attribute='ros_lectura') | map(attribute='clave') | zip(ros_relecturas.results | map(attribute='json')
            | list)), ros_clave, secrets, env.management.address_space) }}
 
 - name: "RouterOS · dar el cambio por bueno sólo si de verdad está en {{ router.name }}"
