@@ -42,6 +42,12 @@
   ansible.builtin.set_fact:
     netxms_registro_puerto: "{{ env.observabilidad.registro.puerto | default(514) }}"
 
+# El puerto por el que atiende el servicio no se escribe a mano: sale de la dirección del API que
+# declara el entorno, que es la única que sabe por dónde se entra.
+- name: netxms · el puerto por el que atiende el servicio
+  ansible.builtin.set_fact:
+    netxms_puerto_api: "{{ netxms_api.split('/')[2].split(':')[1] }}"
+
 # `ss -lun` sin más: el puerto se busca en la salida con una expresión, no con `grep` dentro de un
 # `sh -c` —cada capa de comillas es una trampa, y aquí sobran—. Si `ss` no está o falla, no se
 # miente: se deja sin medir, y sin medida el plan no reinicia a ciegas.
@@ -108,6 +114,10 @@
 
 # Y no se da por bueno hasta que vuelve a atender: un servicio que se reinició y no levanta deja
 # el `apply` en verde y la vista muerta, que es la peor de las mentiras.
+# El guion va **entrecomillado entero** dentro del `sh -c`, y eso no es cosmética: la puerta lleva
+# la orden por SSH, y ssh junta los argumentos con espacios, así que un guion sin comillas se queda
+# en su primera palabra y el resto lo parte el shell de fuera. Medido: así, esta comprobación decía
+# que el servicio no atendía mientras el API llevaba doce segundos en pie. Un guion, una palabra.
 - name: netxms · esperar a que el servicio vuelva a atender
   include_tasks: interior_ssh.yml
   vars:
@@ -119,9 +129,9 @@
     interior_imprime: false
     comando: >-
       {{ ['/bin/sh', '-c',
-          'for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do'
-          ~ ' ss -ltn 2>/dev/null | grep -q ":8000" && echo LISTO && exit 0; sleep 3;'
-          ~ ' done; exit 1'] }}
+          "'for i in " ~ (range(1, 61) | join(' ')) ~ "; do"
+          ~ " ss -ltn | grep -q :" ~ netxms_puerto_api
+          ~ " && echo LISTO && exit 0; sleep 3; done; exit 1'"] }}
   when: netxms_registro_plan.reiniciar | bool
 
 - name: netxms · el servicio volvió, pero no atiende
