@@ -165,7 +165,7 @@ class FilterModule:
             "netlabs_ros_reads": lambda node: list(converge.ROS_READS),
             "netlabs_ros_clave": lambda node, secrets: converge.ros_clave(node, secrets),
             "netlabs_secreto": lambda secrets, nombre: converge.secreto(secrets, nombre),
-            "netlabs_ros_ops": lambda node, current, secret, secrets=None, cidr=None: converge.ros_ops(node, current, secret, secrets, cidr),
+            "netlabs_ros_ops": lambda node, current, secret, secrets=None, cidr=None, observabilidad=None: converge.ros_ops(node, current, secret, secrets, cidr, observabilidad),
             "netlabs_linux_ops": lambda node, current, credenciales=None: converge.linux_ops(node, current, credenciales),
             "netlabs_linux_probe": lambda node: converge.linux_probe(node),
             "netlabs_linux_probe_cmd": lambda node: converge.linux_probe_cmd(node),
@@ -184,8 +184,9 @@ class FilterModule:
             "netlabs_netxms_fichas_cuerpo": lambda ids=None, api=None: converge.netxms_fichas_cuerpo(ids),
             "netlabs_netxms_ids": lambda nodes, encontrados: converge.netxms_ids(nodes, encontrados),
             "netlabs_netxms_ops": lambda nodes, encontrados, detalles, api, secrets=None,
-                vivas=None, propias=None: converge.netxms_ops(
-                    nodes, encontrados, detalles, api, secrets, vivas=vivas, propias=propias),
+                vivas=None, propias=None, observabilidad=None: converge.netxms_ops(
+                    nodes, encontrados, detalles, api, secrets, vivas=vivas, propias=propias,
+                    observabilidad=observabilidad),
             "netlabs_netxms_objeto_cmd": lambda api, id_objeto:
                 converge.netxms_objeto_cmd(api, id_objeto),
             "netlabs_netxms_borrar_cmd": lambda api, id_objeto:

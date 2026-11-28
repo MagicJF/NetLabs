@@ -72,7 +72,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rtp1
     type: router
@@ -90,7 +90,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # --- los dos routers de borde: entre Internet y la red de su sede -----------------
   - role: rte1
@@ -113,7 +113,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rte2
     type: router
@@ -133,7 +133,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # --- el switch de la red de cada sede: aquí se juntan el borde y los tres routers --
   # Un switch no enruta: conmuta. Lleva la mitad de memoria que un router (128 frente a
@@ -147,7 +147,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swc2
     type: switch
@@ -158,7 +158,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # --- los seis routers de departamento: entre la red de la sede y su departamento ---
   - role: rta1
@@ -180,7 +180,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rta2
     type: router
@@ -200,7 +200,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rta3
     type: router
@@ -220,7 +220,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rta4
     type: router
@@ -240,7 +240,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rta5
     type: router
@@ -260,7 +260,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: rta6
     type: router
@@ -280,7 +280,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # --- el switch de cada departamento: es quien conecta los clientes al router ------
   - role: swa1
@@ -292,7 +292,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swa2
     type: switch
@@ -303,7 +303,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swa3
     type: switch
@@ -314,7 +314,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swa4
     type: switch
@@ -325,7 +325,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swa5
     type: switch
@@ -336,7 +336,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swa6
     type: switch
@@ -347,7 +347,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # --- los clientes: piden dirección al router de su departamento -------------------
   - role: wsp1

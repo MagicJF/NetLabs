@@ -982,5 +982,59 @@ class ElReinicioDeUnFichero(unittest.TestCase):
             identity.validate(lab, entorno())
 
 
+class LaIdentidadConLaQueSeMira(unittest.TestCase):
+    """`observabilidad` es del entorno: se nombra una vez y se comprueba donde está escrito.
+
+    El laboratorio dice si se mira al equipo y nada más. Con qué —SNMP v3, o la comunidad
+    v2c en claro— no lo elige un laboratorio, porque entonces cada equipo del mismo
+    laboratorio podría mirarse de una manera (ADR 0019).
+    """
+
+    def test_el_entorno_de_verdad_declara_v3(self):
+        env = entorno()
+        identity.validate_observabilidad(env)  # no levanta
+        self.assertEqual(env["observabilidad"]["snmp"]["version"], 3)
+        self.assertEqual(env["observabilidad"]["snmp"]["credencial_from"], "secrets.snmp_v3")
+
+    def test_un_entorno_sin_bloque_no_dice_nada(self):
+        identity.validate_observabilidad({})  # no levanta: el bloque es opcional
+
+    def test_una_version_que_no_existe_se_rechaza(self):
+        with self.assertRaisesRegex(identity.LabError, "version"):
+            identity.validate_observabilidad(
+                {"observabilidad": {"snmp": {"version": 1, "credencial_from": "secrets.snmp_v3"}}}
+            )
+
+    def test_con_v3_la_credencial_es_la_de_v3_y_ninguna_otra(self):
+        identity.validate_observabilidad(
+            {"observabilidad": {"snmp": {"version": 3, "credencial_from": "secrets.snmp_v3"}}}
+        )
+        with self.assertRaisesRegex(identity.LabError, "snmp_v3"):
+            identity.validate_observabilidad(
+                {"observabilidad": {"snmp": {"version": 3, "credencial_from": "secrets.la_mia"}}}
+            )
+
+    def test_con_v2c_la_credencial_es_la_comunidad(self):
+        identity.validate_observabilidad(
+            {"observabilidad": {"snmp": {"version": 2, "credencial_from": "secrets.snmp_comunidad"}}}
+        )
+
+    def test_una_clave_de_mas_se_rechaza(self):
+        with self.assertRaisesRegex(identity.LabError, "credencial_from"):
+            identity.validate_observabilidad(
+                {"observabilidad": {"snmp": {"version": 3, "credencial_from": "secrets.snmp_v3",
+                                             "comunidad": "la-de-antes"}}}
+            )
+
+    def test_el_laboratorio_no_elige_la_identidad(self):
+        # `snmp: {enabled, community_from}` fue el contrato viejo: el laboratorio nombraba
+        # la comunidad. Ahora eso vive en el entorno, y un laboratorio que lo intente lo lee.
+        lab = laboratorio("b_router_dos_puestos")
+        nodo = next(n for n in lab["nodes"] if "snmp" in (n.get("configure") or {}))
+        nodo["configure"]["snmp"]["community_from"] = "secrets.snmp_comunidad"
+        with self.assertRaisesRegex(identity.LabError, "observabilidad.snmp"):
+            identity.validate(lab, entorno())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -77,7 +77,8 @@
     netxms_plan: >-
       {{ equipos | netlabs_netxms_ops(netxms_censo, netxms_fichas | default([], true),
                                       netxms_api, secrets, vivas | default([], true),
-                                      propias | default([], true)) }}
+                                      propias | default([], true),
+                                      env.observabilidad | default({})) }}
   no_log: true
 
 - name: netxms · lo que hay que dar de alta

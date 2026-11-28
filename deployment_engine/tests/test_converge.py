@@ -442,11 +442,16 @@ class LaClaveDelRouter(unittest.TestCase):
 
 
 class LaObservabilidadDelRouter(unittest.TestCase):
-    """El área `snmp` es del laboratorio: si no está, el motor no toca el servicio."""
+    """El área `snmp` es del laboratorio: si no está, el motor no toca el servicio.
+
+    Con qué se mira **no** lo es: eso lo declara el entorno, y esta clase prueba la rama
+    v2c (la que el P0 deja atrás). La rama v3 tiene su propia clase, `LaIdentidadV3`.
+    """
 
     CIDR = "10.30.0.0/16"
     SECRETOS = {"snmp_comunidad": "lab-ro"}
-    AREA = {"enabled": True, "community_from": "secrets.snmp_comunidad"}
+    OBS = {"snmp": {"version": 2, "credencial_from": "secrets.snmp_comunidad"}}
+    AREA = {"enabled": True}
 
     def nodo(self, area=None):
         nodo = router()
@@ -467,12 +472,12 @@ class LaObservabilidadDelRouter(unittest.TestCase):
 
     def test_sin_area_snmp_el_motor_no_toca_el_servicio(self):
         self.assertEqual(
-            converge.ros_ops(self.nodo(), self.actual(), "clave", self.SECRETOS, self.CIDR), []
+            converge.ros_ops(self.nodo(), self.actual(), "clave", self.SECRETOS, self.CIDR, self.OBS), []
         )
 
     def test_enciende_snmp_y_sustituye_la_comunidad_abierta(self):
         ops = converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave",
-                               self.SECRETOS, self.CIDR)
+                               self.SECRETOS, self.CIDR, self.OBS)
         caminos = [(o["method"], o["path"]) for o in ops]
         self.assertIn(("POST", "/rest/snmp/set"), caminos)
         self.assertIn(("PUT", "/rest/snmp/community"), caminos)
@@ -495,7 +500,7 @@ class LaObservabilidadDelRouter(unittest.TestCase):
             {".id": "*0", "name": "public", "addresses": "::/0", "disabled": "true",
              "read-access": "true", "write-access": "false", "security": "none"},
         ])
-        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR)
+        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR, self.OBS)
         acotada = next(o for o in ops if o["path"] == "/rest/snmp/community/*0")
         self.assertEqual(acotada["body"]["disabled"], "no")
         self.assertEqual(acotada["body"]["addresses"], self.CIDR)
@@ -508,7 +513,7 @@ class LaObservabilidadDelRouter(unittest.TestCase):
             {".id": "*2", "name": "clientes", "addresses": "::/0", "disabled": "true",
              "read-access": "true", "write-access": "false", "security": "none"},
         ])
-        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR)
+        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR, self.OBS)
         self.assertEqual([o["path"] for o in ops if o["path"].startswith("/rest/snmp/community/")],
                          [])
 
@@ -520,7 +525,7 @@ class LaObservabilidadDelRouter(unittest.TestCase):
              "security": "none"},
         ])
         self.assertEqual(
-            converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR), []
+            converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR, self.OBS), []
         )
 
     def test_una_comunidad_abierta_en_v3_se_baja_a_v2c(self):
@@ -531,7 +536,7 @@ class LaObservabilidadDelRouter(unittest.TestCase):
              "authentication-protocol": "MD5", "encryption-protocol": "DES",
              "security": "authorized"},
         ])
-        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR)
+        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR, self.OBS)
         self.assertEqual(len(ops), 1)
         self.assertEqual(ops[0]["method"], "PATCH")
         self.assertEqual(ops[0]["body"], {"security": "none"})
@@ -543,24 +548,24 @@ class LaObservabilidadDelRouter(unittest.TestCase):
              "authentication-protocol": "MD5", "encryption-protocol": "DES",
              "security": "none"},
         ])
-        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR)
+        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR, self.OBS)
         self.assertEqual(len(ops), 1)
         self.assertEqual(ops[0]["method"], "PATCH")
         self.assertEqual(ops[0]["body"], {"addresses": self.CIDR, "write-access": "no"})
 
     def test_el_lab_puede_declararlo_apagado(self):
         ops = converge.ros_ops(self.nodo({"enabled": False}), self.actual(enabled="true"),
-                               "clave", self.SECRETOS, self.CIDR)
+                               "clave", self.SECRETOS, self.CIDR, self.OBS)
         self.assertEqual([(o["method"], o["body"]) for o in ops],
                          [("POST", {"enabled": "no"})])
 
     def test_sin_red_de_gestion_no_se_inventa_una_comunidad_abierta(self):
         with self.assertRaisesRegex(converge.LabError, "red de gestión"):
-            converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave", self.SECRETOS, None)
+            converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave", self.SECRETOS, None, self.OBS)
 
     def test_una_comunidad_que_no_esta_en_secrets_es_un_fallo(self):
         with self.assertRaisesRegex(converge.LabError, "snmp_comunidad"):
-            converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave", {}, self.CIDR)
+            converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave", {}, self.CIDR, self.OBS)
 
     def test_el_encendido_va_marcado_para_su_propio_paso(self):
         # Encender antes de acotar deja el servicio expuesto mientras se acota. Y no
@@ -568,7 +573,7 @@ class LaObservabilidadDelRouter(unittest.TestCase):
         # los elementos siguientes, así que el encendido llegaría igual con una comunidad
         # abierta. La marca es lo que `ros.yml` usa para partirlo en dos pasos.
         ops = converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave",
-                               self.SECRETOS, self.CIDR)
+                               self.SECRETOS, self.CIDR, self.OBS)
         self.assertEqual((ops[-1]["method"], ops[-1]["path"]), ("POST", "/rest/snmp/set"))
         self.assertTrue(ops[-1]["tras_restricciones"])
         for op in ops[:-1]:
@@ -578,14 +583,14 @@ class LaObservabilidadDelRouter(unittest.TestCase):
         # Con SNMP ya encendido no hay marca ninguna: el paso propio del encendido se
         # queda sin elementos y el segundo apply no escribe.
         ops = converge.ros_ops(self.nodo(self.AREA), self.actual(enabled="true"),
-                               "clave", self.SECRETOS, self.CIDR)
+                               "clave", self.SECRETOS, self.CIDR, self.OBS)
         self.assertEqual([o for o in ops if o.get("tras_restricciones")], [])
 
     def test_el_efecto_de_acotar_una_comunidad_no_lleva_su_nombre(self):
         # El nombre de una comunidad es su valor secreto y el efecto se imprime antes de
         # escribir: se nombra por su id interno, que no es secreto.
         ops = converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave",
-                               self.SECRETOS, self.CIDR)
+                               self.SECRETOS, self.CIDR, self.OBS)
         patch = next(o for o in ops if o["method"] == "PATCH")
         self.assertNotIn("public", patch["effect"])
         self.assertIn("*0", patch["effect"])
@@ -599,9 +604,141 @@ class LaObservabilidadDelRouter(unittest.TestCase):
              "authentication-protocol": "MD5", "encryption-protocol": "DES",
              "security": "none", "disabled": "true"},
         ])
-        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR)
+        ops = converge.ros_ops(self.nodo(self.AREA), actual, "clave", self.SECRETOS, self.CIDR, self.OBS)
         self.assertEqual([(o["method"], o["body"]) for o in ops],
                          [("PATCH", {"disabled": "no"})])
+
+
+class LaIdentidadV3(unittest.TestCase):
+    """Con SNMP v3 declarado en el entorno, el equipo deja de contestar en claro.
+
+    Medido contra un CHR 7.25 desplegado, no deducido de la documentación: en RouterOS la
+    identidad v3 **es** una entrada de `/snmp/community` con `security=private` cuyo
+    nombre es el usuario de SNMP v3, con `security=none` el equipo sigue contestando por
+    v2c, y las claves vuelven al leerlas —por eso la comparación es real y un `apply`
+    repetido no escribe.
+    """
+
+    CIDR = "10.30.0.0/16"
+    V3 = {"usuario": "netlabs-ro", "autenticacion": "SHA256",
+          "clave_autenticacion": "clave-de-autenticacion", "cifrado": "AES",
+          "clave_cifrado": "clave-de-cifrado"}
+    SECRETOS = {"snmp_v3": V3}
+    OBS = {"snmp": {"version": 3, "credencial_from": "secrets.snmp_v3"}}
+    AREA = {"enabled": True}
+
+    def nodo(self, area=AREA):
+        nodo = router()
+        nodo["configure"] = {} if area is None else {"snmp": area}
+        return nodo
+
+    def actual(self, enabled="false", comunidades=None):
+        return {
+            "identity": {"name": "rte1"},
+            "snmp": {"enabled": enabled},
+            "snmp_community": comunidades if comunidades is not None else [
+                {".id": "*0", "name": "public", "addresses": "::/0",
+                 "read-access": "true", "write-access": "false", "security": "none"},
+                {".id": "*1", "name": "netlabs-ro-3feba0cb", "addresses": self.CIDR,
+                 "read-access": "true", "write-access": "false", "security": "none"},
+            ],
+        }
+
+    def la_mia(self, **cambios):
+        entrada = {".id": "*2", "name": self.V3["usuario"], "addresses": self.CIDR,
+                   "read-access": "true", "write-access": "false", "security": "private",
+                   "authentication-protocol": self.V3["autenticacion"],
+                   "authentication-password": self.V3["clave_autenticacion"],
+                   "encryption-protocol": self.V3["cifrado"],
+                   "encryption-password": self.V3["clave_cifrado"]}
+        entrada.update(cambios)
+        return entrada
+
+    def ops(self, actual=None, secretos=None, area=AREA, cidr=CIDR):
+        return converge.ros_ops(self.nodo(area), actual or self.actual(), "clave",
+                                self.SECRETOS if secretos is None else secretos, cidr, self.OBS)
+
+    def test_crea_la_identidad_v3_y_apaga_el_claro(self):
+        ops = self.ops()
+        caminos = [(o["method"], o["path"]) for o in ops]
+        self.assertIn(("PUT", "/rest/snmp/community"), caminos)
+        # Las dos v2c se apagan: la de fábrica y la que quedó de la etapa anterior.
+        self.assertEqual([o["path"] for o in ops if o["method"] == "PATCH"],
+                         ["/rest/snmp/community/*0", "/rest/snmp/community/*1"])
+        for op in ops:
+            if op["method"] == "PATCH":
+                self.assertEqual(op["body"], {"disabled": "yes"})
+        creada = next(o for o in ops if o["path"] == "/rest/snmp/community")
+        self.assertEqual(creada["body"]["name"], self.V3["usuario"])
+        self.assertEqual(creada["body"]["security"], "private")
+        self.assertEqual(creada["body"]["authentication-protocol"], "SHA256")
+        self.assertEqual(creada["body"]["encryption-protocol"], "AES")
+        self.assertEqual(creada["body"]["authentication-password"], self.V3["clave_autenticacion"])
+        self.assertEqual(creada["body"]["encryption-password"], self.V3["clave_cifrado"])
+        self.assertEqual(creada["body"]["addresses"], self.CIDR)
+        self.assertEqual(creada["body"]["write-access"], "no")
+        self.assertEqual((ops[-1]["method"], ops[-1]["path"]), ("POST", "/rest/snmp/set"))
+        self.assertTrue(ops[-1]["tras_restricciones"])
+
+    def test_con_v3_puesto_y_las_v2c_apagadas_no_escribe_nada(self):
+        actual = self.actual(enabled="true", comunidades=[
+            self.la_mia(),
+            {".id": "*0", "name": "public", "addresses": self.CIDR, "disabled": "true",
+             "read-access": "true", "write-access": "false", "security": "none"},
+        ])
+        self.assertEqual(self.ops(actual), [])
+
+    def test_al_rotar_una_clave_solo_cambia_esa_clave(self):
+        actual = self.actual(enabled="true", comunidades=[
+            self.la_mia(**{"authentication-password": "la-vieja-y-mas-larga"}),
+        ])
+        ops = self.ops(actual)
+        self.assertEqual([(o["method"], o["body"]) for o in ops],
+                         [("PATCH", {"authentication-password": self.V3["clave_autenticacion"]})])
+
+    def test_una_entrada_sin_cifrado_se_completa(self):
+        """Una identidad con autenticación pero sin cifrado (`authorized`) sube a `private`."""
+        actual = self.actual(enabled="true", comunidades=[
+            self.la_mia(**{"security": "authorized", "encryption-protocol": "DES",
+                           "encryption-password": ""}),
+        ])
+        ops = self.ops(actual)
+        self.assertEqual(ops[0]["method"], "PATCH")
+        self.assertEqual(ops[0]["body"]["security"], "private")
+        self.assertEqual(ops[0]["body"]["encryption-password"], self.V3["clave_cifrado"])
+        self.assertEqual(ops[0]["body"]["encryption-protocol"], "AES")
+
+    def test_sin_observabilidad_en_el_entorno_se_dice(self):
+        with self.assertRaisesRegex(converge.LabError, "observabilidad.snmp"):
+            converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave",
+                             self.SECRETOS, self.CIDR, None)
+
+    def test_un_protocolo_que_el_equipo_no_admite_se_dice(self):
+        for campo, valor, en_el_mensaje in (("autenticacion", "SHA999", "SHA256"),
+                                            ("cifrado", "AES256", "AES")):
+            with self.assertRaisesRegex(converge.LabError, en_el_mensaje):
+                self.ops(secretos={"snmp_v3": {**self.V3, campo: valor}})
+
+    def test_una_clave_de_menos_de_ocho_caracteres_se_dice(self):
+        with self.assertRaisesRegex(converge.LabError, "8 caracteres"):
+            self.ops(secretos={"snmp_v3": {**self.V3, "clave_cifrado": "corta"}})
+
+    def test_sin_la_credencial_en_secrets_es_un_fallo(self):
+        with self.assertRaisesRegex(converge.LabError, "snmp_v3"):
+            self.ops(secretos={})
+
+    def test_el_lab_puede_declararlo_apagado_tambien_con_v3(self):
+        ops = self.ops(actual=self.actual(enabled="true"), area={"enabled": False})
+        self.assertEqual([(o["method"], o["body"]) for o in ops],
+                         [("POST", {"enabled": "no"})])
+
+    def test_el_efecto_no_lleva_el_nombre_de_la_entrada_ni_las_claves(self):
+        # El efecto se imprime antes de escribir: ni el nombre (que es el usuario) ni las
+        # claves pueden aparecer en él.
+        for op in self.ops():
+            efecto = op["effect"]
+            self.assertNotIn(self.V3["clave_autenticacion"], efecto)
+            self.assertNotIn(self.V3["clave_cifrado"], efecto)
 
 
 class ElSwitchConmuta(unittest.TestCase):
@@ -1866,5 +2003,128 @@ class LoQueElDestroyRetiraDeLaVista(unittest.TestCase):
                           "comentario": "netlabs lab=b_router_dos_puestos", "ajeno": False})
 
 
+class LaIdentidadConLaQueSondeaLaVista(unittest.TestCase):
+    """Con qué identidad sondea la vista a cada equipo: una sola, la del entorno (ADR 0019).
+
+    El motor le dice a la vista lo mismo que le dijo al equipo, cada uno en su idioma: la
+    vista llama `AES-128` a lo que RouterOS llama `AES` —medido contra la instalación, que
+    contesta 400 a un `AES` a secas—, y a la comunidad de v2c la llama `authName`, porque
+    para v1/v2c el nombre de la comunidad **es** con lo que se autentica. Como el grupo
+    devuelve las claves al leerlo, la comparación es real y un `apply` repetido no escribe.
+    """
+
+    API = "http://127.0.0.1:8000/v1"
+    V3 = {"usuario": "netlabs-ro", "autenticacion": "SHA256",
+          "clave_autenticacion": "clave-de-autenticacion", "cifrado": "AES",
+          "clave_cifrado": "clave-de-cifrado"}
+    SECRETS = {"routeros_clave": "s3cr3t", "linux_clave": "l1nux", "snmp_v3": V3}
+    OBS = {"snmp": {"version": 3, "credencial_from": "secrets.snmp_v3"}}
+    AREA = {"enabled": True}
+    PUESTO = {"version": "2c", "authName": "public", "authMethod": "NONE",
+              "authPassword": "", "privMethod": "NONE", "privPassword": ""}
+
+    def equipo(self, role="rte1", address="10.30.0.101", area=AREA):
+        return {
+            "role": role, "name": role, "type": "router", "mgmt_address": address,
+            "description": f"netlabs lab=b_prueba role={role}",
+            "configure": {"users": [{"name": "admin", "password_from": "secrets.routeros_clave"}],
+                          **({"snmp": area} if area is not None else {})},
+        }
+
+    def censo(self, role="rte1", address="10.30.0.101", id_objeto=7):
+        return [{"id": id_objeto, "name": role, "ipAddress": {"address": address}}]
+
+    def ficha(self, role="rte1", address="10.30.0.101", id_objeto=7, snmp=None, **extra):
+        return dict({
+            "id": id_objeto, "name": role, "ipAddress": {"address": address},
+            "sshLogin": "admin", "sshPassword": "s3cr3t", "sshPort": 22,
+            "comments": f"netlabs lab=b_prueba role={role}",
+            "snmp": dict(snmp if snmp is not None else self.PUESTO),
+        }, **extra)
+
+    def plan(self, equipo=None, censo=None, fichas=None, **extra):
+        return converge.netxms_ops(equipo if equipo is not None else [self.equipo()],
+                                   censo, fichas, self.API, self.SECRETS,
+                                   observabilidad=self.OBS, **extra)
+
+    def test_el_alta_lleva_la_identidad_dicha_como_la_dice_la_vista(self):
+        """Un equipo nace sabiendo ya con qué se le sondea: no hay un rato en claro."""
+        op = self.plan()["ops"][0]
+        cuerpo = json.loads(op["cuerpo"])
+        self.assertEqual(cuerpo["snmp"], {
+            "version": "3", "authName": "netlabs-ro", "authMethod": "SHA256",
+            "authPassword": "clave-de-autenticacion",
+            # `AES` en el idioma de RouterOS es `AES-128` en el de la vista.
+            "privMethod": "AES-128", "privPassword": "clave-de-cifrado",
+        })
+
+    def test_un_equipo_que_sondea_en_claro_se_pone_al_dia(self):
+        plan = self.plan(censo=self.censo(), fichas=[self.ficha()])
+        self.assertEqual(len(plan["ops"]), 1)
+        self.assertIn("/objects/7/snmp", " ".join(plan["ops"][0]["cmd"]))
+        self.assertIn("PATCH", " ".join(plan["ops"][0]["cmd"]))
+        self.assertEqual(json.loads(plan["ops"][0]["cuerpo"]), {
+            "version": "3", "authName": "netlabs-ro", "authMethod": "SHA256",
+            "authPassword": "clave-de-autenticacion",
+            "privMethod": "AES-128", "privPassword": "clave-de-cifrado",
+        })
+
+    def test_un_equipo_que_ya_sondea_como_debe_no_produce_ninguna_llamada(self):
+        ya = {"version": "3", "authName": "netlabs-ro", "authMethod": "SHA256",
+              "authPassword": "clave-de-autenticacion", "privMethod": "AES-128",
+              "privPassword": "clave-de-cifrado"}
+        self.assertEqual(self.plan(censo=self.censo(), fichas=[self.ficha(snmp=ya)])["ops"], [])
+
+    def test_al_rotar_una_clave_se_reescribe_solo_esa_clave(self):
+        """El `PATCH` es de fusión: lo que ya coincide no se vuelve a mandar."""
+        ya = {"version": "3", "authName": "netlabs-ro", "authMethod": "SHA256",
+              "authPassword": "la-vieja", "privMethod": "AES-128",
+              "privPassword": "clave-de-cifrado"}
+        plan = self.plan(censo=self.censo(), fichas=[self.ficha(snmp=ya)])
+        self.assertEqual(json.loads(plan["ops"][0]["cuerpo"]),
+                         {"authPassword": "clave-de-autenticacion"})
+
+    def test_un_equipo_sin_el_area_no_lleva_identidad_en_su_alta(self):
+        """Sin el área, el motor no toca SNMP en el equipo: la vista no tiene qué sondear."""
+        op = self.plan([self.equipo(area=None)])["ops"][0]
+        self.assertNotIn("snmp", json.loads(op["cuerpo"]))
+
+    def test_un_equipo_sin_el_area_ya_registrado_no_se_toca(self):
+        self.assertEqual(self.plan([self.equipo(area=None)], censo=self.censo(),
+                                   fichas=[self.ficha()])["ops"], [])
+
+    def test_sin_identidad_declarada_en_el_entorno_no_se_toca_el_sondeo(self):
+        op = converge.netxms_ops([self.equipo()], [], [], self.API, self.SECRETS,
+                                 observabilidad={})["ops"][0]
+        self.assertNotIn("snmp", json.loads(op["cuerpo"]))
+
+    def test_con_v2c_declarado_a_la_vista_se_le_dice_la_comunidad_del_entorno(self):
+        """La comunidad es el `authName` de la vista: cambiarla es lo único que cambia."""
+        secretos = dict(self.SECRETS, snmp_comunidad="lab-ro")
+        obs = {"snmp": {"version": 2, "credencial_from": "secrets.snmp_comunidad"}}
+        plan = converge.netxms_ops([self.equipo()], self.censo(), [self.ficha()],
+                                   self.API, secretos, observabilidad=obs)
+        self.assertEqual(json.loads(plan["ops"][0]["cuerpo"]), {"authName": "lab-ro"})
+
+    def test_el_nombre_del_equipo_lo_dice_la_vista_con_su_identidad_no_con_sus_claves(self):
+        """Lo que se imprime al aplicar no lleva material de clave."""
+        plan = self.plan(censo=self.censo(), fichas=[self.ficha()])
+        dicho = " ".join(o["effect"] for o in plan["ops"])
+        self.assertIn("rte1", dicho)
+        self.assertIn("SNMP v3", dicho)
+        for secreto in self.V3.values():
+            self.assertNotIn(secreto, dicho)
+
+    def test_un_nodo_final_no_lleva_la_identidad_de_los_equipos_de_red(self):
+        """Un puesto no habla SNMP: su salud se mira por ICMP, no por el grupo SNMP."""
+        servidor = {"role": "svs1", "name": "svs1", "type": "server",
+                    "description": "netlabs lab=b_prueba role=svs1",
+                    "interfaces": [{"index": 0, "address": "10.20.66.10/24"}],
+                    "configure": {"snmp": self.AREA}}
+        op = self.plan([servidor])["ops"][0]
+        self.assertNotIn("snmp", json.loads(op["cuerpo"]))
+
+
 if __name__ == "__main__":
     unittest.main()
+

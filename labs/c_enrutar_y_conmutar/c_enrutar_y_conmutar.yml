@@ -41,7 +41,7 @@ nodes:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
       services: {www: true}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   # Los switches no declaran dirección de laboratorio: su gestión es la pata OOB
   # derivada del vmid. Todas sus patas son de la misma red porque un switch no une
@@ -55,7 +55,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: swa1                    # el switch de acceso
     type: switch
@@ -66,7 +66,7 @@ nodes:
     configure:
       users:
         - {name: admin, password_from: secrets.routeros_clave}
-      snmp: {enabled: true, community_from: secrets.snmp_comunidad}
+      snmp: {enabled: true}
 
   - role: wsp1
     type: workstation
