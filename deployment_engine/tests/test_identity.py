@@ -1046,6 +1046,13 @@ class LaEscuchaDeLosRegistrosSegunElEntorno(unittest.TestCase):
         with self.assertRaisesRegex(identity.LabError, "1-65535"):
             identity.validate_observabilidad(env)
 
+    def test_un_puerto_booleano_se_rechaza(self):
+        """`true` no es un puerto: en Python un booleano también es `int`, así que se rechaza antes."""
+        env = entorno()
+        env["observabilidad"]["registro"]["puerto"] = True
+        with self.assertRaisesRegex(identity.LabError, "1-65535"):
+            identity.validate_observabilidad(env)
+
     def test_un_laboratorio_no_puede_declararlo(self):
         lab = laboratorio("f_acme_cuatro_departamentos")
         lab["registro"] = {"recoger": True}

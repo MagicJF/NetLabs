@@ -210,7 +210,10 @@ def _validate_registro(registro: dict) -> None:
             f"'observabilidad.registro.recoger' es verdadero o falso; dice {registro['recoger']!r}"
         )
     puerto = registro.get("puerto")
-    if puerto is not None and not (isinstance(puerto, int) and 1 <= puerto <= 65535):
+    # Un booleano también es `int` en Python, así que `puerto: true` pasaría el rango y viajaría
+    # al API como `"True"`: se rechaza antes de llamarlo, como el vmid.
+    if puerto is not None and not (
+            isinstance(puerto, int) and not isinstance(puerto, bool) and 1 <= puerto <= 65535):
         raise LabError(
             f"'observabilidad.registro.puerto' es un puerto (1-65535); dice {puerto!r}"
         )

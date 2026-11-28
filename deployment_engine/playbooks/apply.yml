@@ -356,15 +356,6 @@
         equipos: "{{ plan.nodes | selectattr('netxms_address') | list }}"
       when: plan.steps | selectattr('op', 'equalto', 'netxms_registro') | list | length > 0
 
-    # --- la escucha de registros en la vista -------------------------------
-    # Lo último que toca la vista, y a propósito: no es cosa de este laboratorio sino del
-    # mundo —el entorno declara si la vista recoge los registros de los equipos (ADR 0019)—, y
-    # si hay que escribirla el servicio se reinicia, así que va cuando ya no queda nada más
-    # hablándole. Sólo se escribe la diferencia; el reinicio lo pide la propia variable.
-    - name: apply · la vista escucha los registros de los equipos
-      include_tasks: ../tasks/netxms_registro.yml
-      when: env.observabilidad.registro | default({}) | length > 0
-
     # --- el interior de los nodos de control, por SSH ----------------------
     # Un nodo de control no tiene router ni DHCP: su interior se converge por SSH
     # con la misma puerta que usa el resto del motor. Sólo se escribe la diferencia.
@@ -376,6 +367,17 @@
         objetivo: "{{ linux_nodo.mgmt_address }}"
         linux_descripcion: "{{ linux_nodo.name }}"
       when: linux_nodo.configure | default({}) | length > 0
+
+    # --- la escucha de registros en la vista -------------------------------
+    # Lo último que toca la vista, y **después del interior del control** a propósito: en una
+    # instalación nueva es ese interior quien instala el servicio (`a_bootstrap`), enciende su API
+    # e inicializa sus credenciales; entrar antes no encuentra a quién hablar y el despliegue se
+    # para sin llegar a instalarlo. Y como escribir la escucha reinicia el servicio, va cuando ya
+    # no queda nada más hablándole. Sólo se escribe la diferencia; el reinicio lo pide la propia
+    # variable, y el efecto —el puerto a la escucha— cierra un reintento que se interrumpió.
+    - name: apply · la vista escucha los registros de los equipos
+      include_tasks: ../tasks/netxms_registro.yml
+      when: env.observabilidad.registro | default({}) | length > 0
 
     # --- el cruce ---------------------------------------------------------
     # Y se comprueba: una ruta puesta no es una red alcanzable. Si el router no
