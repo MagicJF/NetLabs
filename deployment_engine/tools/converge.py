@@ -189,14 +189,12 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
 
     area_snmp = configure.get("snmp")
     if area_snmp is not None:
-        # La identidad con la que se mira sólo se resuelve si el área pide encenderla: apagar el
-        # servicio no necesita credencial —una retirada o a medias no puede impedir apagarlo—, y
-        # resolverla antes dejaría SNMP encendido por un secreto que no hace falta para dejarlo
-        # como el laboratorio dice.
-        identidad = (observabilidad_de(observabilidad, secrets)
-                     if area_snmp.get("enabled") else None)
+        # La identidad con la que se mira no se resuelve aquí: `_snmp_ops` la pide sólo si el
+        # área enciende el servicio. Apagar SNMP no necesita credencial —una retirada o a medias
+        # no puede impedir apagarlo—, y resolverla antes dejaría el servicio encendido por un
+        # secreto que no hace falta para dejarlo como el laboratorio dice.
         ops += _snmp_ops(current.get("snmp") or {}, current.get("snmp_community") or [],
-                         area_snmp, identidad, mgmt_cidr)
+                         area_snmp, observabilidad, secrets, mgmt_cidr)
 
     if "services" in configure:
         servicios = {s.get("name"): s for s in current.get("services") or []}
@@ -289,7 +287,8 @@ def observabilidad_de(bloque: dict | None, secrets: dict | None) -> dict | None:
 
 
 def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
-              identidad: dict | None, mgmt_cidr: str | None) -> list[dict]:
+              bloque: dict | None, secrets: dict | None,
+              mgmt_cidr: str | None) -> list[dict]:
     """El área `snmp` de un laboratorio: el servicio encendido, y con qué se mira.
 
     NetXMS no puede sacar el nombre, las interfaces ni las tablas de rutas y ARP de un
@@ -298,6 +297,11 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
     las declara el entorno (`observabilidad.snmp`, ADR 0019), porque mirar no es cosa de
     un laboratorio—, y el motor deriva lo que no se declara: sólo lectura, y sólo desde la
     red de gestión.
+
+    La identidad se resuelve **sólo** cuando el área la enciende: apagar el servicio —o
+    dejarlo como está— no necesita las claves del sitio, y resolverlas antes del corte hacía
+    que `snmp: {enabled: false}` fallara si `secrets.snmp_v3` faltaba o ya no valía, en vez
+    de apagar SNMP.
     """
     encendido_ahora = str(ajustes.get("enabled", "")).lower() in ("true", "yes")
     if not area["enabled"]:
@@ -307,6 +311,7 @@ def _snmp_ops(ajustes: dict, comunidades: list, area: dict,
                      "effect": "SNMP apagado (el laboratorio no lo declara encendido)"}]
         return []
 
+    identidad = observabilidad_de(bloque, secrets)
     if identidad is None:
         raise LabError(
             "el laboratorio enciende SNMP y el entorno no declara `observabilidad.snmp`: "
@@ -2123,7 +2128,8 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
     identidades: list[dict] = []
     # La identidad de sondeo sólo se resuelve si algún equipo la pide: un laboratorio sin SNMP
     # no exige la credencial —no hay nada que sondear—, y resolverla antes hacía que faltara un
-    # secreto que nadie iba a usar.
+    # secreto que nadie iba a usar. Se resuelve una vez y se reutiliza en cada alta y en cada
+    # PATCH del grupo SNMP.
     de_la_vista = (_identidad_para_la_vista(observabilidad_de(observabilidad, secrets))
                    if any(_la_vista_sondea(n) for n in nodes or []) else None)
     for node, _candidatos, objeto in equipos:
