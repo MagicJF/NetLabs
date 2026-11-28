@@ -88,8 +88,12 @@ observabilidad:
   #     cifrado: AES                    # DES | AES (`AES` es AES-128)
   #     clave_cifrado: *********        # 8 caracteres o más
   #
-  # Un equipo que no sepa v3 se mira con la comunidad v2c: entonces `version: 2` arriba y
+  # Un equipo que no sepa v3 se mira con la comunidad v2c: entonces `version: 2` y
+  # `credencial_from: secrets.snmp_comunidad` arriba, y
   # `snmp_comunidad: una-cadena-de-1-a-32-caracteres-sin-espacios` en `secrets.yml`.
+  # El `credencial_from` hay que cambiarlo también: de él sale el nombre de la clave que
+  # se resuelve, y con `secrets.snmp_v3` el motor buscaría una comunidad donde hay un
+  # bloque v3 y pararía antes de desplegar.
 
   # Y los equipos mandan sus registros a la vista, que los escucha. Se declara aquí y no en un
   # laboratorio por el mismo motivo que la identidad de arriba: no es de un sitio, es de cómo se
