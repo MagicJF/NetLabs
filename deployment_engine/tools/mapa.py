@@ -18,7 +18,9 @@
 #              área por el que no pase ningún cable ni se apoye ningún equipo. La
 #              colocación es de este módulo, y por eso se puede comprobar por programa
 #              (test_mapa) en vez de a ojo.
-#              Cada equipo se dibuja con su **icono** —el que la vista le da por su clase—,
+#              Cada equipo se dibuja con su **icono** —la imagen del propio objeto, que
+#              el motor le fija al registrarlo según el tipo de su rol
+#              (`converge.netxms_icono_de`); el mapa no la elige, sólo pide el icono—,
 #              no con la etiqueta grande de nombre e IP ni con un cartel de texto con sus
 #              patas: con veintiséis equipos, una ficha por equipo tapa el dibujo y los
 #              cables que pasan por debajo. Cada cable sí lleva sus **dos puertos**

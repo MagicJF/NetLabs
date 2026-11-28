@@ -1780,6 +1780,18 @@ def netxms_snmp_cmd(api: str, id_objeto) -> list:
     return netxms_cmd(api, NETXMS_RUTA_SNMP.format(int(id_objeto)), metodo="PATCH")
 
 
+def netxms_imagen_cmd(api: str, id_objeto) -> list:
+    """Decirle a la vista con qué imagen dibuja a un equipo (su `mapImage`).
+
+    Es un `PATCH` del propio objeto: la imagen no viaja en el mapa —el mapa sólo pide el
+    icono de cada objeto— sino que se guarda en el objeto, y de ahí la lee la vista (ver
+    `netxms_icono_de`). El API de esta versión acepta el `mapImage` en un `PATCH` del
+    objeto, igual que el grupo SNMP de al lado.
+    """
+    return netxms_cmd(api, f"/objects/{int(id_objeto)}", metodo="PATCH")
+
+
+
 # La configuración del propio servicio de la vista: `GET`/`PUT /server-config/{nombre}`. No es
 # un objeto del inventario sino una variable del servicio, y el API las trata como al resto: una
 # lectura y una escritura por nombre. Medido en la instalación: la lectura devuelve, además del
@@ -2041,6 +2053,44 @@ def _la_vista_sondea(node: dict) -> bool:
     return bool(((node.get("configure") or {}).get("snmp") or {}).get("enabled"))
 
 
+# La imagen con la que la vista dibuja un equipo. El mapa **no** la elige: el mapa sólo
+# pide el icono de cada objeto, y la vista lo saca del propio objeto (`getMapImage()`) y,
+# si el objeto no trae imagen, de la que ella da por la **clase**. Y ahí está el problema
+# que esto arregla: un servidor y un puesto de trabajo son los dos un `Node` de Linux, sin
+# ninguna capacidad SNMP que los distinga, así que la vista les pone el mismo dibujo; un
+# router y un switch sí se separan porque sus capacidades (`isRouter`, `isBridge`) son
+# distintas. Fijar la imagen del objeto por el **tipo** del equipo deja de depender de lo
+# que la vista adivine y separa un servidor de un puesto aunque sean el mismo nodo genérico.
+#
+# Los identificadores son los de la biblioteca de imágenes que la vista ya trae —los que
+# siembra su administrador de base de datos—, no inventados: un UUID que no exista deja al
+# equipo sin dibujar. Y la imagen va en el **objeto**, no en el mapa, porque es de donde la
+# vista la lee (`netxms_imagen_cmd`).
+NETXMS_ICONO_POR_TIPO = {
+    # Un router y un cortafuegos enrutan los dos y la biblioteca no trae un dibujo propio de
+    # cortafuegos: comparten el de aparato de red en vez de fingir que hay uno distinto.
+    "router": "bacde727-b183-4e6c-8dca-ab024c88b999",
+    "firewall": "bacde727-b183-4e6c-8dca-ab024c88b999",
+    "switch": "f9105c54-8dcf-483a-b387-b4587dfd3cba",
+    "server": "ba6ab507-f62d-4b8f-824c-ca9d46f22375",
+    "workstation": "904e7291-ee3f-41b7-8132-2bd29288ecc8",
+    "control": "092e4b35-4e7c-42df-b9b7-d5805bfac64e",
+}
+# Un tipo que no esté en la tabla —uno que se añada mañana— no puede quedarse sin dibujar:
+# cae en el nodo genérico, que es la imagen que la vista da a lo que no reconoce.
+NETXMS_ICONO_POR_DEFECTO = "904e7291-ee3f-41b7-8132-2bd29288ecc8"
+
+
+def netxms_icono_de(nodo: dict) -> str:
+    """La imagen con la que la vista dibuja a este equipo, según su tipo.
+
+    El tipo es la parte del rol que dice qué es el equipo —sale del nombre y no de una
+    lista de equipos de un laboratorio—. Un tipo desconocido no rompe el alta: se dibuja
+    como el nodo genérico.
+    """
+    return NETXMS_ICONO_POR_TIPO.get(str(nodo.get("type")), NETXMS_ICONO_POR_DEFECTO)
+
+
 def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | None,
                api: str, secrets: dict | None = None,
                puerto: int = NETXMS_PUERTO_SSH, vivas: list | None = None,
@@ -2079,6 +2129,13 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
     le dice en el alta y, si el equipo ya estaba registrado con otra —o sondéandose en
     claro—, con un `PATCH` de su grupo SNMP. Es la misma identidad que el entorno declara
     una sola vez (ADR 0019); aquí sólo se traduce a como la escribe la vista.
+
+    La imagen con la que la vista **dibuja** a un equipo también va aparte y se corrige:
+    se fija en el alta y, en uno que ya estaba registrado sin ella, con un `PATCH` del
+    objeto. Sale del **tipo** del equipo —un dato que lleva el rol, derivado del nombre— y
+    no de una lista de equipos de un laboratorio, así que vale para cualquier laboratorio;
+    sin ella, un servidor y un puesto —los dos un `Node` de Linux— salen con el mismo
+    dibujo (ver `netxms_icono_de`).
     """
     por_nombre: dict = {}
     por_ip: dict = {}
@@ -2180,6 +2237,7 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
 
     altas: list[dict] = []
     identidades: list[dict] = []
+    imagenes: list[dict] = []
     # La identidad de sondeo sólo se resuelve si algún equipo la pide: un laboratorio sin SNMP
     # no exige la credencial —no hay nada que sondear—, y resolverla antes hacía que faltara un
     # secreto que nadie iba a usar. Se resuelve una vez y se reutiliza en cada alta y en cada
@@ -2267,6 +2325,10 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
                 "sshLogin": usuario,
                 "sshPassword": clave,
                 "sshPort": int(puerto),
+                # La imagen con la que la vista dibuja el equipo: va en el alta para que
+                # un servidor y un puesto no salgan los dos con el mismo dibujo genérico
+                # (ver `netxms_icono_de`). Es una propiedad del objeto, no del mapa.
+                "mapImage": netxms_icono_de(node),
             }
             # Las credenciales SSH sólo se aceptan al crear; las de SNMP sí se pueden
             # corregir después, pero van en el mismo alta cuando se sabe con antelación:
@@ -2307,7 +2369,37 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
             f"(usuario {actual.get('sshLogin') or 'ninguno'}), y el API de esta versión "
             "sólo las acepta al crear el equipo: cámbialas a mano en su consola"
         )
-    return {"ops": borrados + altas + identidades, "pendientes": pendientes}
+
+    # La imagen de un equipo que ya estaba registrado se corrige en su propia pasada, no en
+    # el alta: la corrección va al objeto que **existe** —uno que se acaba de crear o
+    # recrear ya la lleva en el cuerpo— y no toca el que se retira para rehacerlo, que la
+    # recibirá al volver a nacer. Va aparte de las credenciales por la misma razón que la
+    # identidad de sondeo: es una propiedad independiente, y un equipo con la terminal bien
+    # puede seguir saliendo con el dibujo genérico de antes de que el motor fijara la imagen.
+    #
+    # Y sólo se le cambia la imagen a un equipo que **consta que es de este laboratorio**: la
+    # marca del comentario es la misma prueba que gobierna el borrado, y un objeto con el
+    # nombre y la dirección de un equipo pero sin la marca —uno manual, o el resto de otro
+    # laboratorio que ocupa esa dirección— no se toca, ni para dibujarlo.
+    for node, _candidatos, objeto in equipos:
+        if objeto is None or int(objeto["id"]) in retirados:
+            continue
+        actual = leidos.get(int(objeto["id"])) or {}
+        suyo_de_aqui = (marca_de(node)
+                        and marca_de(node) in str(actual.get("comments") or ""))
+        if not suyo_de_aqui:
+            continue
+        imagen = netxms_icono_de(node)
+        if str(actual.get("mapImage") or "") == imagen:
+            continue
+        direccion = _direccion_de(node)
+        nombre = node.get("name") or node.get("role")
+        imagenes.append({
+            "cmd": netxms_imagen_cmd(api, objeto["id"]),
+            "cuerpo": json.dumps({"mapImage": imagen}),
+            "effect": f"decirle a la vista con qué imagen dibuja a {nombre} ({direccion})",
+        })
+    return {"ops": borrados + altas + identidades + imagenes, "pendientes": pendientes}
 
 
 def netxms_ids(nodes: list[dict], encontrados: list | None) -> list:
