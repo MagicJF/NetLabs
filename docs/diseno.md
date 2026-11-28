@@ -830,9 +830,11 @@ hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.
 Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 0019):
 
 - **P0.** SNMP v3 en lugar de la comunidad en claro, los registros de los equipos recogidos por la
-  vista, y el **poll de topología** encendido —el §7 lo daba por «sin ejecutar», y por el código de la
-  versión instalada no hay interruptor global que apagar: hay que medirlo en la instalación antes de
-  darlo por hecho (ADR 0019)—. La parte de SNMP está hecha: la
+  vista, y el **poll de topología** —que este § daba por «sin ejecutar» y **ya está encendido**: no
+  hay interruptor global que apagar, va por temporizador (`Topology.PollingInterval`, 1800 s) y el flag
+  por equipo está en `false`. Lo que pasa es que **corre y no ve nada** (`physical_links` vacío): lo que
+  queda no es encenderlo, es averiguar por qué no descubre un solo enlace de capa 2 (ADR 0019)—. La
+  parte de SNMP está hecha: la
   identidad se declara **una vez, en el entorno** (`observabilidad.snmp`, `version: 3`), y el
   laboratorio sólo dice si se mira al equipo; el motor crea en cada RouterOS una entrada
   `/snmp/community` con `security: private` —autenticación y cifrado—, acota **todas** las

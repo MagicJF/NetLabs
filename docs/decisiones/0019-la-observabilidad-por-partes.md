@@ -35,21 +35,24 @@ y su PR.
 3. **El poll de topología encendido.** Sin él, por mucho que un equipo anuncie vecinos, la vista no
    mira.
 
-**Lo que ya se sabe de los dos que faltan** (leído en el código de la versión instalada, `release-7.0.4`; hay que **medirlo** en la instalación antes de escribirlo como hecho):
+**Lo que se midió en la instalación viva** (ya no es «lo que dice el código»):
 
-- **Syslog**: el receptor va dentro del núcleo de `netxmsd`, sin módulo que cargar. Se enciende con
-  variables de configuración **guardadas en la base**, no en `netxmsd.conf`:
-  `nxdbmgr set Syslog.EnableListener 1` (por defecto 0, **exige reiniciar el servicio**) y
-  `Syslog.ListenPort` (514 por defecto, y por debajo de 1024 hace falta privilegio). Los mensajes se
-  guardan en la tabla `syslog` (`Syslog.EnableStorage`, por defecto 1) y se **atan a un equipo
-  registrado por su dirección de origen**: lo que venga de una fuente que no sea de un equipo
-  declarado **se descarta** salvo `Syslog.AllowUnknownSources=1`. Ese detalle es el que hace que un
-  syslog «encendido» no registre nada y parezca que funciona.
-- **Poll de topología**: por lo leído, **no hay interruptor global** —es del núcleo y va por temporizador
-  (`Topology.PollingInterval`, 1800 s)—, y el flag por equipo (`flags.disableTopologyPoll`) ya está en
-  `false`. El §7 decía «hoy sin ejecutar» y la ficha del equipo decía *not yet retrieved*: **o la
-  observación es vieja, o hay otra razón que el código no enseña**. Se comprueba en la instalación
-  antes de tocar nada.
+- **Syslog: está apagado.** `Syslog.EnableListener = 0` y no hay nada escuchando en 514/udp. Se enciende con una variable **guardada en la base**, no en `netxmsd.conf`:
+  `nxdbmgr set Syslog.EnableListener 1` —ya existe `nxdbmgr get/set`, y `-N` no reemplaza el valor si
+  ya está: idempotente de serie—, **exige reiniciar el servicio**, y `Syslog.ListenPort` es 514 (por
+  debajo de 1024 hace falta privilegio). Los mensajes van a la tabla `syslog` y se **atan a un equipo
+  por su dirección de origen**: lo que venga de una fuente que no sea un equipo declarado **se
+  descarta** salvo `Syslog.AllowUnknownSources=1` (hoy 0). Ese detalle es el que hace que un syslog
+  «encendido» no registre nada y parezca que funciona.
+- **Topología: no hay nada que encender — ya lo está.** `Topology.PollingInterval = 1800`,
+  `Topology.RoutingTable.UpdateInterval = 300`, `Topology.EnableSTPDiscovery = 1`, el hook
+  `TopologyPoll` se carga al arrancar, y **no existe ninguna variable que lo apague**: el flag por
+  equipo (`flags.disableTopologyPoll`) ya está en `false`. El §7 decía «hoy sin ejecutar» y **eso es
+  lo que estaba mal**. Pero encendido no es lo mismo que sirviendo: **`physical_links` está vacío**,
+  no ha descubierto un solo enlace de capa 2. Lo que queda de esta parte no es encenderla, es
+  averiguar por qué no ve nada —¿RouterOS no publica STP/LLDP en sus puentes como la vista espera,
+  el radio de descubrimiento, la red de gestión?— antes de dar la topología por hecha.
+
 
 **P1 — la topología, con lo que sí es fiable**
 
