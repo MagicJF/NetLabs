@@ -53,10 +53,11 @@
            netxms_configs | default([], true)) }}
 
 # El puerto por el que atiende el servicio no se escribe a mano: sale de la dirección del API que
-# declara el entorno, que es la única que sabe por dónde se entra.
+# declara el entorno, que es la única que sabe por dónde se entra. Se lee con un analizador de URL
+# —no partiendo la cadena—, que entiende una dirección sin puerto y una IPv6 entre corchetes.
 - name: netxms · el puerto por el que atiende el servicio
   ansible.builtin.set_fact:
-    netxms_puerto_api: "{{ netxms_api.split('/')[2].split(':')[1] }}"
+    netxms_puerto_api: "{{ netxms_api | netlabs_netxms_puerto_api }}"
 
 # `ss -lun` sin más: el puerto se busca en la salida con una expresión, no con `grep` dentro de un
 # `sh -c` —cada capa de comillas es una trampa, y aquí sobran—.
@@ -126,10 +127,10 @@
 
 # Y no se da por bueno hasta que vuelve a atender: un servicio que se reinició y no levanta deja
 # el `apply` en verde y la vista muerta, que es la peor de las mentiras.
-# El guion va **entrecomillado entero** dentro del `sh -c`, y eso no es cosmética: la puerta lleva
-# la orden por SSH, y ssh junta los argumentos con espacios, así que un guion sin comillas se queda
-# en su primera palabra y el resto lo parte el shell de fuera. Medido: así, esta comprobación decía
-# que el servicio no atendía mientras el API llevaba doce segundos en pie. Un guion, una palabra.
+# El guion lo arma `netxms_espera_cmd` —entrecomillado entero, como todos—, porque la puerta lleva
+# la orden por SSH y ssh junta los argumentos con espacios: un guion sin comillas se queda en su
+# primera palabra y el resto lo parte el shell de fuera. Medido: así, esta comprobación decía que el
+# servicio no atendía mientras el API llevaba doce segundos en pie. Un guion, una palabra.
 - name: netxms · esperar a que el servicio vuelva a atender
   include_tasks: interior_ssh.yml
   vars:
@@ -139,11 +140,7 @@
     interior_escribe: false
     interior_falla: false
     interior_imprime: false
-    comando: >-
-      {{ ['/bin/sh', '-c',
-          "'for i in " ~ (range(1, 61) | join(' ')) ~ "; do"
-          ~ " ss -ltn | grep -q :" ~ netxms_puerto_api
-          ~ " && echo LISTO && exit 0; sleep 3; done; exit 1'"] }}
+    comando: "{{ netxms_puerto_api | netlabs_netxms_espera_cmd }}"
   when: netxms_registro_plan.reiniciar | bool
 
 - name: netxms · el servicio volvió, pero no atiende
