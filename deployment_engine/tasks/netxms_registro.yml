@@ -38,9 +38,15 @@
   no_log: true
 
 # --- medir la escucha (el valor dice lo escrito; esto, lo que pasa) ---------
-- name: netxms · el puerto en el que el entorno quiere los registros
+# Se mide el puerto **efectivo**: el declarado, o el que la vista ya tenga guardado. Medir el de
+# fábrica cuando el entorno no declara ninguno daría por apagada una escucha que sí está en pie
+# —el plan no escribe el puerto, así que el guardado es el que manda—, y el motor reiniciaría la
+# vista en cada pasada sin corregir nunca nada.
+- name: netxms · el puerto en el que la vista escucha los registros
   ansible.builtin.set_fact:
-    netxms_registro_puerto: "{{ env.observabilidad.registro.puerto | default(514) }}"
+    netxms_registro_puerto: >-
+      {{ env.observabilidad.registro | default({}) | netlabs_netxms_registro_puerto(
+           netxms_configs | default([], true)) }}
 
 # `ss -lun` sin más: el puerto se busca en la salida con una expresión, no con `grep` dentro de un
 # `sh -c` —cada capa de comillas es una trampa, y aquí sobran—. Si `ss` no está o falla, no se

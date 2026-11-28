@@ -1732,6 +1732,8 @@ NETXMS_RUTA_CONFIG = "/server-config/{}"
 # nombres son suyos, no del motor: cambiarlos es cambiar de versión de la vista.
 NETXMS_REGISTRO_ESCUCHA = "Syslog.EnableListener"
 NETXMS_REGISTRO_PUERTO = "Syslog.ListenPort"
+# El puerto en el que la vista escucha por defecto: el que trae el servicio sin que nadie lo cambie.
+NETXMS_REGISTRO_PUERTO_POR_DEFECTO = 514
 
 
 def netxms_configs_cmd(api: str) -> list:
@@ -1753,6 +1755,26 @@ def netxms_configs_cmd(api: str) -> list:
 def netxms_config_cmd(api: str, nombre: str) -> list:
     """Escribir una variable de configuración del servicio; el valor va en el cuerpo."""
     return netxms_cmd(api, NETXMS_RUTA_CONFIG.format(nombre), metodo="PUT")
+
+
+def netxms_registro_puerto(declarado: dict | None, actuales: list | None) -> int:
+    """El puerto en el que la vista escucha los registros: el declarado, o el que ya tiene.
+
+    El plan sólo escribe el puerto si el entorno lo declara, así que cuando no lo declara el
+    efectivo es el que la vista tenga guardado —y su defecto si no aparece—. Medir el de fábrica
+    cuando no hay ninguno declarado daría por apagada una escucha que sí está, y el motor
+    reiniciaría la vista en cada pasada sin corregir nunca la diferencia.
+    """
+    puerto = (declarado or {}).get("puerto")
+    if puerto is not None:
+        return int(puerto)
+    for variable in actuales or []:
+        if isinstance(variable, dict) and variable.get("name") == NETXMS_REGISTRO_PUERTO:
+            try:
+                return int(variable.get("value"))
+            except (TypeError, ValueError):
+                break
+    return NETXMS_REGISTRO_PUERTO_POR_DEFECTO
 
 
 def netxms_registro_ops(declarado: dict | None, actuales: list | None, api: str,
