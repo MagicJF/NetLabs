@@ -99,27 +99,49 @@
       (HTTP {{ ros_login_ok.status | default('sin respuesta') }}). El arranque no
       pudo ponerla y el motor no sigue por un camino que no puede autenticar.
 
+# Una lectura que falla —un HTTP 403, verbigracia— para el play. El `no_log` oculta el
+# cuerpo, que trae las claves de `/rest/snmp/community` y `/rest/user`, pero con él calla
+# también la ruta y el estado, y entonces el informe no dice qué lectura ni por qué. La
+# regla prohíbe la credencial, no la ruta: se envuelve en un bloque que, al fallar, rescata
+# y nombra ruta y estado HTTP —nunca el cuerpo— antes de volver a parar.
 - name: "RouterOS · leer el interior de {{ router.name }}"
-  ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_lectura.ruta }}"
-    method: GET
-    url_username: "{{ ros_user }}"
-    url_password: "{{ ros_clave }}"
-    force_basic_auth: true
-    status_code: [200]
-    timeout: 30
-  # El nombre del bucle no puede ser `item`: este fichero se incluye con un `item`
-  # del llamante y el bucle interno lo pisaría (el `router` se volvería una cadena).
-  loop: "{{ router | netlabs_ros_reads }}"
-  loop_control:
-    loop_var: ros_lectura
-    label: "{{ ros_lectura.ruta }}"
-  register: ros_lecturas
-  changed_when: false
-  # Lo leído incluye `/rest/snmp/community`, cuyas entradas v3 traen las claves; y `/rest/user`.
-  # Con `-v` la salida detallada imprimiría esos cuerpos y el lanzador los guardaría en logs/.
-  # Se calla la tarea entera —el diagnóstico de qué se leyó no aporta nada que no diga `effect`—.
-  no_log: true
+  block:
+    - name: "RouterOS · leer el interior de {{ router.name }}"
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_lectura.ruta }}"
+        method: GET
+        url_username: "{{ ros_user }}"
+        url_password: "{{ ros_clave }}"
+        force_basic_auth: true
+        status_code: [200]
+        timeout: 30
+      # El nombre del bucle no puede ser `item`: este fichero se incluye con un `item`
+      # del llamante y el bucle interno lo pisaría (el `router` se volvería una cadena).
+      loop: "{{ router | netlabs_ros_reads }}"
+      loop_control:
+        loop_var: ros_lectura
+        label: "{{ ros_lectura.ruta }}"
+      register: ros_lecturas
+      changed_when: false
+      # Lo leído incluye `/rest/snmp/community`, cuyas entradas v3 traen las claves; y `/rest/user`.
+      # Con `-v` la salida detallada imprimiría esos cuerpos y el lanzador los guardaría en logs/.
+      # Se calla la tarea entera —el diagnóstico de qué se leyó no aporta nada que no diga `effect`—.
+      no_log: true
+  rescue:
+    # Sin `no_log`: sólo se nombran la ruta y el estado de cada lectura fallida, jamás el campo
+    # de respuesta. Es el diagnóstico que la regla permite y que el `no_log` de arriba se llevaba.
+    - name: "RouterOS · decir qué lectura del interior de {{ router.name }} falló"
+      ansible.builtin.debug:
+        msg: >-
+          {{ router.name }} no contestó a alguna lectura del interior. Ruta y estado
+          HTTP de las que fallaron:
+          {{ ros_lecturas.results | rejectattr('status', 'equalto', 200)
+             | map(attribute='ros_lectura') | map(attribute='ruta') | list }} —
+          {{ ros_lecturas.results | rejectattr('status', 'equalto', 200)
+             | map(attribute='status') | list }}.
+    - name: "RouterOS · sin leer el interior de {{ router.name }} no se sigue"
+      ansible.builtin.fail:
+        msg: "{{ router.name }}: lectura del interior fallida; la ruta y el estado están arriba."
 
 - name: "RouterOS · ordenar lo leído"
   # Lo leído se ordena por la clave que trae cada lectura, no por el orden en que
@@ -225,24 +247,41 @@
 # escritura se perdió —o el borrado no llegó a ocurrir—, la diferencia seguirá ahí y
 # el apply se para con su nombre y apellidos en vez de decir que fue bien.
 - name: "RouterOS · releer el interior de {{ router.name }} tras escribir"
-  ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_lectura.ruta }}"
-    method: GET
-    url_username: "{{ ros_user }}"
-    url_password: "{{ ros_clave }}"
-    force_basic_auth: true
-    status_code: [200]
-    timeout: 30
-  loop: "{{ router | netlabs_ros_reads }}"
-  loop_control:
-    loop_var: ros_lectura
-    label: "{{ ros_lectura.ruta }}"
-  register: ros_relecturas
-  changed_when: false
-  # Como la primera lectura: lo releído trae los cuerpos de `/rest/snmp/community` y `/rest/user`,
-  # con sus claves. Sin `no_log`, la salida detallada con `-v` los imprimiría y el lanzador los
-  # guardaría en logs/.
-  no_log: true
+  block:
+    - name: "RouterOS · releer el interior de {{ router.name }} tras escribir"
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_lectura.ruta }}"
+        method: GET
+        url_username: "{{ ros_user }}"
+        url_password: "{{ ros_clave }}"
+        force_basic_auth: true
+        status_code: [200]
+        timeout: 30
+      loop: "{{ router | netlabs_ros_reads }}"
+      loop_control:
+        loop_var: ros_lectura
+        label: "{{ ros_lectura.ruta }}"
+      register: ros_relecturas
+      changed_when: false
+      # Como la primera lectura: lo releído trae los cuerpos de `/rest/snmp/community` y `/rest/user`,
+      # con sus claves. Sin `no_log`, la salida detallada con `-v` los imprimiría y el lanzador los
+      # guardaría en logs/.
+      no_log: true
+  rescue:
+    # Igual que en la primera lectura: `no_log` no puede llevarse por delante la ruta ni el estado
+    # de la relectura fallida. Se nombran los dos sin tocar el campo de respuesta y se vuelve a parar.
+    - name: "RouterOS · decir qué relectura del interior de {{ router.name }} falló"
+      ansible.builtin.debug:
+        msg: >-
+          {{ router.name }} no contestó a alguna relectura del interior. Ruta y estado
+          HTTP de las que fallaron:
+          {{ ros_relecturas.results | rejectattr('status', 'equalto', 200)
+             | map(attribute='ros_lectura') | map(attribute='ruta') | list }} —
+          {{ ros_relecturas.results | rejectattr('status', 'equalto', 200)
+             | map(attribute='status') | list }}.
+    - name: "RouterOS · sin releer el interior de {{ router.name }} no se da nada por bueno"
+      ansible.builtin.fail:
+        msg: "{{ router.name }}: relectura del interior fallida; la ruta y el estado están arriba."
 
 - name: "RouterOS · lo que se dijo y no quedó en {{ router.name }}"
   ansible.builtin.set_fact:
