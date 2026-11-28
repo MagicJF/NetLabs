@@ -59,7 +59,7 @@ salida:
 # Es una decisión del ENTORNO, no de un laboratorio: un sitio resuelve de una manera y un
 # laboratorio no elige con qué —igual que no elige la identidad SNMP con la que se le mira
 # (ADR 0019)—, así que se declara aquí una sola vez y los laboratorios sólo dicen si sus
-# sedes resuelven (`dns: {enabled}`, ADR 0023).
+# sedes resuelven (`dns: {enabled}`, ADR 0024).
 #
 # La dirección tiene que ser alcanzable desde la pata de salida de la sede: los routers
 # reenvían por ahí y el nodo Proxmox traduce ese espacio hacia su enlace público (ADR 0018),

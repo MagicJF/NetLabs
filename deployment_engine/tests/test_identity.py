@@ -1329,7 +1329,7 @@ class LaSalidaALaRedPublica(unittest.TestCase):
 
         Igual que la identidad SNMP (ADR 0019), un sitio no elige con qué resuelve: la
         dirección tiene que ser alcanzable por la salida de SU sede, y eso lo sabe el
-        entorno, no el laboratorio (ADR 0023). El laboratorio sólo dice si resuelve.
+        entorno, no el laboratorio (ADR 0024). El laboratorio sólo dice si resuelve.
         """
         lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
         next(n for n in lab["nodes"] if n["role"] == "rte1")["configure"]["dns"] = {
@@ -1355,7 +1355,7 @@ class LaSalidaALaRedPublica(unittest.TestCase):
         """`dns.servers` del entorno se comprueba donde está escrito: no vale cualquier cosa.
 
         Un resolutor mal escrito no se descubre al aplicar, sino aquí: la dirección a la
-        que los routers reenvían tiene que ser una dirección de verdad (ADR 0023).
+        que los routers reenvían tiene que ser una dirección de verdad (ADR 0024).
         """
         env = copy.deepcopy(entorno())
         env["dns"] = {"servers": ["uno"]}
@@ -1367,7 +1367,7 @@ class LaSalidaALaRedPublica(unittest.TestCase):
         """Un bloque `dns` vacío no resuelve nada: la lista tiene que traer una dirección.
 
         Sin al menos una dirección, los routers que resuelvan no tendrían a quién
-        preguntar y el fallo no se vería hasta que un puesto pidiera un nombre (ADR 0023).
+        preguntar y el fallo no se vería hasta que un puesto pidiera un nombre (ADR 0024).
         """
         env = copy.deepcopy(entorno())
         env["dns"] = {"servers": []}

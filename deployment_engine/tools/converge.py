@@ -167,7 +167,7 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
     entorno (`observabilidad.snmp`, ADR 0019), no el laboratorio: sólo lectura y
     restringido a la red de gestión en ambos casos.
 
-    DNS es igual (ADR 0023): el laboratorio declara `dns: {enabled}` y nada más, y el
+    DNS es igual (ADR 0024): el laboratorio declara `dns: {enabled}` y nada más, y el
     resolutor aguas arriba sale del entorno (`dns.servers`), que es quien conoce una
     dirección alcanzable desde la salida de cada sede.
     """
@@ -743,7 +743,7 @@ def _nat_ops(node: dict, declaradas: list, actuales: list) -> list[dict]:
 
 
 def _dns_ops(declarado: dict, actual: dict, entorno: dict | None) -> list[dict]:
-    """El resolutor del router: a quién pregunta y si atiende a los suyos (ADR 0023).
+    """El resolutor del router: a quién pregunta y si atiende a los suyos (ADR 0024).
 
     RouterOS no tiene un objeto por servidor: `/ip/dns` es un ajuste único, con la
     lista en una sola cadena separada por comas. El laboratorio sólo declara **si** sus
@@ -779,7 +779,7 @@ def _dns_ops(declarado: dict, actual: dict, entorno: dict | None) -> list[dict]:
 
 
 def _resuelve(node: dict) -> bool:
-    """¿El router resuelve para su red? Lo dice su área `dns` (ADR 0023)."""
+    """¿El router resuelve para su red? Lo dice su área `dns` (ADR 0024)."""
     return bool(((node.get("configure") or {}).get("dns") or {}).get("enabled"))
 
 
@@ -801,6 +801,7 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
         nombre = f"{PREFIX}{item['network']}"
         red = item.get("network")
         gateway = _gateway_served(node, red, item)
+        resolutor = _router_address(node, red)
         rango = str(item["pool"])
         deseados_pool.add(nombre)
         deseados_srv.add(nombre)
@@ -829,14 +830,14 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
 
         cidr = _network_cidr(node, red)
         # La red servida anuncia, además de la puerta, quién resuelve: si el router
-        # resuelve (ADR 0023) se anuncia a sí mismo, y los puestos lo aprenden por DHCP
+        # resuelve (ADR 0024) se anuncia a sí mismo, y los puestos lo aprenden por DHCP
         # sin que se toque nada dentro del invitado. Si no resuelve, no se anuncia —y se
         # retira un anuncio viejo— para no mandar a los puestos a un resolutor que no
         # atiende.
         anunciado = str(redes.get(cidr, {}).get("dns-server") or "").replace(" ", "")
         cuerpo_red = {"address": cidr, "gateway": gateway}
         if _resuelve(node):
-            cuerpo_red["dns-server"] = gateway
+            cuerpo_red["dns-server"] = resolutor
         if cidr not in redes:
             ops.append({"method": "PUT", "path": "/rest/ip/dhcp-server/network",
                         "body": cuerpo_red,
@@ -845,9 +846,13 @@ def _dhcp_ops(node: dict, declarados: list, current: dict) -> list[dict]:
             cambios = {}
             if redes[cidr].get("gateway") != gateway:
                 cambios["gateway"] = gateway
-            if _resuelve(node) and anunciado != gateway:
-                cambios["dns-server"] = gateway
-            elif not _resuelve(node) and anunciado == gateway:
+            if _resuelve(node) and anunciado != resolutor:
+                cambios["dns-server"] = resolutor
+            elif not _resuelve(node) and anunciado:
+                # Sin `dns` no hay resolutor que anunciar, y el anuncio viejo puede
+                # apuntar a la puerta anterior o a cualquier otra dirección: se retira
+                # mire lo que mire la puerta nueva. Comparar sólo con la puerta nueva
+                # dejaba el anuncio puesto justo cuando las dos cosas cambian a la vez.
                 cambios["dns-server"] = ""
             if cambios:
                 ops.append({"method": "PATCH", "path": f"/rest/ip/dhcp-server/network/{redes[cidr]['.id']}",
@@ -917,6 +922,21 @@ def _gateway_served(node: dict, network: str, item: dict) -> str:
     """
     if item.get("gateway"):
         return item["gateway"]
+    for pata in (node.get("configure") or {}).get("addresses") or []:
+        if pata.get("network") == network:
+            return str(ipaddress.ip_interface(pata["address"]).ip)
+    return _first_host(node, network)
+
+
+def _router_address(node: dict, network: str) -> str:
+    """La dirección del propio router en esa red: la que sirve el DHCP y resuelve.
+
+    La puerta anunciada puede ser de otro equipo —el laboratorio puede declarar un
+    `gateway` que no es el router—, pero el resolutor tiene que ser quien de verdad
+    atiende las peticiones: este router. Se usa su dirección declarada en esa red; si
+    no la declara, la primera del rango, que es donde el motor pone la pata cuando no
+    se le dice otra cosa.
+    """
     for pata in (node.get("configure") or {}).get("addresses") or []:
         if pata.get("network") == network:
             return str(ipaddress.ip_interface(pata["address"]).ip)

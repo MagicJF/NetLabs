@@ -266,7 +266,7 @@ def validate_observabilidad(env: dict) -> None:
 
 
 def validate_dns(env: dict) -> None:
-    """El bloque `dns` del entorno: con qué resuelve el sitio (ADR 0023).
+    """El bloque `dns` del entorno: con qué resuelve el sitio (ADR 0024).
 
     Igual que `observabilidad` (ADR 0019), no es de un laboratorio y por eso no lo valida
     `_validate_area`: se comprueba aquí, con el entorno delante, para que un error se lea
@@ -849,7 +849,7 @@ def _validate_area(role: str, area: str, body, networks: dict, salidas=None,
                 )
     elif area == "dns":
         # El laboratorio sólo dice si sus sedes resuelven; con qué resolutor lo hacen es
-        # del entorno (`dns.servers`, ADR 0023). Un laboratorio que eligiera su propio
+        # del entorno (`dns.servers`, ADR 0024). Un laboratorio que eligiera su propio
         # servidor DNS tendría a cada sede preguntando a un sitio distinto de lo que el
         # sitio declara, y la dirección tendría que ser alcanzable por la salida de esa
         # sede en concreto —una decisión que no es del laboratorio—.
@@ -860,7 +860,7 @@ def _validate_area(role: str, area: str, body, networks: dict, salidas=None,
             raise LabError(
                 f"el área 'dns' de {role!r} no entiende {', '.join(sorted(sobran))}: es "
                 "{enabled}. El resolutor aguas arriba vive en el entorno (`dns.servers`), "
-                "no en el laboratorio (ADR 0023)"
+                "no en el laboratorio (ADR 0024)"
             )
         if not isinstance(body.get("enabled"), bool):
             raise LabError(f"el área 'dns' de {role!r} declara 'enabled' sí o no")

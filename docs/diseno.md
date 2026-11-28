@@ -816,8 +816,9 @@ El área `dns` hace que el router de la sede **resuelva y reenvíe**: el laborat
 de salida de **esa** sede —una decisión del entorno, no del laboratorio—, igual que la identidad
 SNMP (ADR 0024). El motor deriva lo que no se declara: el router atiende a los suyos
 (`allow-remote-requests`) y su servidor DHCP **anuncia al propio router** como servidor DNS en la
-opción de la red servida. Así los puestos y servidores del laboratorio —que ya toman su dirección por
-DHCP— quedan resueltos solos: **nada se toca dentro del invitado**.
+opción de la red servida. Así los puestos —que toman su dirección por DHCP— quedan resueltos solos:
+**nada se toca dentro del invitado**. Los servidores declaran dirección estática y no pasan por el
+DHCP, así que este anuncio no les llega: su resolutor queda fuera de este cambio.
 
 El área que abre el laboratorio al plano de gestión (permitir el cruce desde la red de gestión
 hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.

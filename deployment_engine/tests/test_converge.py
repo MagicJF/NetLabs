@@ -2245,7 +2245,7 @@ class LaTraduccionDeLaSalida(unittest.TestCase):
         self.assertEqual(ops[1]["path"], "/rest/ip/firewall/nat/*1")
 
     def test_el_resolutor_se_escribe_solo_si_cambia(self):
-        """El resolutor sale del entorno y sólo se escribe cuando difiere (ADR 0023).
+        """El resolutor sale del entorno y sólo se escribe cuando difiere (ADR 0024).
 
         Lo que faltaba se escribe; lo que ya está —una segunda pasada con lo mismo que se
         acaba de escribir— no se vuelve a escribir: es la idempotencia que el `apply` promete.
@@ -2265,7 +2265,7 @@ class LaTraduccionDeLaSalida(unittest.TestCase):
         """Si el laboratorio resuelve y el entorno no declara `dns.servers`, es un fallo.
 
         Inventar una dirección sería mentir sobre con qué resuelve el sitio: el motor para
-        y lo dice en vez de dejar a los routers preguntando al vacío (ADR 0023).
+        y lo dice en vez de dejar a los routers preguntando al vacío (ADR 0024).
         """
         with self.assertRaises(converge.LabError) as ctx:
             converge._dns_ops({"enabled": True}, {}, None)
@@ -2278,7 +2278,7 @@ class ElResolutorQueDaLaRed(unittest.TestCase):
     Un puesto que aprende su dirección del router aprende también, en la opción de
     servidor DNS de la red servida, a quién preguntar. Es el router el que reenvía por la
     salida de la sede, así que el invitado queda resuelto sin escribirle nada dentro
-    (ADR 0023).
+    (ADR 0024).
     """
 
     @staticmethod
@@ -2305,7 +2305,7 @@ class ElResolutorQueDaLaRed(unittest.TestCase):
         """Sin `dns`, la red servida no anuncia servidor de nombres: no se inventa uno.
 
         Anunciar un resolutor que no atiende dejaría a los puestos preguntando al vacío;
-        el motor sólo lo anuncia cuando el router resuelve (ADR 0023).
+        el motor sólo lo anuncia cuando el router resuelve (ADR 0024).
         """
         nodo = self.nodo(resuelve=False)
         ops = converge._dhcp_ops(nodo, nodo["configure"]["dhcp_server"], {})
@@ -2321,6 +2321,47 @@ class ElResolutorQueDaLaRed(unittest.TestCase):
         actual = {"dhcp_networks": [
             {"address": "10.0.0.0/24", "gateway": "10.0.0.1", "dns-server": "10.0.0.1",
              ".id": "*1"}],
+            "dhcp_servers": [{"name": "netlabs-lan", "interface": "ether1",
+                              "address-pool": "netlabs-lan", ".id": "*2"}],
+            "pools": [{"name": "netlabs-lan", "ranges": "10.0.0.100-10.0.0.199", ".id": "*3"}]}
+        self.assertEqual(
+            converge._dhcp_ops(nodo, nodo["configure"]["dhcp_server"], actual), [])
+
+    def test_el_anuncio_es_la_direccion_del_router_y_no_la_puerta(self):
+        """El DHCP anuncia al router que resuelve, no a la puerta si es de otro equipo.
+
+        Con `gateway: 10.0.0.1` y el router en `10.0.0.2`, anunciar la puerta mandaría
+        a los puestos a preguntar a un equipo que no atiende DNS: el motor anuncia la
+        dirección del propio router en esa red.
+        """
+        nodo = self.nodo()
+        nodo["configure"]["addresses"] = [{"network": "lan", "address": "10.0.0.2/24"}]
+        nodo["configure"]["dhcp_server"][0]["gateway"] = "10.0.0.1"
+        ops = converge._dhcp_ops(nodo, nodo["configure"]["dhcp_server"], {})
+        red = next(o for o in ops if o["path"] == "/rest/ip/dhcp-server/network")
+        self.assertEqual(red["body"]["gateway"], "10.0.0.1")
+        self.assertEqual(red["body"]["dns-server"], "10.0.0.2")
+
+    def test_apagar_el_dns_retira_el_anuncio_aunque_cambie_la_puerta(self):
+        """Sin `dns`, el anuncio viejo se retira aunque la puerta nueva sea otra.
+
+        Comparar el anuncio sólo con la puerta nueva dejaba puesto un resolutor que ya
+        no responde cuando las dos cosas cambiaban en la misma declaración.
+        """
+        nodo = self.nodo(resuelve=False)
+        nodo["configure"]["dhcp_server"][0]["gateway"] = "10.0.0.2"
+        actual = {"dhcp_networks": [
+            {"address": "10.0.0.0/24", "gateway": "10.0.0.1", "dns-server": "10.0.0.1",
+             ".id": "*1"}]}
+        ops = converge._dhcp_ops(nodo, nodo["configure"]["dhcp_server"], actual)
+        red = next(o for o in ops if o["path"] == "/rest/ip/dhcp-server/network/*1")
+        self.assertEqual(red["body"], {"gateway": "10.0.0.2", "dns-server": ""})
+
+    def test_apagar_el_dns_sin_anuncio_previo_no_escribe_nada(self):
+        """Si no hay anuncio que retirar, apagar el DNS no produce ninguna escritura."""
+        nodo = self.nodo(resuelve=False)
+        actual = {"dhcp_networks": [
+            {"address": "10.0.0.0/24", "gateway": "10.0.0.1", ".id": "*1"}],
             "dhcp_servers": [{"name": "netlabs-lan", "interface": "ether1",
                               "address-pool": "netlabs-lan", ".id": "*2"}],
             "pools": [{"name": "netlabs-lan", "ranges": "10.0.0.100-10.0.0.199", ".id": "*3"}]}
