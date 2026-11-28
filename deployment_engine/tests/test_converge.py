@@ -1559,6 +1559,119 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertEqual(json.loads(converge.netxms_fichas_cuerpo(ids)), {"ids": [5, 7, 9]})
 
 
+class ElIconoQueLaVistaDibuja(unittest.TestCase):
+    """La imagen con la que la vista dibuja cada equipo, y de dónde sale ese dato.
+
+    Un servidor y un puesto de trabajo son los dos un `Node` de Linux y no tienen ninguna
+    capacidad SNMP que los separe, así que la vista, por sí sola, les pone el mismo dibujo
+    genérico; un router y un switch sí se separan porque sus capacidades son distintas. El
+    motor fija la imagen del objeto según el **tipo** del rol —no una lista de equipos de un
+    laboratorio— y la corrige con un `PATCH` en uno que ya estaba registrado sin ella. Es
+    capa pura: se prueba con un censo inventado, sin servicio.
+    """
+
+    API = "http://127.0.0.1:8000/v1"
+    SECRETS = {"routeros_clave": "s3cr3t", "linux_clave": "l1nux"}
+
+    def equipo(self, rol, tipo, direccion):
+        return {
+            "role": rol, "name": rol, "type": tipo,
+            "description": f"netlabs lab=b_prueba role={rol}",
+            "interfaces": [{"index": 0, "network": "ny", "address": direccion}],
+            "configure": {},
+        }
+
+    def test_un_servidor_y_un_puesto_llevan_imagenes_distintas(self):
+        # El problema de origen: los dos son `Node` de Linux y la vista les daba el mismo
+        # dibujo. El tipo del rol los separa.
+        servidor = converge.netxms_icono_de({"type": "server"})
+        puesto = converge.netxms_icono_de({"type": "workstation"})
+        self.assertNotEqual(servidor, puesto)
+
+    def test_cada_tipo_del_vocabulario_saca_su_imagen(self):
+        # Router y switch ya salían distintos por sus capacidades; los cuatro tipos del
+        # vocabulario de topología tienen, además, una imagen propia y declarada. Router y
+        # firewall comparten dibujo a propósito —la biblioteca no trae uno de cortafuegos—.
+        router = converge.netxms_icono_de({"type": "router"})
+        switch = converge.netxms_icono_de({"type": "switch"})
+        servidor = converge.netxms_icono_de({"type": "server"})
+        puesto = converge.netxms_icono_de({"type": "workstation"})
+        self.assertEqual(len({router, switch, servidor, puesto}), 4)
+        self.assertEqual(converge.netxms_icono_de({"type": "firewall"}), router)
+
+    def test_un_tipo_desconocido_cae_en_la_imagen_por_defecto(self):
+        # Un rol de un tipo que hoy no existe no puede dejar al equipo sin dibujar: cae en
+        # el nodo genérico, que es la imagen que la vista da a lo que no reconoce.
+        self.assertEqual(converge.netxms_icono_de({"type": "inventado"}),
+                         converge.NETXMS_ICONO_POR_DEFECTO)
+
+    def test_el_alta_lleva_la_imagen_del_tipo(self):
+        # La imagen va en el cuerpo del alta: es una propiedad del objeto, que es de donde
+        # la vista la lee, no del mapa.
+        plan = converge.netxms_ops([self.equipo("svs1", "server", "10.20.66.10/24")],
+                                   [], [], self.API, self.SECRETS)
+        cuerpo = json.loads(plan["ops"][0]["cuerpo"])
+        self.assertEqual(cuerpo["mapImage"], converge.netxms_icono_de({"type": "server"}))
+        self.assertNotEqual(cuerpo["mapImage"],
+                            converge.netxms_icono_de({"type": "workstation"}))
+
+    def test_un_equipo_ya_registrado_sin_imagen_se_corrige(self):
+        # Un servidor registrado antes de que el motor fijara la imagen sigue saliendo con
+        # el dibujo genérico. Su terminal está bien, así que la corrección no puede colgar
+        # de las credenciales: es un `PATCH` del objeto, aparte.
+        encontrados = [{"id": 494, "name": "svs1", "ipAddress": {"address": "10.20.66.10"}}]
+        detalles = [{"id": 494, "comments": "netlabs lab=b_prueba role=svs1",
+                     "sshLogin": "root", "sshPassword": "l1nux", "sshPort": 22,
+                     "mapImage": "00000000-0000-0000-0000-000000000000"}]
+        plan = converge.netxms_ops([self.equipo("svs1", "server", "10.20.66.10/24")],
+                                   encontrados, detalles, self.API, self.SECRETS)
+        self.assertEqual(plan["pendientes"], [])
+        self.assertEqual(len(plan["ops"]), 1)
+        op = plan["ops"][0]
+        self.assertEqual(op["cmd"], converge.netxms_imagen_cmd(self.API, 494))
+        self.assertIn(f"{self.API}/objects/494", op["cmd"][2])
+        self.assertEqual(json.loads(op["cuerpo"]),
+                         {"mapImage": converge.netxms_icono_de({"type": "server"})})
+
+    def test_un_equipo_que_ya_lleva_su_imagen_no_escribe(self):
+        # Idempotencia: con la imagen ya puesta, el segundo `apply` no escribe. La ficha
+        # lleva la marca de este laboratorio —si no, el equipo no constaría como suyo y el
+        # motor ni lo miraría—.
+        encontrados = [{"id": 7, "name": "rte1", "ipAddress": {"address": "10.30.0.101"}}]
+        detalles = [{"id": 7, "comments": "netlabs lab=b_prueba role=rte1",
+                     "sshLogin": "admin", "sshPassword": "s3cr3t", "sshPort": 22,
+                     "mapImage": converge.netxms_icono_de({"type": "router"})}]
+        plan = converge.netxms_ops([self.equipo("rte1", "router", "10.30.0.101")],
+                                   encontrados, detalles, self.API, self.SECRETS)
+        self.assertEqual(plan["ops"], [])
+        self.assertEqual(plan["pendientes"], [])
+
+    def test_a_un_equipo_sin_la_marca_no_se_le_cambia_la_imagen(self):
+        # La marca del comentario es la prueba de propiedad, la misma que gobierna el
+        # borrado: un objeto con el nombre y la dirección de un equipo pero sin la marca no
+        # consta que sea de este laboratorio, así que no se le toca ni el dibujo.
+        encontrados = [{"id": 494, "name": "svs1", "ipAddress": {"address": "10.20.66.10"}}]
+        detalles = [{"id": 494, "sshLogin": "root", "sshPassword": "l1nux", "sshPort": 22,
+                     "mapImage": "00000000-0000-0000-0000-000000000000"}]
+        plan = converge.netxms_ops([self.equipo("svs1", "server", "10.20.66.10/24")],
+                                   encontrados, detalles, self.API, self.SECRETS)
+        self.assertEqual(plan["ops"], [])
+
+    def test_un_equipo_que_se_rehace_recibe_su_imagen_en_el_alta(self):
+        # Un nodo final con otras credenciales se retira y se vuelve a dar de alta: la
+        # imagen la recibe el objeto nuevo, en el cuerpo del alta, y no se intenta corregir
+        # —un `PATCH`— el que se va a borrar.
+        encontrados = [{"id": 494, "name": "svs1", "ipAddress": {"address": "10.20.66.10"}}]
+        detalles = [{"id": 494, "comments": "netlabs lab=b_prueba role=svs1",
+                     "sshLogin": "", "sshPassword": "", "sshPort": 22}]
+        plan = converge.netxms_ops([self.equipo("svs1", "server", "10.20.66.10/24")],
+                                   encontrados, detalles, self.API, self.SECRETS)
+        efectos = [o["effect"].split()[0] for o in plan["ops"]]
+        self.assertEqual(efectos, ["rehacer", "registrar"])
+        self.assertEqual(json.loads(plan["ops"][1]["cuerpo"])["mapImage"],
+                         converge.netxms_icono_de({"type": "server"}))
+
+
 class ElMapaAtaCadaCableASuInterfaz(unittest.TestCase):
     """El otro extremo del cable: la interfaz por la que sale cada punta.
 
@@ -2072,6 +2185,10 @@ class LaIdentidadConLaQueSondeaLaVista(unittest.TestCase):
             "id": id_objeto, "name": role, "ipAddress": {"address": address},
             "sshLogin": "admin", "sshPassword": "s3cr3t", "sshPort": 22,
             "comments": f"netlabs lab=b_prueba role={role}",
+            # La imagen que el motor ya le puso al equipo (es un router): sin esto, la ficha
+            # describiría un equipo que aún no lleva su imagen y la corrección saldría como
+            # una escritura de más que estas pruebas —de la identidad de sondeo— no esperan.
+            "mapImage": converge.netxms_icono_de({"type": "router"}),
             "snmp": dict(snmp if snmp is not None else self.PUESTO),
         }, **extra)
 
