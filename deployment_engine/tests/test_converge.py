@@ -1354,6 +1354,20 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertIn("-H @/dev/fd/3", cmd[2])
         self.assertIn("/objects/7", cmd[2])
 
+    def test_la_lectura_de_la_configuracion_lleva_el_testigo_leido_de_la_entrada(self):
+        """`netxms_configs_cmd` arma su cabecera como las demás: el testigo va en `$t`, no fijo.
+
+        Si en su sitio queda un texto literal, el API rechaza la lectura, `--fail-with-body` la
+        cuenta como fallo y el `apply` se para antes de dejar puesta la escucha de registros.
+        """
+        cmd = converge.netxms_configs_cmd(self.API)
+        self.assertEqual(cmd[:2], ["sh", "-c"])
+        self.assertIn("IFS= read -r t", cmd[2])
+        self.assertIn("$t", cmd[2])
+        self.assertNotIn("***", cmd[2])
+        self.assertIn("-H @/dev/fd/3", cmd[2])
+        self.assertIn("/server-config", cmd[2])
+
     def test_el_censo_pregunta_solo_por_equipos(self):
         self.assertEqual(json.loads(converge.netxms_censo_cuerpo()), {"class": ["Node"]})
 

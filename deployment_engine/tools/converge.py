@@ -1737,7 +1737,7 @@ def netxms_configs_cmd(api: str) -> list:
     """
     return _sh(
         "IFS= read -r t; exec 3<<EOF\n"
-        "Authorization: Bearer ***"
+        "Authorization: Bearer $t\n"
         "EOF\n"
         f"curl -sS {NETXMS_TOPE} --fail-with-body -X GET -H @/dev/fd/3 "
         f"{api}{NETXMS_RUTA_CONFIGS}"
