@@ -559,6 +559,13 @@ class LaObservabilidadDelRouter(unittest.TestCase):
         self.assertEqual([(o["method"], o["body"]) for o in ops],
                          [("POST", {"enabled": "no"})])
 
+    def test_apagar_snmp_no_exige_la_credencial(self):
+        """Apagar el servicio no necesita la identidad: retirarla o dejarla a medias no lo impide."""
+        ops = converge.ros_ops(self.nodo({"enabled": False}), self.actual(enabled="true"),
+                               "clave", {}, self.CIDR, self.OBS)
+        self.assertEqual([(o["method"], o["body"]) for o in ops],
+                         [("POST", {"enabled": "no"})])
+
     def test_sin_red_de_gestion_no_se_inventa_una_comunidad_abierta(self):
         with self.assertRaisesRegex(converge.LabError, "red de gestión"):
             converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave", self.SECRETOS, None, self.OBS)
@@ -2106,6 +2113,14 @@ class LaIdentidadConLaQueSondeaLaVista(unittest.TestCase):
     def test_un_equipo_sin_el_area_ya_registrado_no_se_toca(self):
         self.assertEqual(self.plan([self.equipo(area=None)], censo=self.censo(),
                                    fichas=[self.ficha()])["ops"], [])
+
+    def test_un_laboratorio_sin_snmp_no_exige_la_identidad(self):
+        """Si ningún equipo enciende SNMP, la credencial de sondeo no hace falta: no se resuelve."""
+        equipo = self.equipo(area={"enabled": False})
+        sin_v3 = {"routeros_clave": "s3cr3t"}  # la credencial de sondeo no está: no se usa
+        op = converge.netxms_ops([equipo], [], [], self.API, sin_v3,
+                                 observabilidad=self.OBS)["ops"][0]
+        self.assertNotIn("snmp", json.loads(op["cuerpo"]))
 
     def test_sin_identidad_declarada_en_el_entorno_no_se_toca_el_sondeo(self):
         op = converge.netxms_ops([self.equipo()], [], [], self.API, self.SECRETS,

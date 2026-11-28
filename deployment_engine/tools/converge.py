@@ -188,8 +188,14 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
 
     area_snmp = configure.get("snmp")
     if area_snmp is not None:
+        # La identidad con la que se mira sólo se resuelve si el área pide encenderla: apagar el
+        # servicio no necesita credencial —una retirada o a medias no puede impedir apagarlo—, y
+        # resolverla antes dejaría SNMP encendido por un secreto que no hace falta para dejarlo
+        # como el laboratorio dice.
+        identidad = (observabilidad_de(observabilidad, secrets)
+                     if area_snmp.get("enabled") else None)
         ops += _snmp_ops(current.get("snmp") or {}, current.get("snmp_community") or [],
-                         area_snmp, observabilidad_de(observabilidad, secrets), mgmt_cidr)
+                         area_snmp, identidad, mgmt_cidr)
 
     if "services" in configure:
         servicios = {s.get("name"): s for s in current.get("services") or []}
@@ -1898,6 +1904,18 @@ def linux_clave(_node: dict, secrets: dict | None = None) -> str:
     return valor
 
 
+def _la_vista_sondea(node: dict) -> bool:
+    """Si la vista mira a este equipo por SNMP: un equipo de red que enciende el área.
+
+    Un puesto no habla SNMP —su salud va por ICMP— y un equipo sin el área no tiene el servicio
+    encendido, así que la vista no tiene qué sondear en ninguno de los dos. Sin ninguno, el motor
+    no resuelve la identidad de sondeo: no hace falta.
+    """
+    if node.get("type") in ("server", "workstation"):
+        return False
+    return bool(((node.get("configure") or {}).get("snmp") or {}).get("enabled"))
+
+
 def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | None,
                api: str, secrets: dict | None = None,
                puerto: int = NETXMS_PUERTO_SSH, vivas: list | None = None,
@@ -2037,7 +2055,11 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
 
     altas: list[dict] = []
     identidades: list[dict] = []
-    de_la_vista = _identidad_para_la_vista(observabilidad_de(observabilidad, secrets))
+    # La identidad de sondeo sólo se resuelve si algún equipo la pide: un laboratorio sin SNMP
+    # no exige la credencial —no hay nada que sondear—, y resolverla antes hacía que faltara un
+    # secreto que nadie iba a usar.
+    de_la_vista = (_identidad_para_la_vista(observabilidad_de(observabilidad, secrets))
+                   if any(_la_vista_sondea(n) for n in nodes or []) else None)
     for node, _candidatos, objeto in equipos:
         direccion = _direccion_de(node)
         nombre = node.get("name") or node.get("role")
@@ -2053,8 +2075,7 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
         # en el equipo (ver `_snmp_ops`), así que tampoco tiene sentido decirle a la vista
         # que lo sondee; y un nodo final no habla SNMP —su salud se mira por ICMP—, así
         # que la identidad es de los equipos de red.
-        area_snmp = (node.get("configure") or {}).get("snmp") or {}
-        grupo = de_la_vista if (area_snmp.get("enabled") and not es_final) else None
+        grupo = de_la_vista if _la_vista_sondea(node) else None
         # Un nodo final que ya está registrado sin credenciales (o con otras) no se
         # puede arreglar con PATCH: el API de esta versión las ignora. Se rehace una
         # vez —se retira y se vuelve a dar de alta— para que su terminal abra sola;
