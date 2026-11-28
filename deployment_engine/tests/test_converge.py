@@ -559,6 +559,13 @@ class LaObservabilidadDelRouter(unittest.TestCase):
         self.assertEqual([(o["method"], o["body"]) for o in ops],
                          [("POST", {"enabled": "no"})])
 
+    def test_apagar_snmp_no_exige_la_credencial(self):
+        """Apagar el servicio no necesita la identidad: retirarla o dejarla a medias no lo impide."""
+        ops = converge.ros_ops(self.nodo({"enabled": False}), self.actual(enabled="true"),
+                               "clave", {}, self.CIDR, self.OBS)
+        self.assertEqual([(o["method"], o["body"]) for o in ops],
+                         [("POST", {"enabled": "no"})])
+
     def test_sin_red_de_gestion_no_se_inventa_una_comunidad_abierta(self):
         with self.assertRaisesRegex(converge.LabError, "red de gestión"):
             converge.ros_ops(self.nodo(self.AREA), self.actual(), "clave", self.SECRETOS, None, self.OBS)
@@ -1366,6 +1373,20 @@ class ElRegistroEnLaVista(unittest.TestCase):
         self.assertIn("-H @/dev/fd/3", cmd[2])
         self.assertIn("/objects/7", cmd[2])
 
+    def test_la_lectura_de_la_configuracion_lleva_el_testigo_leido_de_la_entrada(self):
+        """`netxms_configs_cmd` arma su cabecera como las demás: el testigo va en `$t`, no fijo.
+
+        Si en su sitio queda un texto literal, el API rechaza la lectura, `--fail-with-body` la
+        cuenta como fallo y el `apply` se para antes de dejar puesta la escucha de registros.
+        """
+        cmd = converge.netxms_configs_cmd(self.API)
+        self.assertEqual(cmd[:2], ["sh", "-c"])
+        self.assertIn("IFS= read -r t", cmd[2])
+        self.assertIn("$t", cmd[2])
+        self.assertNotIn("***", cmd[2])
+        self.assertIn("-H @/dev/fd/3", cmd[2])
+        self.assertIn("/server-config", cmd[2])
+
     def test_el_censo_pregunta_solo_por_equipos(self):
         self.assertEqual(json.loads(converge.netxms_censo_cuerpo()), {"class": ["Node"]})
 
@@ -2105,6 +2126,14 @@ class LaIdentidadConLaQueSondeaLaVista(unittest.TestCase):
         self.assertEqual(self.plan([self.equipo(area=None)], censo=self.censo(),
                                    fichas=[self.ficha()])["ops"], [])
 
+    def test_un_laboratorio_sin_snmp_no_exige_la_identidad(self):
+        """Si ningún equipo enciende SNMP, la credencial de sondeo no hace falta: no se resuelve."""
+        equipo = self.equipo(area={"enabled": False})
+        sin_v3 = {"routeros_clave": "s3cr3t"}  # la credencial de sondeo no está: no se usa
+        op = converge.netxms_ops([equipo], [], [], self.API, sin_v3,
+                                 observabilidad=self.OBS)["ops"][0]
+        self.assertNotIn("snmp", json.loads(op["cuerpo"]))
+
     def test_sin_identidad_declarada_en_el_entorno_no_se_toca_el_sondeo(self):
         op = converge.netxms_ops([self.equipo()], [], [], self.API, self.SECRETS,
                                  observabilidad={})["ops"][0]
@@ -2226,6 +2255,120 @@ class LaTraduccionDeLaSalida(unittest.TestCase):
         self.assertEqual(ops[0]["body"], {"allow-remote-requests": "yes"})
         self.assertEqual(converge._dns_ops({"allow_remote_requests": True},
                                            {"allow-remote-requests": "true"}), [])
+
+
+class LaEscuchaDeLosRegistros(unittest.TestCase):
+    """La vista escucha los registros de los equipos, y sólo se toca lo que cambió.
+
+    La variable que lo enciende se lee con el resto de la configuración del servicio, y cada
+    variable dice si su cambio exige reiniciarlo: el motor no lleva su propia lista de nombres
+    que reinician, se lo pregunta a quien lo sabe (ADR 0021).
+    """
+
+    API = "http://127.0.0.1:8000/v1"
+    DECLARADO = {"recoger": True, "puerto": 514}
+
+    @staticmethod
+    def configs(escucha="0", puerto="514", reinicio=True):
+        return [{"name": "Syslog.EnableListener", "value": escucha, "needServerRestart": reinicio},
+                {"name": "Syslog.ListenPort", "value": puerto, "needServerRestart": reinicio}]
+
+    def plan(self, declarado=None, actuales=None, escuchando=None):
+        return converge.netxms_registro_ops(
+            self.DECLARADO if declarado is None else declarado, actuales, self.API, escuchando)
+
+    def test_una_escucha_apagada_se_enciende_y_pide_reinicio(self):
+        plan = self.plan(actuales=self.configs(escucha="0"))
+        self.assertEqual([o["effect"] for o in plan["ops"]],
+                         ["que la vista escuche los registros de los equipos"])
+        self.assertEqual(json.loads(plan["ops"][0]["cuerpo"]), {"value": "1"})
+        self.assertIn("/server-config/Syslog.EnableListener", " ".join(plan["ops"][0]["cmd"]))
+        self.assertIn("PUT", " ".join(plan["ops"][0]["cmd"]))
+        self.assertTrue(plan["reiniciar"])
+
+    def test_una_escucha_ya_encendida_no_produce_ni_llamada_ni_reinicio(self):
+        plan = self.plan(actuales=self.configs(escucha="1"))
+        self.assertEqual(plan["ops"], [])
+        self.assertFalse(plan["reiniciar"])
+
+    def test_el_valor_correcto_con_la_escucha_apagada_reinicia(self):
+        """El agujero que se midió: escribir el valor y cortarse antes de reiniciar.
+
+        La vista no tiene ningún campo que diga «esto está escrito y todavía no en vigor», así que
+        el valor correcto no demuestra nada: manda que haya alguien escuchando el puerto. Sin esto,
+        la pasada siguiente vería el valor correcto y no reiniciaría jamás.
+        """
+        plan = self.plan(actuales=self.configs(escucha="1"), escuchando=False)
+        self.assertEqual(plan["ops"], [])
+        self.assertTrue(plan["reiniciar"])
+
+    def test_el_valor_correcto_con_la_escucha_en_pie_no_toca_nada(self):
+        plan = self.plan(actuales=self.configs(escucha="1"), escuchando=True)
+        self.assertEqual(plan["ops"], [])
+        self.assertFalse(plan["reiniciar"])
+
+    def test_sin_poder_medir_la_escucha_no_se_reinicia_a_ciegas(self):
+        """Un `ss` que no está o que falla no es excusa para reiniciar el servicio en cada pasada."""
+        plan = self.plan(actuales=self.configs(escucha="1"), escuchando=None)
+        self.assertEqual(plan["ops"], [])
+        self.assertFalse(plan["reiniciar"])
+
+    def test_apagada_y_sin_escucha_no_reinicia_por_la_medida(self):
+        """La medida sólo empuja a reiniciar cuando el entorno pidió escuchar, no cuando pidió callar."""
+        plan = self.plan(declarado={"recoger": False}, actuales=self.configs(escucha="0"),
+                         escuchando=False)
+        self.assertEqual(plan["ops"], [])
+        self.assertFalse(plan["reiniciar"])
+
+    def test_el_puerto_efectivo_es_el_declarado(self):
+        """Con puerto declarado se mide ese: es el que el plan escribe, y el que la vista usará."""
+        self.assertEqual(
+            converge.netxms_registro_puerto({"puerto": 1514}, self.configs()), 1514)
+
+    def test_sin_puerto_declarado_se_mide_el_que_la_vista_tiene(self):
+        """Sin declararlo, el efectivo es el guardado: medir el de fábrica daría por apagada una escucha que sí está."""
+        self.assertEqual(
+            converge.netxms_registro_puerto({}, self.configs(puerto="1514")), 1514)
+
+    def test_sin_puerto_ni_guardado_se_mide_el_de_la_vista(self):
+        self.assertEqual(converge.netxms_registro_puerto({}, []), 514)
+
+    def test_un_puerto_guardado_ilegible_no_tumba_el_apply(self):
+        """Un valor que no es un puerto no puede reventar la medida: se cae al de la vista."""
+        self.assertEqual(
+            converge.netxms_registro_puerto({}, self.configs(puerto="no")), 514)
+
+    def test_un_puerto_distinto_se_corrige(self):
+        plan = self.plan(actuales=self.configs(escucha="1", puerto="1514"))
+        self.assertEqual(json.loads(plan["ops"][0]["cuerpo"]), {"value": "514"})
+        self.assertIn("Syslog.ListenPort", " ".join(plan["ops"][0]["cmd"]))
+
+    def test_una_variable_que_no_exige_reinicio_no_reinicia(self):
+        plan = self.plan(actuales=self.configs(escucha="0", reinicio=False))
+        self.assertEqual(len(plan["ops"]), 1)
+        self.assertFalse(plan["reiniciar"])
+
+    def test_una_variable_que_no_se_pudo_leer_se_reinicia_por_si_acaso(self):
+        """Ante la duda, que el cambio surta efecto: creer encendido lo que está apagado engaña."""
+        plan = self.plan(actuales=[])
+        self.assertEqual(len(plan["ops"]), 2)
+        self.assertTrue(plan["reiniciar"])
+
+    def test_apagarla_tambien_es_converger(self):
+        plan = self.plan(declarado={"recoger": False}, actuales=self.configs(escucha="1"))
+        self.assertEqual(json.loads(plan["ops"][0]["cuerpo"]), {"value": "0"})
+        self.assertIn("deje de escuchar", plan["ops"][0]["effect"])
+
+    def test_sin_declaracion_no_se_toca_nada(self):
+        self.assertEqual(self.plan(declarado={}, actuales=self.configs()),
+                         {"ops": [], "reiniciar": False})
+
+    def test_el_reinicio_dice_que_cambio(self):
+        # La unidad es la que el sitio instala y administra (`a_bootstrap`), no un alias que
+        # el paquete pueda no traer: reiniciar otra deja el cambio guardado sin entrar en vigor.
+        cmd = " ".join(converge.netxms_reinicio_cmd())
+        self.assertIn("systemctl restart netxms-server", cmd)
+        self.assertIn("CAMBIO:1", cmd)
 
 
 if __name__ == "__main__":

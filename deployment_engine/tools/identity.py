@@ -191,6 +191,34 @@ def tunnel_port(vmid: int) -> int:
 # Validación de la declaración
 # ---------------------------------------------------------------------------
 
+def _validate_registro(registro: dict) -> None:
+    """El bloque `observabilidad.registro`: si la vista escucha los registros de los equipos.
+
+    Se enciende una sola vez, para todo el sitio: el laboratorio no lo declara —un equipo no
+    elige quién le escucha—, igual que no elige con qué identidad se le sondea (ADR 0019).
+    """
+    if not isinstance(registro, dict):
+        raise LabError("'observabilidad.registro' tiene que ser un mapa")
+    sobran = set(registro) - {"recoger", "puerto"}
+    if sobran:
+        raise LabError(
+            f"'observabilidad.registro' no entiende {', '.join(sorted(sobran))}: es "
+            "{recoger, puerto}"
+        )
+    if "recoger" in registro and not isinstance(registro["recoger"], bool):
+        raise LabError(
+            f"'observabilidad.registro.recoger' es verdadero o falso; dice {registro['recoger']!r}"
+        )
+    puerto = registro.get("puerto")
+    # Un booleano también es `int` en Python, así que `puerto: true` pasaría el rango y viajaría
+    # al API como `"True"`: se rechaza antes de llamarlo, como el vmid.
+    if puerto is not None and not (
+            isinstance(puerto, int) and not isinstance(puerto, bool) and 1 <= puerto <= 65535):
+        raise LabError(
+            f"'observabilidad.registro.puerto' es un puerto (1-65535); dice {puerto!r}"
+        )
+
+
 def validate_observabilidad(env: dict) -> None:
     """El bloque `observabilidad` del entorno: cómo se mira a los equipos (ADR 0019).
 
@@ -203,11 +231,15 @@ def validate_observabilidad(env: dict) -> None:
         return
     if not isinstance(bloque, dict):
         raise LabError("'observabilidad' del entorno tiene que ser un mapa")
-    sobran = set(bloque) - {"snmp"}
+    sobran = set(bloque) - {"snmp", "registro"}
     if sobran:
         raise LabError(
-            f"'observabilidad' del entorno no entiende {', '.join(sorted(sobran))}: es {{snmp}}"
+            f"'observabilidad' del entorno no entiende {', '.join(sorted(sobran))}: es "
+            "{snmp, registro}"
         )
+    registro = bloque.get("registro")
+    if registro is not None:
+        _validate_registro(registro)
     snmp = bloque.get("snmp")
     if snmp is None:
         return
@@ -1089,6 +1121,27 @@ def _rutas(lab: dict, nodes: list[dict]) -> list[dict]:
     return rutas
 
 
+def _misma_mascara(declarada: str | None, puesta: str | None) -> bool:
+    """Si las dos máscaras dicen lo mismo, aunque se escriban distinto.
+
+    La API del nodo **devuelve** la máscara de un puente como longitud de prefijo («24») pero
+    **acepta** —y el plano declara— la forma punteada («255.255.255.0»): compararlas tal cual da
+    por cambiado un puente que ya está como debe, y el motor pediría el mismo cambio en cada
+    pasada para siempre. Medido: así estaba, y por eso el `apply` intentaba «cambiar el tramo» de
+    una salida que ya estaba bien. Se comparan por lo que significan, no por cómo se escriben.
+    """
+    def ancho(valor: str | None) -> int | None:
+        texto = str(valor or "").strip()
+        if not texto:
+            return None
+        try:
+            return (ipaddress.ip_network(f"0.0.0.0/{texto}").prefixlen
+                    if "." in texto else int(texto))
+        except ValueError:
+            return None
+    return ancho(declarada) == ancho(puesta)
+
+
 def plan(world: dict, lab: dict, env: dict) -> dict:
     """Calcula qué hay que hacer, sin tocar el mundo.
 
@@ -1230,10 +1283,12 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         # Se comparan dirección Y máscara: un puente al que le quitaron la dirección o
         # le cambiaron la máscara es una salida rota, y el plan tiene que repararla.
         # El comentario del fichero del nodo lleva su salto de línea al final: se
-        # compara por contención, igual que la marca de un cable.
+        # compara por contención, igual que la marca de un cable. La máscara se compara
+        # por lo que significa: la API la devuelve como longitud y el plano la declara
+        # punteada, y tal cual daría por cambiado un puente que ya está bien.
         if (comment not in (exists.get("comments") or "")
                 or (exists.get("address") or "") != salida["address"]
-                or (exists.get("netmask") or "") != salida["netmask"]):
+                or not _misma_mascara(salida["netmask"], exists.get("netmask"))):
             steps.append({"op": "bridge_set", "bridge": bridge, "comment": comment,
                           "address": salida["address"], "netmask": salida["netmask"]})
             effects.append(f"la salida {bridge} pasa a {salida['address']}/{salida['netmask']}")

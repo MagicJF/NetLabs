@@ -94,7 +94,10 @@
       vars:
         pve_method: PUT
         pve_path: "/nodes/{{ env.proxmox.node }}/network/{{ item.bridge }}"
-        pve_body: {comments: "{{ item.comment }}", address: "{{ item.address }}",
+        # `type` no es opcional al cambiar una red, aunque la ruta ya diga cuál es el
+        # puente: sin él la API contesta 400 «property is missing and it is not optional»
+        # (medido). Un puente se cambia diciendo que es un puente.
+        pve_body: {type: bridge, comments: "{{ item.comment }}", address: "{{ item.address }}",
                    netmask: "{{ item.netmask }}"}
         pve_do: "cambiar el tramo de {{ item.bridge }}"
         pve_status: [200]
@@ -364,6 +367,17 @@
         objetivo: "{{ linux_nodo.mgmt_address }}"
         linux_descripcion: "{{ linux_nodo.name }}"
       when: linux_nodo.configure | default({}) | length > 0
+
+    # --- la escucha de registros en la vista -------------------------------
+    # Lo último que toca la vista, y **después del interior del control** a propósito: en una
+    # instalación nueva es ese interior quien instala el servicio (`a_bootstrap`), enciende su API
+    # e inicializa sus credenciales; entrar antes no encuentra a quién hablar y el despliegue se
+    # para sin llegar a instalarlo. Y como escribir la escucha reinicia el servicio, va cuando ya
+    # no queda nada más hablándole. Sólo se escribe la diferencia; el reinicio lo pide la propia
+    # variable, y el efecto —el puerto a la escucha— cierra un reintento que se interrumpió.
+    - name: apply · la vista escucha los registros de los equipos
+      include_tasks: ../tasks/netxms_registro.yml
+      when: env.observabilidad.registro | default({}) | length > 0
 
     # --- el cruce ---------------------------------------------------------
     # Y se comprueba: una ruta puesta no es una red alcanzable. Si el router no

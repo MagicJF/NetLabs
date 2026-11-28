@@ -188,6 +188,10 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
 
     area_snmp = configure.get("snmp")
     if area_snmp is not None:
+        # La identidad con la que se mira no se resuelve aquí: `_snmp_ops` la pide sólo si el
+        # área enciende el servicio. Apagar SNMP no necesita credencial —una retirada o a medias
+        # no puede impedir apagarlo—, y resolverla antes dejaría el servicio encendido por un
+        # secreto que no hace falta para dejarlo como el laboratorio dice.
         ops += _snmp_ops(current.get("snmp") or {}, current.get("snmp_community") or [],
                          area_snmp, observabilidad, secrets, mgmt_cidr)
 
@@ -1721,6 +1725,129 @@ def netxms_snmp_cmd(api: str, id_objeto) -> list:
     return netxms_cmd(api, NETXMS_RUTA_SNMP.format(int(id_objeto)), metodo="PATCH")
 
 
+# La configuración del propio servicio de la vista: `GET`/`PUT /server-config/{nombre}`. No es
+# un objeto del inventario sino una variable del servicio, y el API las trata como al resto: una
+# lectura y una escritura por nombre. Medido en la instalación: la lectura devuelve, además del
+# valor, si el cambio exige reiniciar el servicio (`needServerRestart`), así que el motor no
+# adivina cuándo hay que reiniciar — se lo pregunta a quien lo sabe.
+NETXMS_RUTA_CONFIGS = "/server-config"
+NETXMS_RUTA_CONFIG = "/server-config/{}"
+
+# Cómo se llama en el servicio lo que enciende la escucha de registros y dónde escucha. Los
+# nombres son suyos, no del motor: cambiarlos es cambiar de versión de la vista.
+NETXMS_REGISTRO_ESCUCHA = "Syslog.EnableListener"
+NETXMS_REGISTRO_PUERTO = "Syslog.ListenPort"
+# El puerto en el que la vista escucha por defecto: el que trae el servicio sin que nadie lo cambie.
+NETXMS_REGISTRO_PUERTO_POR_DEFECTO = 514
+
+
+def netxms_configs_cmd(api: str) -> list:
+    """Todas las variables de configuración visibles del servicio, de una vez.
+
+    Una sola lectura en vez de una por variable: el servicio las devuelve juntas y el motor
+    decide con esa foto si hay algo que escribir. Sin cuerpo —es una lectura—, y con el
+    testigo por el descriptor de siempre para que no se vea en la línea de órdenes.
+    """
+    return _sh(
+        "IFS= read -r t; exec 3<<EOF\n"
+        "Authorization: Bearer $t\n"
+        "EOF\n"
+        f"curl -sS {NETXMS_TOPE} --fail-with-body -X GET -H @/dev/fd/3 "
+        f"{api}{NETXMS_RUTA_CONFIGS}"
+    )
+
+
+def netxms_config_cmd(api: str, nombre: str) -> list:
+    """Escribir una variable de configuración del servicio; el valor va en el cuerpo."""
+    return netxms_cmd(api, NETXMS_RUTA_CONFIG.format(nombre), metodo="PUT")
+
+
+def netxms_registro_puerto(declarado: dict | None, actuales: list | None) -> int:
+    """El puerto en el que la vista escucha los registros: el declarado, o el que ya tiene.
+
+    El plan sólo escribe el puerto si el entorno lo declara, así que cuando no lo declara el
+    efectivo es el que la vista tenga guardado —y su defecto si no aparece—. Medir el de fábrica
+    cuando no hay ninguno declarado daría por apagada una escucha que sí está, y el motor
+    reiniciaría la vista en cada pasada sin corregir nunca la diferencia.
+    """
+    puerto = (declarado or {}).get("puerto")
+    if puerto is not None:
+        return int(puerto)
+    for variable in actuales or []:
+        if isinstance(variable, dict) and variable.get("name") == NETXMS_REGISTRO_PUERTO:
+            try:
+                return int(variable.get("value"))
+            except (TypeError, ValueError):
+                break
+    return NETXMS_REGISTRO_PUERTO_POR_DEFECTO
+
+
+def netxms_registro_ops(declarado: dict | None, actuales: list | None, api: str,
+                        escuchando: bool | None = None) -> dict:
+    """Lo que hay que escribir para que la vista recoja los registros como el entorno declara.
+
+    `actuales` es lo que devolvió `GET /server-config` —la lista entera, que es una lectura y no
+    una por variable—. `escuchando` es si hay algo escuchando de verdad el puerto declarado, que
+    lo mide quien llama (la variable no lo dice). Devuelve `{"ops": [...], "reiniciar": bool}`.
+
+    El reinicio no se adivina: cada variable dice si su cambio lo exige (`needServerRestart`),
+    así que sólo se reinicia cuando de verdad se ha escrito algo que lo pide, y nunca por una
+    escritura que no cambió nada. Si la variable no aparece en la lectura —no está o no es
+    visible—, se da por hecho que el cambio exige reinicio: ante la duda, que el cambio surta
+    efecto, porque lo contrario es dejarlo apagado creyendo que está encendido.
+
+    Pero el valor escrito **no es la escucha en pie**, y la vista no tiene ningún campo que diga
+    «esto está escrito y todavía no en vigor» —medido: la lectura sólo trae el valor—: una pasada
+    que escriba y se corte antes de reiniciar dejaría el valor correcto y la escucha apagada, y la
+    siguiente pasada, al ver el valor correcto, no reiniciaría jamás. Por eso, cuando se declaró
+    encendida y **no hay nadie escuchando el puerto**, se reinicia aunque no hubiera nada que
+    escribir. Sin poder medirlo (`escuchando is None`) no se reinicia: un reinicio a ciegas en cada
+    pasada sería peor que el problema.
+
+    Sin declaración no se toca nada: encender una escucha que nadie ha pedido es una decisión del
+    entorno, no del motor (ADR 0019). El laboratorio no declara esto —ni sus equipos—: el qué se
+    mira es del mundo.
+    """
+    if not declarado:
+        return {"ops": [], "reiniciar": False}
+    por_nombre = {v.get("name"): v for v in (actuales or []) if isinstance(v, dict)}
+    encender = bool(declarado.get("recoger"))
+    deseado = {NETXMS_REGISTRO_ESCUCHA: "1" if encender else "0"}
+    if declarado.get("puerto") is not None:
+        deseado[NETXMS_REGISTRO_PUERTO] = str(declarado["puerto"])
+    ops: list[dict] = []
+    reiniciar = False
+    for nombre, valor in deseado.items():
+        actual = por_nombre.get(nombre)
+        if actual is not None and str(actual.get("value", "")) == valor:
+            continue
+        if nombre == NETXMS_REGISTRO_ESCUCHA:
+            efecto = ("que la vista escuche los registros de los equipos"
+                      if valor == "1" else "que la vista deje de escuchar registros de los equipos")
+        else:
+            efecto = f"que la vista escuche los registros en el puerto {valor}"
+        ops.append({"cmd": netxms_config_cmd(api, nombre),
+                    "cuerpo": json.dumps({"value": valor}),
+                    "effect": efecto})
+        # Desconocida o presente: si no se pudo leer, se reinicia por si acaso.
+        reiniciar = reiniciar or bool((actual or {}).get("needServerRestart", True))
+    # El valor dice lo que está escrito; la escucha dice lo que pasa. Si se declaró encendida y no
+    # hay nadie escuchando, falta el reinicio —lo escriba esta pasada o una anterior que se cortó—.
+    if encender and escuchando is False:
+        reiniciar = True
+    return {"ops": ops, "reiniciar": reiniciar}
+
+
+def netxms_reinicio_cmd() -> list:
+    """Reiniciar el servicio de la vista, y decirlo.
+
+    Va por la puerta del invitado (`interior_ssh.yml`) porque no es una llamada a su API sino un
+    servicio de dentro. Imprime `CAMBIO:1` para que el motor pueda distinguir «se reinició» de
+    «se intentó»: la puerta no da por bueno lo que no puede comprobar.
+    """
+    return _sh("systemctl restart netxms-server && echo CAMBIO:1")
+
+
 def _identidad_para_la_vista(identidad: dict | None) -> dict | None:
     """La identidad resuelta del entorno, dicha como la dice la vista.
 
@@ -1802,6 +1929,18 @@ def linux_clave(_node: dict, secrets: dict | None = None) -> str:
             "la terminal de los invitados Linux desde la vista"
         )
     return valor
+
+
+def _la_vista_sondea(node: dict) -> bool:
+    """Si la vista mira a este equipo por SNMP: un equipo de red que enciende el área.
+
+    Un puesto no habla SNMP —su salud va por ICMP— y un equipo sin el área no tiene el servicio
+    encendido, así que la vista no tiene qué sondear en ninguno de los dos. Sin ninguno, el motor
+    no resuelve la identidad de sondeo: no hace falta.
+    """
+    if node.get("type") in ("server", "workstation"):
+        return False
+    return bool(((node.get("configure") or {}).get("snmp") or {}).get("enabled"))
 
 
 def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | None,
@@ -1943,15 +2082,12 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
 
     altas: list[dict] = []
     identidades: list[dict] = []
-    # La identidad de sondeo se resuelve **sólo** si algún equipo de red del laboratorio
-    # declara SNMP encendido: un laboratorio que no lo usa —o que sólo registra puestos—
-    # no debe exigir las claves del sitio. Se resuelve una vez y se reutiliza en cada alta
-    # y en cada PATCH del grupo SNMP.
-    hay_snmp = any(((n.get("configure") or {}).get("snmp") or {}).get("enabled")
-                   and n.get("type") not in ("server", "workstation")
-                   for n in nodes or [])
+    # La identidad de sondeo sólo se resuelve si algún equipo la pide: un laboratorio sin SNMP
+    # no exige la credencial —no hay nada que sondear—, y resolverla antes hacía que faltara un
+    # secreto que nadie iba a usar. Se resuelve una vez y se reutiliza en cada alta y en cada
+    # PATCH del grupo SNMP.
     de_la_vista = (_identidad_para_la_vista(observabilidad_de(observabilidad, secrets))
-                   if hay_snmp else None)
+                   if any(_la_vista_sondea(n) for n in nodes or []) else None)
     for node, _candidatos, objeto in equipos:
         direccion = _direccion_de(node)
         nombre = node.get("name") or node.get("role")
@@ -1967,8 +2103,7 @@ def netxms_ops(nodes: list[dict], encontrados: list | None, detalles: list | Non
         # en el equipo (ver `_snmp_ops`), así que tampoco tiene sentido decirle a la vista
         # que lo sondee; y un nodo final no habla SNMP —su salud se mira por ICMP—, así
         # que la identidad es de los equipos de red.
-        area_snmp = (node.get("configure") or {}).get("snmp") or {}
-        grupo = de_la_vista if (area_snmp.get("enabled") and not es_final) else None
+        grupo = de_la_vista if _la_vista_sondea(node) else None
         # Un nodo final que ya está registrado sin credenciales (o con otras) no se
         # puede arreglar con PATCH: el API de esta versión las ignora. Se rehace una
         # vez —se retira y se vuelve a dar de alta— para que su terminal abra sola;
