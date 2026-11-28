@@ -12,6 +12,10 @@
 #              escucha apagada, y la siguiente pasada, al ver el valor correcto, no reiniciaría
 #              nunca. Si no se puede medir, no se reinicia a ciegas.
 #              Sin declaración en el entorno, este fichero no toca nada.
+# LÍMITES:     no hace que los equipos **manden** sus registros —eso es la otra mitad y va aparte— ni
+#              comprueba que un mensaje llegue y se guarde: deja la escucha puesta, y nada más.
+#              Tampoco decide el puerto cuando el entorno no lo declara: se queda el que la vista
+#              tenga, que es el que el plan respeta.
 # VER:         docs/diseno.md §7; docs/decisiones/0021-el-registro-lo-escucha-la-vista.md
 
 # --- entrar ----------------------------------------------------------------
