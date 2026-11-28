@@ -2299,5 +2299,46 @@ class LaEscuchaDeLosRegistros(unittest.TestCase):
         self.assertIn("CAMBIO:1", cmd)
 
 
+class LosGuionesQueSeLlevanElTestigo(unittest.TestCase):
+    """Todo guion que entrega el testigo por el descriptor 3 tiene que cerrar su heredoc.
+
+    Medido: al `EOF` que cierra le faltaba su salto de línea —quedó pegado a la cabecera— y el
+    heredoc se lo tragó todo: la llamada de dentro no llegaba a ejecutarse y el guion terminaba
+    con éxito y sin salida. El motor leía «nada» de la vista y volvía a escribir en cada pasada
+    creyendo que aún no estaba escrito, sin que nada fallara. Por eso se mira el guion.
+    """
+
+    API = "http://127.0.0.1:8000/v1"
+
+    def guiones(self):
+        """Los guiones que hablan con la vista llevándose el testigo por dentro."""
+        return {
+            "leer la configuración del servicio": converge.netxms_configs_cmd(self.API),
+            "escribir una variable del servicio": converge.netxms_config_cmd(
+                self.API, converge.NETXMS_REGISTRO_ESCUCHA
+            ),
+            "leer un objeto": converge.netxms_objeto_cmd(self.API, 7),
+            "dar de alta un equipo": converge.netxms_crear_cmd(self.API),
+        }
+
+    def test_la_cabecera_entrega_el_testigo_leido_de_la_entrada(self):
+        for nombre, cmd in self.guiones().items():
+            with self.subTest(guion=nombre):
+                lineas = cmd[2].strip("'").split("\n")
+                self.assertTrue(lineas[0].startswith("IFS= read -r t"),
+                                f"{nombre}: el testigo ya no se lee de la entrada")
+                self.assertEqual(lineas[1], "Authorization: Bearer $t",
+                                 f"{nombre}: la cabecera no entrega lo que se leyó")
+
+    def test_el_heredoc_se_cierra_solo_en_su_linea_y_antes_de_la_llamada(self):
+        for nombre, cmd in self.guiones().items():
+            with self.subTest(guion=nombre):
+                lineas = cmd[2].strip("'").split("\n")
+                self.assertIn("<<EOF", lineas[0], f"{nombre}: no lleva testigo por descriptor")
+                self.assertEqual(lineas[2], "EOF",
+                                 f"{nombre}: el cierre no está solo, así que el heredoc traga la llamada")
+                self.assertIn("curl", lineas[3], f"{nombre}: la llamada no queda detrás del cierre")
+
+
 if __name__ == "__main__":
     unittest.main()
