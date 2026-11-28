@@ -210,6 +210,8 @@ class FilterModule:
             "netlabs_netxms_registro_ops": lambda declarado, actuales, api, escuchando=None:
                 converge.netxms_registro_ops(declarado, actuales, api, escuchando),
             "netlabs_netxms_reinicio_cmd": lambda _=None: converge.netxms_reinicio_cmd(),
+            "netlabs_netxms_puerto_api": lambda api: converge.netxms_puerto_api(api),
+            "netlabs_netxms_espera_cmd": lambda puerto: converge.netxms_espera_cmd(puerto),
             # El mapa a medida: el del laboratorio, colocado como el plano.
             "netlabs_netxms_raices_cmd": lambda api: converge.netxms_raices_cmd(api),
             "netlabs_netxms_hijos_cmd": lambda api, id_objeto:
