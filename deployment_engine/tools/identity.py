@@ -59,7 +59,7 @@ SNMP_SECRET = "secrets.snmp_comunidad"
 # en todas partes (el hostname del invitado, la identidad del RouterOS), así que
 # declararlo otra vez sería una segunda verdad esperando a contradecirse.
 AREAS = {
-    "routeros": {"addresses", "routes", "dhcp_server", "services", "users", "snmp"},
+    "routeros": {"addresses", "routes", "nat", "dns", "dhcp_server", "services", "users", "snmp"},
     "linux": {"repositories", "packages", "files", "commands", "services"},
 }
 
@@ -71,7 +71,7 @@ NODE_KEYS = {"role", "type", "stage", "after", "resources", "image", "networks",
 # `shape` sólo dice cómo se dibuja la red, nunca cómo se despliega: un puente es un
 # puente. Hoy hay una forma con nombre —`cloud`—, la del proveedor al que cada sede se
 # asoma por su cuenta; el resto de las redes son áreas del plano.
-NETWORK_KEYS = {"name", "address", "title", "shape"}
+NETWORK_KEYS = {"name", "address", "title", "shape", "exit"}
 NETWORK_SHAPES = {"cloud"}
 LINK_KEYS = {"a", "z"}
 END_KEYS = {"node", "port"}
@@ -260,7 +260,28 @@ def validate(lab: dict, env: dict) -> None:
             cidr = ipaddress.ip_network(net["address"], strict=False)
         except ValueError as exc:
             raise LabError(f"la red {net['name']!r} tiene una dirección inválida: {exc}") from exc
-        if not any(cidr.subnet_of(space) for space in nets):
+        if net.get("exit"):
+            # Una salida no es una red del laboratorio: es su frontera. No cabe en sus
+            # espacios —no es suya—, sino en el espacio de salida del entorno, y se
+            # dibuja como nube porque no está dentro de la casa.
+            salon = (env.get("salida") or {}).get("address_space")
+            if not salon:
+                raise LabError(
+                    f"la red {net['name']!r} declara exit, y el entorno no tiene salida: "
+                    "no hay 'salida' en netlabs.yml de la que sacar su espacio"
+                )
+            salida = ipaddress.ip_network(salon, strict=False)
+            if not cidr.subnet_of(salida):
+                raise LabError(
+                    f"la salida {net['name']!r} ({cidr}) no cabe en el espacio de salida "
+                    f"del entorno ({salida})"
+                )
+            if forma != "cloud":
+                raise LabError(
+                    f"la salida {net['name']!r} se dibuja como nube: declara 'shape: cloud', "
+                    "que es lo que la saca de las áreas de la casa"
+                )
+        elif not any(cidr.subnet_of(space) for space in nets):
             raise LabError(
                 f"la red {net['name']!r} ({cidr}) no cabe en ningún espacio declarado en "
                 f"'address_spaces' ({', '.join(str(s) for s in nets)})"
@@ -281,7 +302,7 @@ def validate(lab: dict, env: dict) -> None:
         raise LabError("'nodes' tiene que ser una lista con al menos un nodo")
     roles = set()
     for node in nodes:
-        _validate_node(node, by_name, roles)
+        _validate_node(node, by_name, roles, {n["name"] for n in lab["networks"] if n.get("exit")})
         roles.add(node["role"])
 
     for node in nodes:
@@ -407,6 +428,8 @@ def _validate_links(lab: dict) -> None:
             "cada cable une dos puertos y se convierte en un puente"
         )
     by_role = {n["role"]: n for n in lab["nodes"]}
+    # Una salida no es un cable: no se une a nada de dentro (se usa más abajo).
+    salidas = {n["name"] for n in lab["networks"] if n.get("exit")}
     used = set()
     for i, link in enumerate(links):
         if not isinstance(link, dict):
@@ -447,6 +470,12 @@ def _validate_links(lab: dict) -> None:
             ends.append((node, port))
         red_a = ends[0][0]["networks"][ends[0][1] - 1]
         red_z = ends[1][0]["networks"][ends[1][1] - 1]
+        if red_a in salidas or red_z in salidas:
+            raise LabError(
+                f"el cable {i + 1} usa {red_a if red_a in salidas else red_z!r}, que es una "
+                "salida a la red pública: una salida tiene una sola punta —el router que se "
+                "asoma— y no se cablea"
+            )
         if red_a != red_z:
             raise LabError(
                 f"el cable {i + 1} une {ends[0][0]['role']!r} puerto {ends[0][1]} ({red_a}) con "
@@ -455,6 +484,10 @@ def _validate_links(lab: dict) -> None:
             )
     for node in lab["nodes"]:
         for port in range(1, len(node["networks"]) + 1):
+            # Una salida no lleva cable: tiene una sola punta, y su puente lo pone el
+            # entorno. Los demás puertos sí: un puerto sin cable no tiene por dónde ir.
+            if node["networks"][port - 1] in salidas:
+                continue
             if (node["role"], port) not in used:
                 raise LabError(
                     f"el puerto {port} de {node['role']!r} no está en ningún cable: "
@@ -492,7 +525,7 @@ def _check_device_name(role: str, kind: str) -> None:
         )
 
 
-def _validate_node(node: dict, networks: dict, roles: set) -> None:
+def _validate_node(node: dict, networks: dict, roles: set, salidas: set | None = None) -> None:
     if not isinstance(node, dict):
         raise LabError(f"un nodo tiene que ser un mapa, y hay {node!r}")
     extra = set(node) - NODE_KEYS
@@ -622,10 +655,10 @@ def _validate_node(node: dict, networks: dict, roles: set) -> None:
                 f"Se admite: {', '.join(sorted(allowed))}"
             )
     for area, body in configure.items():
-        _validate_area(role, area, body, networks)
+        _validate_area(role, area, body, networks, salidas)
 
 
-def _validate_area(role: str, area: str, body, networks: dict) -> None:
+def _validate_area(role: str, area: str, body, networks: dict, salidas=None) -> None:
     """Cada área tiene su forma; lo que no encaja se rechaza con el porqué."""
     if area == "addresses":
         _require_list(role, area, body)
@@ -657,6 +690,42 @@ def _validate_area(role: str, area: str, body, networks: dict) -> None:
                     "no es IPv4: el área 'routes' administra la tabla IPv4 del router "
                     "(/rest/ip/route) y el motor no escribe la IPv6"
                 )
+    elif area == "nat":
+        _require_list(role, area, body)
+        for item in body:
+            if not isinstance(item, dict) or set(item) not in ({"out"}, {"out", "action"}):
+                raise LabError(f"cada traducción de {role!r} es {{out, action?}}")
+            if item["out"] not in networks:
+                raise LabError(
+                    f"el área 'nat' de {role!r} cita la red {item['out']!r}, que no existe")
+            if item["out"] not in (salidas or set()):
+                raise LabError(
+                    f"el área 'nat' de {role!r} traduce por {item['out']!r}, que no es una "
+                    "salida a la red pública: sólo se traduce lo que sale de casa"
+                )
+            if item.get("action", "masquerade") != "masquerade":
+                raise LabError(
+                    f"la traducción {item.get('action')!r} de {role!r} no vale: el motor sólo "
+                    "escribe `masquerade`"
+                )
+    elif area == "dns":
+        if not isinstance(body, dict) or set(body) - {"servers", "allow_remote_requests"}:
+            raise LabError(
+                f"el área 'dns' de {role!r} es {{servers?, allow_remote_requests?}}")
+        servidores = body.get("servers")
+        if servidores is not None:
+            if not isinstance(servidores, list) or not servidores:
+                raise LabError(
+                    f"'servers' del área 'dns' de {role!r} tiene que ser una lista con al "
+                    "menos una dirección")
+            for servidor in servidores:
+                try:
+                    ipaddress.ip_address(servidor)
+                except ValueError as exc:
+                    raise LabError(f"servidor DNS inválido en {role!r}: {exc}") from exc
+        if "allow_remote_requests" in body and not isinstance(body["allow_remote_requests"], bool):
+            raise LabError(
+                f"'allow_remote_requests' del área 'dns' de {role!r} es verdadero o falso")
     elif area == "dhcp_server":
         _require_list(role, area, body)
         for item in body:
@@ -1003,7 +1072,8 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
     # Los cables: cada uno es un puente tonto entre dos puertos. El nombre lleva la
     # letra del laboratorio y sus dos puntas, así que dos laboratorios con la misma
     # topología no chocan en el mismo hipervisor.
-    los_cables = cables(lab) if not control else {"per_port": {}, "links": []}
+    los_cables = (cables(lab) if not control
+                  else {"per_port": {}, "links": [], "exits": []})
     nodes = []
     effects = []
     steps = []
@@ -1059,10 +1129,41 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
                 "cambia su 'slot'; si era tuyo, retíralo a mano"
             )
 
+    # La salida no es un cable: no une dos puntas, y lleva dirección —la primera de su
+    # tramo, que es la puerta que ve el router desde su pata— porque no es una red de
+    # dentro del laboratorio, es su frontera. Un puente que ya existe sin la marca de
+    # este laboratorio no se toca: no es suyo.
+    for salida in los_cables["exits"]:
+        bridge = salida["name"]
+        comment = f"netlabs lab={name} space={salida['space']} salida={salida['red']}"
+        exists = next((b for b in bridges if b.get("iface") == bridge), None)
+        if exists is None:
+            steps.append({"op": "bridge_ensure", "bridge": bridge, "comment": comment,
+                          "address": salida["address"], "netmask": salida["netmask"]})
+            effects.append(f"crear la salida {bridge} ({salida['address']}/{salida['netmask']})")
+            continue
+        if lab_from_comment(exists.get("comments") or "") != name:
+            raise LabError(
+                f"el puente {bridge} ya existe y no lleva la marca de este laboratorio "
+                f"({comment!r}): no es suyo y el motor no lo toca. Si es de otro laboratorio, "
+                "cambia el nombre de la red; si era tuyo, retíralo a mano"
+            )
+        # El tramo de una salida puede cambiar (se reparte de otra manera), y entonces
+        # la dirección de la puerta y el espacio del comentario dejan de ser los suyos:
+        # eso no es un puente de otro, es el nuestro con la dirección vieja.
+        # El comentario del fichero del nodo lleva su salto de línea al final: se
+        # compara por contención, igual que la marca de un cable.
+        if (comment not in (exists.get("comments") or "")
+                or ("address" in exists and (exists.get("address") or "") != salida["address"])):
+            steps.append({"op": "bridge_set", "bridge": bridge, "comment": comment,
+                          "address": salida["address"], "netmask": salida["netmask"]})
+            effects.append(f"la salida {bridge} pasa a {salida['address']}/{salida['netmask']}")
+
     # La otra mitad de la diferencia, también para los cables: un puente que
     # lleva la marca de este laboratorio y ya no se declara es basura suya y se
     # retira. Uno sin marca no se toca: puede ser de otro o del propio hipervisor.
-    declarados = {c["name"] for c in los_cables["links"]}
+    declarados = ({c["name"] for c in los_cables["links"]}
+                  | {s["name"] for s in los_cables["exits"]})
     for bridge in bridges:
         iface = bridge.get("iface")
         if iface in declarados or lab_from_comment(bridge.get("comments") or "") != name:
@@ -1210,6 +1311,22 @@ def _endpoint(role: str, port: int) -> str:
     return f"{role}p{port}"
 
 
+def _nombre_de_salida(letra: str, red: str) -> str:
+    """El puente de una salida: la letra del laboratorio y el nombre de su red.
+
+    Lleva la letra delante por lo mismo que un cable —todos los laboratorios tienen
+    una salida, y dos con el mismo nombre de red no pueden compartir puente— y tiene
+    que caber en los 15 caracteres de un nombre de interfaz de Linux.
+    """
+    nombre = f"{letra}_{red}"
+    if len(nombre) > 15:
+        raise LabError(
+            f"la salida {red!r} no cabe en un nombre de interfaz (15 caracteres): "
+            f"{nombre!r} es más largo. Acorta el nombre de la red"
+        )
+    return nombre
+
+
 def cables(lab: dict) -> dict:
     """Los cables del laboratorio, con su nombre y la red que transportan.
 
@@ -1217,12 +1334,20 @@ def cables(lab: dict) -> dict:
     que dos laboratorios con la misma topología en el mismo hipervisor no comparten
     un solo puente. Devuelve `{equipo: {puerto: nombre}}` para que cada interfaz
     sepa qué puente lleva, y `links` con la lista ordenada para crear los puentes.
+
+    Una red con `exit: true` no es un cable: tiene una sola punta y no une dos
+    puertos, así que no transporta nada dentro del laboratorio. Es la salida a la
+    red pública, y su puente es del entorno —uno por laboratorio y red— con la
+    primera dirección de su tramo del lado del hipervisor, que es la puerta que ve
+    el router. Van en `exits`, y ocupan su puerto como cualquier otra pata.
     """
     letra = lab["lab"][0]
     by_role = {n["role"]: n for n in lab["nodes"]}
     cidrs = {n["name"]: str(ipaddress.ip_network(n["address"], strict=False)) for n in lab["networks"]}
+    salidas = {n["name"]: n for n in lab["networks"] if n.get("exit")}
     per_port = {}
     links = []
+    exits = []
     for link in lab["links"]:
         a, z = link["a"], link["z"]
         ea = _endpoint(a["node"], a["port"])
@@ -1239,7 +1364,28 @@ def cables(lab: dict) -> dict:
         # `space` es el CIDR de la red que el cable transporta, no su nombre: es
         # lo que otro laboratorio puede leer del comentario para no pisarlo.
         links.append({"name": name, "a": ea, "z": ez, "space": cidrs[red]})
-    return {"per_port": per_port, "links": links}
+
+    # Las salidas: cada una con su puente y su tramo, una sola vez aunque dos equipos
+    # de la misma sede la compartan —salir los dos por el mismo cable es decisión suya—.
+    vistas = set()
+    for nodo in lab["nodes"]:
+        for puerto, red in enumerate(nodo["networks"], start=1):
+            if red not in salidas:
+                continue
+            puente = _nombre_de_salida(letra, red)
+            per_port.setdefault(nodo["role"], {})[puerto] = puente
+            if puente in vistas:
+                continue
+            vistas.add(puente)
+            tramo = ipaddress.ip_network(cidrs[red])
+            if tramo.num_addresses < 2:
+                raise LabError(
+                    f"la salida {red!r} ({tramo}) no tiene sitio para una puerta: "
+                    "un tramo de salida necesita al menos dos direcciones"
+                )
+            exits.append({"name": puente, "red": red, "space": cidrs[red],
+                          "address": str(tramo[1]), "netmask": str(tramo.netmask)})
+    return {"per_port": per_port, "links": links, "exits": exits}
 
 
 def _reservar_direcciones(nodes: list[dict]) -> None:

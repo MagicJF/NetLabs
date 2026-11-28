@@ -984,3 +984,149 @@ class ElReinicioDeUnFichero(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class LaSalidaALaRedPublica(unittest.TestCase):
+    """Una red con `exit: true` no es una red del laboratorio: es su frontera.
+
+    No lleva cable —tiene una sola punta—, no cuenta en su plan de direcciones (cae
+    dentro del espacio de salida del entorno, que es justo lo que se le pide) y su
+    puente lo pone el entorno: uno por laboratorio y red, con la primera dirección de
+    su tramo como puerta del hipervisor.
+    """
+
+    @staticmethod
+    def lab(letra="x", salida="172.30.10.0/24", forma="cloud"):
+        return {
+            "lab": f"{letra}_prueba",
+            "address_spaces": ["10.44.0.0/16"],
+            "networks": [
+                {"name": "lan", "address": "10.44.1.0/24", "title": "LAN"},
+                {"name": "salida", "address": salida, "title": "Salida",
+                 "shape": forma, "exit": True},
+            ],
+            "nodes": [
+                {"role": "rte1", "type": "router", "stage": 1, "after": [],
+                 "resources": {"cores": 1, "memory": 256, "disk": 1},
+                 "networks": ["lan", "salida"], "address": "10.44.1.1/24"},
+                {"role": "wsp1", "type": "workstation", "stage": 2, "after": ["rte1"],
+                 "resources": {"cores": 1, "memory": 256, "disk": 1},
+                 "networks": ["lan"], "address": "dhcp"},
+            ],
+            "links": [{"a": {"node": "rte1", "port": 1}, "z": {"node": "wsp1", "port": 1}}],
+        }
+
+    @staticmethod
+    def con_dos_routers():
+        lab = LaSalidaALaRedPublica.lab()
+        lab["nodes"].append({"role": "rte2", "type": "router", "stage": 1, "after": [],
+                             "resources": {"cores": 1, "memory": 256, "disk": 1},
+                             "networks": ["salida"], "address": "172.30.10.3/24"})
+        return lab
+
+    def test_la_salida_no_es_un_cable_y_da_puente_y_puerta(self):
+        los_cables = identity.cables(self.lab())
+        self.assertEqual([c["name"] for c in los_cables["links"]], ["x_rte1p1_wsp1p1"])
+        self.assertEqual(los_cables["exits"],
+                         [{"name": "x_salida", "red": "salida", "space": "172.30.10.0/24",
+                           "address": "172.30.10.1", "netmask": "255.255.255.0"}])
+
+    def test_el_puerto_de_la_salida_lleva_su_puente(self):
+        self.assertEqual(identity.cables(self.lab())["per_port"]["rte1"][2], "x_salida")
+
+    def test_dos_laboratorios_con_la_misma_red_no_comparten_su_salida(self):
+        self.assertNotEqual(identity.cables(self.lab("x"))["exits"][0]["name"],
+                            identity.cables(self.lab("y"))["exits"][0]["name"])
+
+    def test_dos_equipos_de_la_misma_sede_comparten_una_sola_salida(self):
+        los_cables = identity.cables(self.con_dos_routers())
+        self.assertEqual([s["name"] for s in los_cables["exits"]], ["x_salida"])
+        self.assertEqual(los_cables["per_port"]["rte2"][1], "x_salida")
+
+    def test_un_cable_sobre_una_salida_se_rechaza(self):
+        lab = self.con_dos_routers()
+        lab["links"].append({"a": {"node": "rte1", "port": 2}, "z": {"node": "rte2", "port": 1}})
+        with self.assertRaises(identity.LabError) as ctx:
+            identity._validate_links(lab)
+        self.assertIn("una salida tiene una sola punta", str(ctx.exception))
+
+    def test_una_salida_fuera_del_espacio_del_entorno_se_rechaza(self):
+        lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
+        next(n for n in lab["networks"] if n.get("exit"))["address"] = "172.31.10.0/24"
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.validate(lab, entorno())
+        self.assertIn("no cabe en el espacio de salida", str(ctx.exception))
+
+    def test_una_salida_que_no_se_dibuja_como_nube_se_rechaza(self):
+        lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
+        next(n for n in lab["networks"] if n.get("exit"))["shape"] = "region"
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.validate(lab, entorno())
+        # La forma se valida antes de mirar si es salida: la única que hay es la nube.
+        self.assertIn("las formas son cloud", str(ctx.exception))
+
+    def test_un_entorno_sin_salida_no_admite_redes_de_salida(self):
+        lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
+        env = entorno()
+        env.pop("salida", None)
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.validate(lab, env)
+        self.assertIn("no tiene salida", str(ctx.exception))
+
+    def test_el_plan_crea_el_puente_de_cada_salida_con_su_direccion(self):
+        plan = identity.plan(mundo(), laboratorio("f_acme_cuatro_departamentos"), entorno())
+        salidas = [s for s in plan["steps"]
+                   if s.get("op") == "bridge_ensure" and s["bridge"].endswith("_salida")]
+        self.assertEqual([s["bridge"] for s in salidas], ["f_ny_salida", "f_tk_salida"])
+        self.assertEqual([s["address"] for s in salidas], ["172.30.10.1", "172.30.20.1"])
+
+    def test_la_salida_que_ya_esta_no_se_crea_ni_se_retira(self):
+        # El comentario del fichero del nodo lleva su salto de línea al final.
+        bridges = [{"iface": "f_ny_salida", "address": "172.30.10.1",
+                    "netmask": "255.255.255.0",
+                    "comments": ("netlabs lab=f_acme_cuatro_departamentos "
+                                 "space=172.30.10.0/24 salida=ny_salida\n")}]
+        plan = identity.plan(mundo(bridges=bridges),
+                             laboratorio("f_acme_cuatro_departamentos"), entorno())
+        self.assertEqual([s for s in plan["steps"] if s.get("bridge") == "f_ny_salida"], [])
+
+    def test_cambiar_el_tramo_de_la_salida_reapunta_su_puerta(self):
+        bridges = [{"iface": "f_ny_salida", "address": "172.30.9.1",
+                    "netmask": "255.255.255.0",
+                    "comments": ("netlabs lab=f_acme_cuatro_departamentos "
+                                 "space=172.30.9.0/24 salida=ny_salida\n")}]
+        plan = identity.plan(mundo(bridges=bridges),
+                             laboratorio("f_acme_cuatro_departamentos"), entorno())
+        paso = next(s for s in plan["steps"] if s.get("op") == "bridge_set")
+        self.assertEqual((paso["bridge"], paso["address"]), ("f_ny_salida", "172.30.10.1"))
+
+    def test_un_puente_de_salida_ajeno_no_se_toca(self):
+        bridges = [{"iface": "f_ny_salida",
+                    "comments": "netlabs lab=otro space=172.30.10.0/24 salida=ny_salida\n"}]
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.plan(mundo(bridges=bridges),
+                          laboratorio("f_acme_cuatro_departamentos"), entorno())
+        self.assertIn("no es suyo", str(ctx.exception))
+
+    def test_la_traduccion_solo_puede_salir_por_una_salida(self):
+        lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
+        next(n for n in lab["nodes"] if n["role"] == "rte1")["configure"]["nat"] = [{"out": "ny"}]
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.validate(lab, entorno())
+        self.assertIn("no es una salida", str(ctx.exception))
+
+    def test_una_traduccion_que_no_es_masquerade_se_rechaza(self):
+        lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
+        next(n for n in lab["nodes"] if n["role"] == "rte1")["configure"]["nat"] = [
+            {"out": "ny_salida", "action": "src-nat"}]
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.validate(lab, entorno())
+        self.assertIn("no vale", str(ctx.exception))
+
+    def test_el_resolutor_rechaza_lo_que_no_es_una_direccion(self):
+        lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
+        next(n for n in lab["nodes"] if n["role"] == "rte1")["configure"]["dns"] = {
+            "servers": ["uno"]}
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.validate(lab, entorno())
+        self.assertIn("servidor DNS inválido", str(ctx.exception))

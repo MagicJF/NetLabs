@@ -122,7 +122,9 @@
     ros_current: >-
       {{ dict(ros_claves | zip(ros_lecturas.results | map(attribute='json') | list)) }}
   vars:
-    ros_claves: [identity, addresses, routes, pools, dhcp_servers, dhcp_networks, services, users, snmp, snmp_community, bridges, bridge_ports, dhcp_leases]
+    ros_claves: >-
+      [identity, addresses, routes, pools, dhcp_servers, dhcp_networks, services, users,
+       snmp, snmp_community, bridges, bridge_ports, dhcp_leases, nat, dns]
 
 - name: "RouterOS · calcular la diferencia de {{ router.name }}"
   ansible.builtin.set_fact:

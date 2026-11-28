@@ -43,6 +43,10 @@ ROS_READS = (
     # Las concesiones fijas de los nodos finales: una reserva no se puede leer del
     # invitado, vive en el servidor DHCP del router.
     "/rest/ip/dhcp-server/lease",
+    # La salida a la red pública: la traducción que la hace posible y el resolutor con
+    # el que los puestos resuelven de verdad.
+    "/rest/ip/firewall/nat",
+    "/rest/ip/dns",
 )
 
 PREFIX = "netlabs-"
@@ -193,6 +197,10 @@ def ros_ops(node: dict, current: dict, routeros_clave: str,
         ops += _dhcp_ops(node, configure["dhcp_server"], current)
     if "routes" in configure:
         ops += _route_ops(configure["routes"], current.get("routes") or [])
+    if "nat" in configure:
+        ops += _nat_ops(node, configure["nat"], current.get("nat") or [])
+    if "dns" in configure:
+        ops += _dns_ops(configure["dns"], current.get("dns") or {})
     if "users" in configure:
         ops += _user_ops(configure["users"], current.get("users") or [], routeros_clave)
     return ops
@@ -495,6 +503,74 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
         red, via = clave(ruta)
         ops.append({"method": "DELETE", "path": f"/rest/ip/route/{ruta['.id']}",
                     "effect": f"sobra la ruta {red} -> {via}"})
+    return ops
+
+
+def _nat_ops(node: dict, declaradas: list, actuales: list) -> list[dict]:
+    """La traducción de la salida: lo que sale por la pata pública.
+
+    Un laboratorio con salida real tiene direcciones privadas dentro y el mundo fuera,
+    y sin traducir no vuelve nada. El laboratorio declara por dónde sale (`out`, el
+    nombre de una red suya, que se traduce a la pata que la lleva) y qué hace
+    (`action`, por defecto `masquerade`).
+
+    Sólo se escribe en la cadena `srcnat`, y sólo se reconoce como propio lo que lleva
+    el comentario del motor, igual que en las rutas: una regla puesta a mano no se
+    toca ni se pisa.
+    """
+    ops = []
+    nuestras = [r for r in actuales if str(r.get("comment", "")).startswith(PREFIX)]
+    sin_reclamar = list(nuestras)
+    for item in declaradas:
+        iface = interface_of(node, item["out"])
+        if iface is None:
+            raise LabError(
+                f"la salida {item['out']!r} de {node['name']} no es una red suya: "
+                "no hay pata por la que traducir"
+            )
+        accion = item.get("action", "masquerade")
+        igual = next((r for r in sin_reclamar
+                      if r.get("out-interface") == iface and r.get("action") == accion
+                      and r.get("chain") == "srcnat"), None)
+        if igual is not None:
+            sin_reclamar.remove(igual)
+            continue
+        ops.append({"method": "PUT", "path": "/rest/ip/firewall/nat",
+                    "body": {"chain": "srcnat", "action": accion,
+                             "out-interface": iface, "comment": f"{PREFIX}salida"},
+                    "effect": f"traducir la salida por {iface} ({accion})"})
+
+    for regla in sin_reclamar:
+        ops.append({"method": "DELETE", "path": f"/rest/ip/firewall/nat/{regla['.id']}",
+                    "effect": f"sobra la traducción por {regla.get('out-interface')}"})
+    return ops
+
+
+def _dns_ops(declarado: dict, actual: dict) -> list[dict]:
+    """El resolutor del router: a quién pregunta y si atiende a los suyos.
+
+    RouterOS no tiene un objeto por servidor: `/ip/dns` es un ajuste único, con la
+    lista en una sola cadena separada por comas. Un router con salida real resuelve
+    por la puerta de esa salida, y `allow_remote_requests` es lo que hace que los
+    puestos que lo tienen de servidor —los que sirve su DHCP— resuelvan también.
+    """
+    ops = []
+    servidores = declarado.get("servers")
+    if servidores is not None:
+        deseado = (",".join(servidores) if isinstance(servidores, (list, tuple))
+                   else str(servidores))
+        ahora = str(actual.get("servers") or "").replace(" ", "")
+        if ahora != deseado:
+            ops.append({"method": "POST", "path": "/rest/ip/dns/set",
+                        "body": {"servers": deseado},
+                        "effect": f"resolver -> {deseado}"})
+    atiende = declarado.get("allow_remote_requests")
+    if atiende is not None:
+        ahora = str(actual.get("allow-remote-requests", "")).lower() in ("true", "yes")
+        if ahora != bool(atiende):
+            ops.append({"method": "POST", "path": "/rest/ip/dns/set",
+                        "body": {"allow-remote-requests": "yes" if atiende else "no"},
+                        "effect": f"el resolutor {'atiende' if atiende else 'no atiende'} a la red"})
     return ops
 
 

@@ -39,6 +39,7 @@
         nuevos: "{{ (plan.steps | selectattr('op', 'equalto', 'guest_create') | map(attribute='guest.vmid') | list)
                     + (plan.steps | selectattr('op', 'equalto', 'guest_recreate') | map(attribute='vmid') | list) }}"
         puentes: "{{ plan.steps | selectattr('op', 'equalto', 'bridge_ensure') | list }}"
+        puentes_cambiados: "{{ plan.steps | selectattr('op', 'equalto', 'bridge_set') | list }}"
         puentes_sobrantes: "{{ plan.steps | selectattr('op', 'equalto', 'bridge_destroy') | list }}"
         sobrantes: "{{ plan.steps | selectattr('op', 'equalto', 'guest_destroy') | list }}"
         # Recursos escritos en el config de un invitado que ya existe: se para, se le
@@ -77,7 +78,12 @@
       vars:
         pve_method: POST
         pve_path: "/nodes/{{ env.proxmox.node }}/network"
-        pve_body: {iface: "{{ item.bridge }}", type: bridge, autostart: 1, comments: "{{ item.comment }}"}
+        # Un cable es un puente tonto: ni dirección ni puerta. La salida a la red
+        # pública no es un cable —es la frontera— y lleva la suya, que es la puerta
+        # para la pata del router que se asoma.
+        pve_body: {iface: "{{ item.bridge }}", type: bridge, autostart: 1, comments: "{{ item.comment }}",
+                   address: "{{ item.address | default(omit) }}",
+                   netmask: "{{ item.netmask | default(omit) }}"}
         pve_do: "crear el puente {{ item.bridge }}"
         pve_status: [200]
       loop: "{{ puentes }}"
@@ -87,10 +93,22 @@
     - include_tasks: ../tasks/pve.yml
       vars:
         pve_method: PUT
+        pve_path: "/nodes/{{ env.proxmox.node }}/network/{{ item.bridge }}"
+        pve_body: {comments: "{{ item.comment }}", address: "{{ item.address }}",
+                   netmask: "{{ item.netmask }}"}
+        pve_do: "cambiar el tramo de {{ item.bridge }}"
+        pve_status: [200]
+      loop: "{{ puentes_cambiados }}"
+      loop_control: {label: "{{ item.bridge }}"}
+      when: puentes_cambiados | length > 0
+
+    - include_tasks: ../tasks/pve.yml
+      vars:
+        pve_method: PUT
         pve_path: "/nodes/{{ env.proxmox.node }}/network"
         pve_do: "aplicar las redes del nodo"
         pve_status: [200]
-      when: puentes | length > 0
+      when: puentes | length > 0 or puentes_cambiados | length > 0
 
     - include_tasks: ../tasks/wait_task.yml
       vars:
@@ -143,13 +161,13 @@
         pve_path: "/nodes/{{ env.proxmox.node }}/network"
         pve_do: "aplicar las redes del nodo"
         pve_status: [200]
-      when: puentes_sobrantes | length > 0
+      when: puentes | length > 0
 
     - include_tasks: ../tasks/wait_task.yml
       vars:
         upid: "{{ pve_r.json.data }}"
         pve_do: "aplicar las redes del nodo"
-      when: puentes_sobrantes | length > 0
+      when: puentes | length > 0 or puentes_cambiados | length > 0
 
     # --- los invitados -----------------------------------------------------
     - name: apply · los invitados que faltan
