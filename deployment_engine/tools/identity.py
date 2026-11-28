@@ -1151,10 +1151,13 @@ def plan(world: dict, lab: dict, env: dict) -> dict:
         # El tramo de una salida puede cambiar (se reparte de otra manera), y entonces
         # la dirección de la puerta y el espacio del comentario dejan de ser los suyos:
         # eso no es un puente de otro, es el nuestro con la dirección vieja.
+        # Se comparan dirección Y máscara: un puente al que le quitaron la dirección o
+        # le cambiaron la máscara es una salida rota, y el plan tiene que repararla.
         # El comentario del fichero del nodo lleva su salto de línea al final: se
         # compara por contención, igual que la marca de un cable.
         if (comment not in (exists.get("comments") or "")
-                or ("address" in exists and (exists.get("address") or "") != salida["address"])):
+                or (exists.get("address") or "") != salida["address"]
+                or (exists.get("netmask") or "") != salida["netmask"]):
             steps.append({"op": "bridge_set", "bridge": bridge, "comment": comment,
                           "address": salida["address"], "netmask": salida["netmask"]})
             effects.append(f"la salida {bridge} pasa a {salida['address']}/{salida['netmask']}")
@@ -1365,6 +1368,12 @@ def cables(lab: dict) -> dict:
         # lo que otro laboratorio puede leer del comentario para no pisarlo.
         links.append({"name": name, "a": ea, "z": ez, "space": cidrs[red]})
 
+    # Dos recursos no pueden compartir puente: un nombre de red con forma de par de
+    # puntas (`rte1p1_wsp1p1`) produce el mismo puente que el cable entre esos dos
+    # puertos, y el plan pediría crearlo dos veces —la segunda falla y deja el
+    # despliegue a medias—. Se rechaza aquí, que es donde se ven los dos nombres.
+    nombres_de_cable = {c["name"] for c in links}
+
     # Las salidas: cada una con su puente y su tramo, una sola vez aunque dos equipos
     # de la misma sede la compartan —salir los dos por el mismo cable es decisión suya—.
     vistas = set()
@@ -1373,6 +1382,11 @@ def cables(lab: dict) -> dict:
             if red not in salidas:
                 continue
             puente = _nombre_de_salida(letra, red)
+            if puente in nombres_de_cable:
+                raise LabError(
+                    f"la salida {red!r} produce el puente {puente!r}, que ya es el nombre "
+                    "de un cable: renombra la red para que su puente no choque con un cable"
+                )
             per_port.setdefault(nodo["role"], {})[puerto] = puente
             if puente in vistas:
                 continue

@@ -172,16 +172,24 @@ def comprobar_espacios(env) -> list[str]:
         del_entorno["la salida a la red pública"] = [
             ipaddress.ip_network(env["salida"]["address_space"])]
     for nombre, (ruta, lab) in laboratorios().items():
-        # Las salidas a la red pública se quedan fuera: no son redes del laboratorio, y
-        # caer dentro del espacio de salida del entorno es justo lo que se les pide.
-        espacios = (list(lab.get("address_spaces") or [])
+        # Las redes internas del laboratorio: sus espacios y sus redes que no son salida.
+        internos = (list(lab.get("address_spaces") or [])
                     + [n["address"] for n in lab.get("networks") or [] if not n.get("exit")])
-        for espacio in espacios:
+        # Las salidas a la red pública: no son redes del laboratorio —caer dentro del
+        # espacio de salida del entorno es justo lo que se les pide—, así que no se
+        # comparan con el entorno. Pero sus direcciones SÍ viven juntas en el mismo
+        # hipervisor: dos laboratorios no pueden elegir el mismo tramo y acabar con la
+        # misma puerta en puentes distintos, o las respuestas saldrían por el puente
+        # equivocado. Se comprueban entre laboratorios, como cualquier otra red.
+        salidas = [n["address"] for n in lab.get("networks") or [] if n.get("exit")]
+        for espacio in internos:
             red = ipaddress.ip_network(espacio, strict=False)
             for cual, suyas in del_entorno.items():
                 for suya in suyas:
                     if red.overlaps(suya):
                         errores.append(f"{ruta.relative_to(RAIZ)}: {red} pisa {cual} ({suya})")
+        for espacio in internos + salidas:
+            red = ipaddress.ip_network(espacio, strict=False)
             for otro, otras in vistos.items():
                 for otra_red in otras:
                     if otro != nombre and red.overlaps(otra_red):

@@ -1130,3 +1130,47 @@ class LaSalidaALaRedPublica(unittest.TestCase):
         with self.assertRaises(identity.LabError) as ctx:
             identity.validate(lab, entorno())
         self.assertIn("servidor DNS inválido", str(ctx.exception))
+
+    def test_una_salida_a_la_que_le_falta_la_direccion_se_reapunta(self):
+        """Si alguien quita la dirección del puente de una salida, el plan la repone.
+
+        `_world` conserva ahora `address` y `netmask` del puente; sin dirección, la
+        salida no es una puerta y el router no tendría por dónde asomarse. El plan lo
+        ve como una diferencia y reapunta el puente (`bridge_set`).
+        """
+        bridges = [{"iface": "f_ny_salida", "netmask": "255.255.255.0",
+                    "comments": ("netlabs lab=f_acme_cuatro_departamentos "
+                                 "space=172.30.10.0/24 salida=ny_salida\n")}]
+        plan = identity.plan(mundo(bridges=bridges),
+                             laboratorio("f_acme_cuatro_departamentos"), entorno())
+        paso = next(s for s in plan["steps"] if s.get("op") == "bridge_set")
+        self.assertEqual((paso["bridge"], paso["address"]), ("f_ny_salida", "172.30.10.1"))
+
+    def test_una_salida_con_la_mascara_cambiada_se_reapunta(self):
+        """Una salida con la máscara cambiada deja de ser su tramo: se reapunta.
+
+        La comparación no mira sólo la dirección: con la máscara vieja la puerta y la
+        red no coinciden, y el plan tiene que corregirlo.
+        """
+        bridges = [{"iface": "f_ny_salida", "address": "172.30.10.1",
+                    "netmask": "255.255.255.128",
+                    "comments": ("netlabs lab=f_acme_cuatro_departamentos "
+                                 "space=172.30.10.0/24 salida=ny_salida\n")}]
+        plan = identity.plan(mundo(bridges=bridges),
+                             laboratorio("f_acme_cuatro_departamentos"), entorno())
+        paso = next(s for s in plan["steps"] if s.get("op") == "bridge_set")
+        self.assertEqual((paso["bridge"], paso["netmask"]), ("f_ny_salida", "255.255.255.0"))
+
+    def test_una_salida_que_choca_con_un_cable_se_rechaza(self):
+        """Un nombre de red con forma de par de puntas no puede robarle el puente a un cable.
+
+        La red `rte1p1_wsp1p1` produce el puente `x_rte1p1_wsp1p1`, igual que el cable
+        entre esos dos puertos: el plan pediría crear el mismo puente dos veces y la
+        segunda petición fallaría a mitad del despliegue.
+        """
+        lab = self.lab()
+        lab["networks"][1]["name"] = "rte1p1_wsp1p1"
+        lab["nodes"][0]["networks"][1] = "rte1p1_wsp1p1"
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.cables(lab)
+        self.assertIn("ya es el nombre de un cable", str(ctx.exception))

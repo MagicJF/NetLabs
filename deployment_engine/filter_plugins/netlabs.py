@@ -77,6 +77,11 @@ def _world(resources, networks, pools):
             "iface": item.get("iface"),
             "type": item.get("type"),
             "cidr": item.get("cidr"),
+            # El puente de una salida lleva dirección y máscara —es la puerta que ve
+            # el router desde su pata—: se conservan para que el plan pueda comprobar
+            # que siguen siendo las suyas y reapuntarlas si el tramo cambió.
+            "address": item.get("address"),
+            "netmask": item.get("netmask"),
             "comments": item.get("comments") or "",
         }
         for item in networks

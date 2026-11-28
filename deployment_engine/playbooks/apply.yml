@@ -114,7 +114,7 @@
       vars:
         upid: "{{ pve_r.json.data }}"
         pve_do: "aplicar las redes del nodo"
-      when: puentes | length > 0
+      when: puentes | length > 0 or puentes_cambiados | length > 0
 
     # --- lo que sobra ------------------------------------------------------
     # Primero se retira lo que la declaración no pide: si un invitado viejo ocupa el
@@ -161,13 +161,13 @@
         pve_path: "/nodes/{{ env.proxmox.node }}/network"
         pve_do: "aplicar las redes del nodo"
         pve_status: [200]
-      when: puentes | length > 0
+      when: puentes_sobrantes | length > 0
 
     - include_tasks: ../tasks/wait_task.yml
       vars:
         upid: "{{ pve_r.json.data }}"
         pve_do: "aplicar las redes del nodo"
-      when: puentes | length > 0 or puentes_cambiados | length > 0
+      when: puentes_sobrantes | length > 0
 
     # --- los invitados -----------------------------------------------------
     - name: apply · los invitados que faltan

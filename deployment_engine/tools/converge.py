@@ -538,6 +538,14 @@ def _nat_ops(node: dict, declaradas: list, actuales: list) -> list[dict]:
                       and r.get("chain") == "srcnat"), None)
         if igual is not None:
             sin_reclamar.remove(igual)
+            # Una regla propia apagada con `disabled: true` no traduce: coincidir en
+            # interfaz, acción y cadena no basta. Se vuelve a encender, igual que se
+            # hace con una ruta propia que alguien apagó a mano.
+            if str(igual.get("disabled", "false")).lower() in ("true", "yes"):
+                ops.append({"method": "PATCH",
+                            "path": f"/rest/ip/firewall/nat/{igual['.id']}",
+                            "body": {"disabled": "no"},
+                            "effect": f"encender la traducción por {iface} ({accion})"})
             continue
         ops.append({"method": "PUT", "path": "/rest/ip/firewall/nat",
                     "body": {"chain": "srcnat", "action": accion,

@@ -1896,6 +1896,20 @@ class LaTraduccionDeLaSalida(unittest.TestCase):
                    "comment": "netlabs-salida", ".id": "*1"}]
         self.assertEqual(converge._nat_ops(self.nodo(), [{"out": "salida"}], actual), [])
 
+    def test_una_regla_apagada_se_vuelve_a_encender(self):
+        """Una regla propia apagada con `disabled: true` no traduce: hay que encenderla.
+
+        Coincidir en interfaz, acción y cadena no basta si alguien la apagó: sin
+        traducir, lo de dentro no vuelve del mundo, y el plan tiene que verlo.
+        """
+        actual = [{"chain": "srcnat", "action": "masquerade", "out-interface": "ether2",
+                   "comment": "netlabs-salida", "disabled": "true", ".id": "*1"}]
+        self.assertEqual(
+            converge._nat_ops(self.nodo(), [{"out": "salida"}], actual),
+            [{"method": "PATCH", "path": "/rest/ip/firewall/nat/*1",
+              "body": {"disabled": "no"},
+              "effect": "encender la traducción por ether2 (masquerade)"}])
+
     def test_lo_que_sobra_se_retira_y_lo_ajeno_no(self):
         actual = [{"chain": "srcnat", "action": "masquerade", "out-interface": "ether1",
                    "comment": "netlabs-salida", ".id": "*1"},
