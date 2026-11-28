@@ -27,26 +27,30 @@ import plano
 
 # Las áreas de RouterOS que el motor sabe leer por REST. Son las mismas que valida
 # identity.AREAS["routeros"]: una lectura de más es una dependencia de más.
+# Cada lectura lleva su clave pegada: lo leído se ordena por lo que cada lectura ES, no
+# por el orden en que salió. Con una lista de rutas y otra de nombres —paralelas— basta
+# con que una se descuadre para que el diccionario entero se descoloque: el motor ve
+# entonces un equipo vacío y le propone escribir lo que ya tiene.
 ROS_READS = (
-    "/rest/system/identity",
-    "/rest/ip/address",
-    "/rest/ip/route",
-    "/rest/ip/pool",
-    "/rest/ip/dhcp-server",
-    "/rest/ip/dhcp-server/network",
-    "/rest/ip/service",
-    "/rest/user",
-    "/rest/snmp",
-    "/rest/snmp/community",
-    "/rest/interface/bridge",
-    "/rest/interface/bridge/port",
+    {"clave": "identity", "ruta": "/rest/system/identity"},
+    {"clave": "addresses", "ruta": "/rest/ip/address"},
+    {"clave": "routes", "ruta": "/rest/ip/route"},
+    {"clave": "pools", "ruta": "/rest/ip/pool"},
+    {"clave": "dhcp_servers", "ruta": "/rest/ip/dhcp-server"},
+    {"clave": "dhcp_networks", "ruta": "/rest/ip/dhcp-server/network"},
+    {"clave": "services", "ruta": "/rest/ip/service"},
+    {"clave": "users", "ruta": "/rest/user"},
+    {"clave": "snmp", "ruta": "/rest/snmp"},
+    {"clave": "snmp_community", "ruta": "/rest/snmp/community"},
+    {"clave": "bridges", "ruta": "/rest/interface/bridge"},
+    {"clave": "bridge_ports", "ruta": "/rest/interface/bridge/port"},
     # Las concesiones fijas de los nodos finales: una reserva no se puede leer del
     # invitado, vive en el servidor DHCP del router.
-    "/rest/ip/dhcp-server/lease",
+    {"clave": "dhcp_leases", "ruta": "/rest/ip/dhcp-server/lease"},
     # La salida a la red pública: la traducción que la hace posible y el resolutor con
     # el que los puestos resuelven de verdad.
-    "/rest/ip/firewall/nat",
-    "/rest/ip/dns",
+    {"clave": "nat", "ruta": "/rest/ip/firewall/nat"},
+    {"clave": "dns", "ruta": "/rest/ip/dns"},
 )
 
 PREFIX = "netlabs-"
