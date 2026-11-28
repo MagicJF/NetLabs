@@ -49,8 +49,7 @@
            netxms_configs | default([], true)) }}
 
 # `ss -lun` sin más: el puerto se busca en la salida con una expresión, no con `grep` dentro de un
-# `sh -c` —cada capa de comillas es una trampa, y aquí sobran—. Si `ss` no está o falla, no se
-# miente: se deja sin medir, y sin medida el plan no reinicia a ciegas.
+# `sh -c` —cada capa de comillas es una trampa, y aquí sobran—.
 - name: netxms · mirar si hay algo escuchando de verdad el puerto de los registros
   include_tasks: interior_ssh.yml
   vars:
@@ -62,13 +61,16 @@
     interior_imprime: false
     comando: ["ss", "-lun"]
 
+# Si `ss` no está o falla, la medida queda **sin hacer** (`none`), no en «no hay nadie escuchando»:
+# un `false` que nunca se llegó a leer pediría el reinicio en cada pasada —cortando la vista de
+# todos los laboratorios— por un dato que no existe. `false` sólo cuando `ss` contesta.
 - name: netxms · la escucha, medida
   ansible.builtin.set_fact:
     netxms_escucha: >-
-      {{ interior.rc | default(1) | int == 0
-         and (interior.stdout | default('') | split
-              | select('match', '.*:' ~ (netxms_registro_puerto | string) ~ '$')
-              | list | length) > 0 }}
+      {{ none if (interior.rc | default(1) | int) != 0
+         else ((interior.stdout | default('') | split
+                | select('match', '.*:' ~ (netxms_registro_puerto | string) ~ '$')
+                | list | length) > 0) }}
 
 # --- la diferencia con lo declarado ----------------------------------------
 - name: netxms · la diferencia entre lo declarado y lo que la vista tiene puesto
