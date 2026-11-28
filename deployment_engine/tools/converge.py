@@ -19,7 +19,6 @@ import ipaddress
 import json
 import os
 import shlex
-from collections import Counter
 from urllib.parse import urlsplit
 
 from identity import (LabError, ROS_SECRET, SNMP_V3_AUTENTICACION, SNMP_V3_CIFRADO,
@@ -2852,16 +2851,18 @@ def netxms_topologia_contraste(lab: dict, nodes: list | None, censo: list | None
     declarados.sort()
 
     # Los enlaces vistos por par de equipos: uno por cada par de puntas distinto, así que dos
-    # cables paralelos cuentan como dos.
-    vistos_por_nodo = Counter(nodo_de[par] for par in vistos)
-    soporte_por_nodo = {}
-    for par, soporte in soporte_de.items():
-        soporte_por_nodo.setdefault(nodo_de[par], soporte)
+    # cables paralelos cuentan como dos. Se guarda cada par de puntas —con el soporte que la
+    # vista le dio— hasta el final, porque dos cables paralelos pueden haberse aprendido con
+    # protocolos distintos y atribuir a los dos el del primero sería inventar el soporte de uno.
+    vistos_de_nodo = {}
+    for par in sorted(vistos):
+        vistos_de_nodo.setdefault(nodo_de[par], []).append(par)
 
     confirmados, faltan = [], {"la_vista": [], "sin_concluir": []}
     for nodo_par in declarados:
-        if vistos_por_nodo[nodo_par] > 0:
-            vistos_por_nodo[nodo_par] -= 1
+        casados = vistos_de_nodo.get(nodo_par)
+        if casados:
+            vistos_de_nodo[nodo_par] = casados[1:]
             confirmados.append(list(nodo_par))
             continue
         # No se ve el cable: sólo se le achaca a la vista cuando sus dos puntas son equipos
@@ -2873,12 +2874,13 @@ def netxms_topologia_contraste(lab: dict, nodes: list | None, censo: list | None
         else:
             faltan["sin_concluir"].append(list(nodo_par))
     # Lo que la vista ve y el plano no declara (o declara de menos): los enlaces que sobran,
-    # uno por cada par de puntas visto que quedó sin casar.
+    # uno por cada par de puntas visto que quedó sin casar, con el soporte que la vista le dio a
+    # ese par y no al del primero de ellos.
     sobran = []
-    for nodo_par, cuantos in sorted(vistos_por_nodo.items()):
-        soporte = soporte_por_nodo.get(nodo_par)
-        nombre = NETXMS_PROTOCOLO_NOMBRES.get(soporte, str(soporte or "")) if soporte else ""
-        for _ in range(cuantos):
+    for nodo_par in sorted(vistos_de_nodo):
+        for par in vistos_de_nodo[nodo_par]:
+            soporte = soporte_de.get(par)
+            nombre = NETXMS_PROTOCOLO_NOMBRES.get(soporte, str(soporte or "")) if soporte else ""
             sobran.append({"cable": list(nodo_par), "soporte": nombre})
 
     return {

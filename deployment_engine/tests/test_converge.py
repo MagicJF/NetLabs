@@ -1862,6 +1862,22 @@ class ElContrasteDeLaTopologiaDeCapa2(unittest.TestCase):
         self.assertEqual(c["faltan"], {"la_vista": [], "sin_concluir": []})
         self.assertTrue(c["coincide"])
 
+    def test_dos_cables_paralelos_con_soportes_distintos_no_los_atribuye_al_primero(self):
+        # Dos cables entre los mismos equipos pueden haberse aprendido con protocolos distintos.
+        # El soporte es la evidencia de cada hallazgo, así que viaja con su par de puntas y no se
+        # copia el del primero a todos los cables de ese par.
+        detalles = [
+            {"id": 436, "peerNodeId": 421, "peerInterfaceId": 501, "peerDiscoveryProtocol": 1},
+            {"id": 437, "peerNodeId": 421, "peerInterfaceId": 502, "peerDiscoveryProtocol": 2},
+        ]
+        c = self.con_vista(detalles=detalles, lab={"links": []})
+        self.assertEqual(c["cables_vistos"], 2)
+        self.assertEqual(c["sobran"], [
+            {"cable": ["rta1", "swc1"], "soporte": "FDB"},
+            {"cable": ["rta1", "swc1"], "soporte": "2"},
+        ])
+        self.assertFalse(c["coincide"])
+
     def test_un_cable_que_la_vista_ve_y_el_plano_no_declara_es_del_plano_la_falta(self):
         # La vista no inventa enlaces: si ve rta1 unido a wsp1 y el plano no lo declara, al
         # plano le sobra un cable por dibujar. El soporte viaja con el hallazgo —la vista lo
