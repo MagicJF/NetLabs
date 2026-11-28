@@ -2308,8 +2308,10 @@ class LaEscuchaDeLosRegistros(unittest.TestCase):
                          {"ops": [], "reiniciar": False})
 
     def test_el_reinicio_dice_que_cambio(self):
+        # La unidad es la que el sitio instala y administra (`a_bootstrap`), no un alias que
+        # el paquete pueda no traer: reiniciar otra deja el cambio guardado sin entrar en vigor.
         cmd = " ".join(converge.netxms_reinicio_cmd())
-        self.assertIn("systemctl restart netxmsd", cmd)
+        self.assertIn("systemctl restart netxms-server", cmd)
         self.assertIn("CAMBIO:1", cmd)
 
 

@@ -1812,7 +1812,7 @@ def netxms_reinicio_cmd() -> list:
     servicio de dentro. Imprime `CAMBIO:1` para que el motor pueda distinguir «se reinició» de
     «se intentó»: la puerta no da por bueno lo que no puede comprobar.
     """
-    return _sh("systemctl restart netxmsd && echo CAMBIO:1")
+    return _sh("systemctl restart netxms-server && echo CAMBIO:1")
 
 
 def _identidad_para_la_vista(identidad: dict | None) -> dict | None:
