@@ -116,6 +116,10 @@
     label: "{{ ros_lectura.ruta }}"
   register: ros_lecturas
   changed_when: false
+  # Lo leído incluye `/rest/snmp/community`, cuyas entradas v3 traen las claves; y `/rest/user`.
+  # Con `-v` la salida detallada imprimiría esos cuerpos y el lanzador los guardaría en logs/.
+  # Se calla la tarea entera —el diagnóstico de qué se leyó no aporta nada que no diga `effect`—.
+  no_log: true
 
 - name: "RouterOS · ordenar lo leído"
   # Lo leído se ordena por la clave que trae cada lectura, no por el orden en que
@@ -126,10 +130,18 @@
     ros_current: >-
       {{ dict(ros_lecturas.results | map(attribute='ros_lectura') | map(attribute='clave')
               | zip(ros_lecturas.results | map(attribute='json') | list)) }}
+  # `ros_current` es lo leído, con las claves de `/rest/snmp/community` dentro: un `set_fact`
+  # sin `no_log` imprime el hecho entero con `-v` y el lanzador lo guarda en logs/.
+  no_log: true
 
 - name: "RouterOS · calcular la diferencia de {{ router.name }}"
   ansible.builtin.set_fact:
     ros_ops: "{{ router | netlabs_ros_ops(ros_current, ros_clave, secrets, env.management.address_space, env.observabilidad | default({})) }}"
+  # `ros_ops` lleva el cuerpo de cada escritura, y una escritura —el alta de usuario, o la
+  # identidad SNMP v3— contiene la clave: sin `no_log` el hecho entero se imprime con `-v` y
+  # el lanzador lo guarda en logs/. El diagnóstico no se pierde: la tarea de abajo enseña la
+  # diferencia por su `effect`, que nunca nombra una clave.
+  no_log: true
 
 - name: "RouterOS · enseñar la diferencia de {{ router.name }}"
   ansible.builtin.debug:
@@ -227,6 +239,10 @@
     label: "{{ ros_lectura.ruta }}"
   register: ros_relecturas
   changed_when: false
+  # Como la primera lectura: lo releído trae los cuerpos de `/rest/snmp/community` y `/rest/user`,
+  # con sus claves. Sin `no_log`, la salida detallada con `-v` los imprimiría y el lanzador los
+  # guardaría en logs/.
+  no_log: true
 
 - name: "RouterOS · lo que se dijo y no quedó en {{ router.name }}"
   ansible.builtin.set_fact:
@@ -235,6 +251,9 @@
            | map(attribute='ros_lectura') | map(attribute='clave') | zip(ros_relecturas.results | map(attribute='json')
            | list)), ros_clave, secrets, env.management.address_space,
            env.observabilidad | default({})) }}
+  # `ros_resto` es otra diferencia calculada: lleva los mismos cuerpos con clave que `ros_ops`.
+  # Se calla el hecho; lo que se dice en voz alta —si queda algo— es su `effect`, más abajo.
+  no_log: true
 
 - name: "RouterOS · dar el cambio por bueno sólo si de verdad está en {{ router.name }}"
   ansible.builtin.assert:
