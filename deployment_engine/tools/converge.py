@@ -55,6 +55,17 @@ ROS_READS = (
 
 PREFIX = "netlabs-"
 
+# Las condiciones de una regla de traducción: lo que RouterOS compara para decidir si
+# la regla toca un paquete. El motor sólo escribe `out-interface`, así que cualquier
+# otra puesta en la regla la hace traducir menos de lo declarado.
+CONDICIONES_NAT = (
+    "src-address", "dst-address", "src-address-list", "dst-address-list",
+    "src-port", "dst-port", "protocol", "in-interface", "in-interface-list",
+    "out-interface-list", "src-mac-address", "connection-mark", "packet-mark",
+    "routing-mark", "tcp-flags", "icmp-options", "connection-state", "dscp",
+    "content", "layer7-protocol", "tls-host",
+)
+
 # Las comunidades que RouterOS trae puestas de fábrica. Cualquier cliente que no se
 # configure manda una de estas; si el equipo las apaga, el cliente deja de ver nada.
 COMUNIDADES_DE_FABRICA = ("public", "default")
@@ -510,6 +521,18 @@ def _route_ops(declaradas: list, actuales: list) -> list[dict]:
     return ops
 
 
+def _sin_condiciones_extra(regla: dict) -> bool:
+    """Verdadero si la regla no lleva ninguna condición más que su pata de salida.
+
+    Las condiciones son lo que RouterOS compara para decidir si la regla toca un
+    paquete. El motor sólo escribe `out-interface`, así que cualquier otra puesta en la
+    regla —un `src-address`, un `protocol`— la hace traducir menos de lo declarado: no
+    es la del laboratorio aunque coincida en interfaz, acción y cadena, y se reemplaza
+    en vez de darla por buena.
+    """
+    return not any(str(regla.get(campo) or "") for campo in CONDICIONES_NAT)
+
+
 def _nat_ops(node: dict, declaradas: list, actuales: list) -> list[dict]:
     """La traducción de la salida: lo que sale por la pata pública.
 
@@ -535,7 +558,7 @@ def _nat_ops(node: dict, declaradas: list, actuales: list) -> list[dict]:
         accion = item.get("action", "masquerade")
         igual = next((r for r in sin_reclamar
                       if r.get("out-interface") == iface and r.get("action") == accion
-                      and r.get("chain") == "srcnat"), None)
+                      and r.get("chain") == "srcnat" and _sin_condiciones_extra(r)), None)
         if igual is not None:
             sin_reclamar.remove(igual)
             # Una regla propia apagada con `disabled: true` no traduce: coincidir en

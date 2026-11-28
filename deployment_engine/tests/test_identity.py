@@ -1123,6 +1123,34 @@ class LaSalidaALaRedPublica(unittest.TestCase):
             identity.validate(lab, entorno())
         self.assertIn("no vale", str(ctx.exception))
 
+    def test_dos_salidas_que_se_solapan_se_rechazan(self):
+        """Dos salidas que se pisan se rechazan antes de crear sus puentes.
+
+        Un /24 y un /25 dentro de él no son bloques idénticos —que ya se rechazan— pero
+        se solapan: el motor crearía dos puentes con dirección dentro del mismo rango y
+        las respuestas del trozo compartido podrían volver por el puente equivocado.
+        """
+        lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
+        tk = next(n for n in lab["networks"] if n["name"] == "tk_salida")
+        tk["address"] = "172.30.10.128/25"  # dentro del /24 de ny_salida
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.validate(lab, entorno())
+        self.assertIn("se solapa con la salida", str(ctx.exception))
+
+    def test_la_traduccion_solo_sale_por_una_red_del_propio_nodo(self):
+        """Traducir por la salida de OTRO nodo se rechaza al validar, no al aplicar.
+
+        `tk_salida` existe y es una salida, pero es una pata de rte2, no de rte1: si se
+        admitiera, la validación pasaría y `_nat_ops` reventaría a mitad del `apply`,
+        con los recursos ya escritos, por una red que el router no tiene.
+        """
+        lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
+        next(n for n in lab["nodes"] if n["role"] == "rte1")["configure"]["nat"] = [
+            {"out": "tk_salida"}]
+        with self.assertRaises(identity.LabError) as ctx:
+            identity.validate(lab, entorno())
+        self.assertIn("no una red de este nodo", str(ctx.exception))
+
     def test_el_resolutor_rechaza_lo_que_no_es_una_direccion(self):
         lab = copy.deepcopy(laboratorio("f_acme_cuatro_departamentos"))
         next(n for n in lab["nodes"] if n["role"] == "rte1")["configure"]["dns"] = {

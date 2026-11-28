@@ -240,6 +240,9 @@ def validate(lab: dict, env: dict) -> None:
         raise LabError("'networks' tiene que ser una lista con al menos una red")
     seen = set()
     by_name = {}
+    # Las salidas vistas hasta ahora, con su tramo: dos salidas del mismo laboratorio
+    # no pueden pisarse, y el solapamiento no siempre es un bloque idéntico.
+    salidas_vistas: list[tuple[str, ipaddress.IPv4Network | ipaddress.IPv6Network]] = []
     for net in declared_networks:
         if not isinstance(net, dict):
             raise LabError(f"una red tiene que ser un mapa, y hay {net!r}")
@@ -281,6 +284,19 @@ def validate(lab: dict, env: dict) -> None:
                     f"la salida {net['name']!r} se dibuja como nube: declara 'shape: cloud', "
                     "que es lo que la saca de las áreas de la casa"
                 )
+            # Dos salidas del mismo laboratorio son dos fronteras distintas: si sus
+            # tramos se solapan, el motor crea dos puentes con dirección dentro del mismo
+            # rango y las respuestas del trozo compartido pueden volver por el puente
+            # equivocado. No basta con rechazar los bloques idénticos —un /24 y un /25
+            # dentro de él no lo son—, así que se rechaza cualquier solapamiento.
+            for otra_nombre, otra_red in salidas_vistas:
+                if cidr.overlaps(otra_red):
+                    raise LabError(
+                        f"la salida {net['name']!r} ({cidr}) se solapa con la salida "
+                        f"{otra_nombre!r} ({otra_red}): dos tramos de salida no pueden "
+                        "pisarse, o compartirían puente y puerta"
+                    )
+            salidas_vistas.append((net["name"], cidr))
         elif not any(cidr.subnet_of(space) for space in nets):
             raise LabError(
                 f"la red {net['name']!r} ({cidr}) no cabe en ningún espacio declarado en "
@@ -655,10 +671,11 @@ def _validate_node(node: dict, networks: dict, roles: set, salidas: set | None =
                 f"Se admite: {', '.join(sorted(allowed))}"
             )
     for area, body in configure.items():
-        _validate_area(role, area, body, networks, salidas)
+        _validate_area(role, area, body, networks, salidas, nets)
 
 
-def _validate_area(role: str, area: str, body, networks: dict, salidas=None) -> None:
+def _validate_area(role: str, area: str, body, networks: dict, salidas=None,
+                   nodo_nets=None) -> None:
     """Cada área tiene su forma; lo que no encaja se rechaza con el porqué."""
     if area == "addresses":
         _require_list(role, area, body)
@@ -702,6 +719,15 @@ def _validate_area(role: str, area: str, body, networks: dict, salidas=None) -> 
                 raise LabError(
                     f"el área 'nat' de {role!r} traduce por {item['out']!r}, que no es una "
                     "salida a la red pública: sólo se traduce lo que sale de casa"
+                )
+            # Que la red sea una salida del laboratorio no basta: tiene que ser una pata
+            # DE ESTE nodo. Traducir por la salida de otro pasaría la validación y sólo
+            # reventaría en `_nat_ops`, a mitad del `apply`, con recursos ya escritos.
+            if nodo_nets is not None and item["out"] not in nodo_nets:
+                raise LabError(
+                    f"el área 'nat' de {role!r} traduce por {item['out']!r}, que es una "
+                    "salida del laboratorio pero no una red de este nodo: sólo se traduce "
+                    "por una pata que el router tenga"
                 )
             if item.get("action", "masquerade") != "masquerade":
                 raise LabError(

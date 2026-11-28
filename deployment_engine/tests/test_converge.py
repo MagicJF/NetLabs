@@ -1924,6 +1924,19 @@ class LaTraduccionDeLaSalida(unittest.TestCase):
             converge._nat_ops(self.nodo(), [{"out": "otra"}], [])
         self.assertIn("no es una red suya", str(ctx.exception))
 
+    def test_una_regla_con_una_condicion_de_mas_se_reemplaza(self):
+        """Una regla propia con una condición de más no traduce lo declarado: se reemplaza.
+
+        Coincidir en interfaz, acción y cadena no basta si además trae un `src-address`:
+        esa regla sólo traduce el tráfico de ese origen, y los clientes que salen por
+        otra dirección se quedarían sin traducir sin que el plan lo dijera.
+        """
+        actual = [{"chain": "srcnat", "action": "masquerade", "out-interface": "ether2",
+                   "src-address": "192.0.2.0/24", "comment": "netlabs-salida", ".id": "*1"}]
+        ops = converge._nat_ops(self.nodo(), [{"out": "salida"}], actual)
+        self.assertEqual([o["method"] for o in ops], ["PUT", "DELETE"])
+        self.assertEqual(ops[1]["path"], "/rest/ip/firewall/nat/*1")
+
     def test_el_resolutor_se_escribe_solo_si_cambia(self):
         self.assertEqual(converge._dns_ops({"servers": ["1.1.1.1"]}, {"servers": "1.1.1.1"}), [])
         ops = converge._dns_ops({"servers": ["1.1.1.1", "9.9.9.9"]}, {"servers": ""})
