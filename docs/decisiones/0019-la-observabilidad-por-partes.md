@@ -68,8 +68,16 @@ y su PR.
   cero ni prometer lo que no da.
 - El §7 de `docs/diseno.md` decía «sin agente en esta fase»; esta decisión lo sustituye por un P2
   declarado y con motivo.
-- **Nada de esto toca al motor de despliegue**: son cambios en los equipos y en la vista, y por eso
-  van aparte de los laboratorios.
-- **Antes del P0** hace falta que el servicio de la vista sea alcanzable desde el invitado de
-  gestión: hoy no lo es —la lectura del mapa falla al conectar a `netxms.matadepera.eu:443`— y sin
-  eso no hay ni topología ni syslog que valgan.
+- **Nada de esto se declara en un laboratorio**: se enciende en los equipos y en la vista, y por eso
+  va aparte de los laboratorios. Pero **el motor no queda fuera del P0**: la migración a SNMP v3
+  tendrá que adaptar también lo que el motor restaura. En un laboratorio que declare el área `snmp`,
+  `_snmp_ops` (`tools/converge.py`) impone `security: none` —v2c— a la comunidad declarada y a las
+  demás activas, y vuelve a encender las de fábrica: el `apply` siguiente desharía el v3 y
+  devolvería el laboratorio al claro sin decirlo. Hasta que le llegue el turno, el motor se queda
+  como está.
+- **Antes del P0** lo que hay que comprobar es el camino entre la vista y los equipos —que el sondeo
+  SNMP v3 y los registros lleguen por la red de gestión—, que es de lo que el P0 depende. La consola
+  pública no está en ese camino: el motor habla con el servicio **desde dentro de su invitado**, por
+  su API (`management.api`, `http://127.0.0.1:8000/v1`), que es por donde lee y coloca el mapa. Que
+  `netxms.matadepera.eu:443` falle es del proxy que publica la consola, y no bloquea ni a la
+  topología ni al syslog.

@@ -828,7 +828,12 @@ hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.
 Por partes, de lo barato a lo profundo, y cada parte es su propio cambio (ADR 0019):
 
 - **P0.** SNMP v3 en lugar de la comunidad en claro, los registros de los equipos recogidos por la
-  vista, y el **poll de topología** encendido —hoy sin ejecutar—.
+  vista, y el **poll de topología** encendido —hoy sin ejecutar—. Va con el motor dentro: en un
+  laboratorio que declare el área `snmp`, el motor impone `security: none` (v2c) a las comunidades
+  y vuelve a encender las de fábrica (`_snmp_ops`), así que la migración tiene que adaptar también
+  lo que el motor restaura —si no, el `apply` siguiente la deshace—. Lo que no cambia es dónde
+  vive: la consola pública no está en el camino del motor, que habla con la vista por su API desde
+  dentro de su invitado (`management.api`).
 - **P1.** La topología L2 real por la **tabla del puente (FDB)**, no por LLDP: el LLDP de MikroTik no
   lo lee bien la vista. Con ella delante, se contrasta con el plano del motor (ADR 0007).
 - **P2.** **Agente** en los nodos finales Linux —CPU, memoria, procesos—. En RouterOS no existe.
