@@ -1868,3 +1868,83 @@ class LoQueElDestroyRetiraDeLaVista(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LaTraduccionDeLaSalida(unittest.TestCase):
+    """Lo que un router escribe cuando sale de verdad: traduce y resuelve.
+
+    La traducción sale por la pata de la salida y sólo se reconoce como propia la
+    que lleva el comentario del motor: una regla puesta a mano no se toca ni se pisa.
+    """
+
+    @staticmethod
+    def nodo():
+        return {"name": "rte1", "role": "rte1", "type": "router",
+                "interfaces": [{"network": "lan", "index": 0},
+                               {"network": "salida", "index": 1}]}
+
+    def test_se_traduce_por_la_pata_de_la_salida(self):
+        self.assertEqual(
+            converge._nat_ops(self.nodo(), [{"out": "salida"}], []),
+            [{"method": "PUT", "path": "/rest/ip/firewall/nat",
+              "body": {"chain": "srcnat", "action": "masquerade",
+                       "out-interface": "ether2", "comment": "netlabs-salida"},
+              "effect": "traducir la salida por ether2 (masquerade)"}])
+
+    def test_lo_ya_escrito_no_se_vuelve_a_escribir(self):
+        actual = [{"chain": "srcnat", "action": "masquerade", "out-interface": "ether2",
+                   "comment": "netlabs-salida", ".id": "*1"}]
+        self.assertEqual(converge._nat_ops(self.nodo(), [{"out": "salida"}], actual), [])
+
+    def test_una_regla_apagada_se_vuelve_a_encender(self):
+        """Una regla propia apagada con `disabled: true` no traduce: hay que encenderla.
+
+        Coincidir en interfaz, acción y cadena no basta si alguien la apagó: sin
+        traducir, lo de dentro no vuelve del mundo, y el plan tiene que verlo.
+        """
+        actual = [{"chain": "srcnat", "action": "masquerade", "out-interface": "ether2",
+                   "comment": "netlabs-salida", "disabled": "true", ".id": "*1"}]
+        self.assertEqual(
+            converge._nat_ops(self.nodo(), [{"out": "salida"}], actual),
+            [{"method": "PATCH", "path": "/rest/ip/firewall/nat/*1",
+              "body": {"disabled": "no"},
+              "effect": "encender la traducción por ether2 (masquerade)"}])
+
+    def test_lo_que_sobra_se_retira_y_lo_ajeno_no(self):
+        actual = [{"chain": "srcnat", "action": "masquerade", "out-interface": "ether1",
+                   "comment": "netlabs-salida", ".id": "*1"},
+                  {"chain": "srcnat", "action": "masquerade", "out-interface": "ether1",
+                   "comment": "puesta a mano", ".id": "*2"}]
+        ops = converge._nat_ops(self.nodo(), [{"out": "salida"}], actual)
+        self.assertEqual([o["method"] for o in ops], ["PUT", "DELETE"])
+        self.assertEqual(ops[1]["path"], "/rest/ip/firewall/nat/*1")
+
+    def test_una_salida_que_no_es_una_pata_se_rechaza(self):
+        with self.assertRaises(LabError) as ctx:
+            converge._nat_ops(self.nodo(), [{"out": "otra"}], [])
+        self.assertIn("no es una red suya", str(ctx.exception))
+
+    def test_una_regla_con_una_condicion_de_mas_se_reemplaza(self):
+        """Una regla propia con una condición de más no traduce lo declarado: se reemplaza.
+
+        Coincidir en interfaz, acción y cadena no basta si además trae un `src-address`:
+        esa regla sólo traduce el tráfico de ese origen, y los clientes que salen por
+        otra dirección se quedarían sin traducir sin que el plan lo dijera.
+        """
+        actual = [{"chain": "srcnat", "action": "masquerade", "out-interface": "ether2",
+                   "src-address": "192.0.2.0/24", "comment": "netlabs-salida", ".id": "*1"}]
+        ops = converge._nat_ops(self.nodo(), [{"out": "salida"}], actual)
+        self.assertEqual([o["method"] for o in ops], ["PUT", "DELETE"])
+        self.assertEqual(ops[1]["path"], "/rest/ip/firewall/nat/*1")
+
+    def test_el_resolutor_se_escribe_solo_si_cambia(self):
+        self.assertEqual(converge._dns_ops({"servers": ["1.1.1.1"]}, {"servers": "1.1.1.1"}), [])
+        ops = converge._dns_ops({"servers": ["1.1.1.1", "9.9.9.9"]}, {"servers": ""})
+        self.assertEqual(ops[0]["body"], {"servers": "1.1.1.1,9.9.9.9"})
+
+    def test_el_resolutor_atiende_a_los_suyos_cuando_se_le_pide(self):
+        ops = converge._dns_ops({"allow_remote_requests": True},
+                                {"allow-remote-requests": "false"})
+        self.assertEqual(ops[0]["body"], {"allow-remote-requests": "yes"})
+        self.assertEqual(converge._dns_ops({"allow_remote_requests": True},
+                                           {"allow-remote-requests": "true"}), [])

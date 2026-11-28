@@ -101,7 +101,7 @@
 
 - name: "RouterOS · leer el interior de {{ router.name }}"
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_lectura }}"
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_lectura.ruta }}"
     method: GET
     url_username: "{{ ros_user }}"
     url_password: "{{ ros_clave }}"
@@ -113,16 +113,19 @@
   loop: "{{ router | netlabs_ros_reads }}"
   loop_control:
     loop_var: ros_lectura
-    label: "{{ ros_lectura }}"
+    label: "{{ ros_lectura.ruta }}"
   register: ros_lecturas
   changed_when: false
 
 - name: "RouterOS · ordenar lo leído"
+  # Lo leído se ordena por la clave que trae cada lectura, no por el orden en que
+  # salieron: un diccionario montado sobre dos listas paralelas miente en cuanto una se
+  # descuadra, y entonces el motor ve un equipo vacío y le propone escribir lo que ya
+  # tiene (y RouterOS le contesta «already have»).
   ansible.builtin.set_fact:
     ros_current: >-
-      {{ dict(ros_claves | zip(ros_lecturas.results | map(attribute='json') | list)) }}
-  vars:
-    ros_claves: [identity, addresses, routes, pools, dhcp_servers, dhcp_networks, services, users, snmp, snmp_community, bridges, bridge_ports, dhcp_leases]
+      {{ dict(ros_lecturas.results | map(attribute='ros_lectura') | map(attribute='clave')
+              | zip(ros_lecturas.results | map(attribute='json') | list)) }}
 
 - name: "RouterOS · calcular la diferencia de {{ router.name }}"
   ansible.builtin.set_fact:
@@ -211,7 +214,7 @@
 # el apply se para con su nombre y apellidos en vez de decir que fue bien.
 - name: "RouterOS · releer el interior de {{ router.name }} tras escribir"
   ansible.builtin.uri:
-    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_lectura }}"
+    url: "http://127.0.0.1:{{ router.vmid | netlabs_tunnel_port }}{{ ros_lectura.ruta }}"
     method: GET
     url_username: "{{ ros_user }}"
     url_password: "{{ ros_clave }}"
@@ -221,31 +224,16 @@
   loop: "{{ router | netlabs_ros_reads }}"
   loop_control:
     loop_var: ros_lectura
-    label: "{{ ros_lectura }}"
+    label: "{{ ros_lectura.ruta }}"
   register: ros_relecturas
   changed_when: false
 
 - name: "RouterOS · lo que se dijo y no quedó en {{ router.name }}"
   ansible.builtin.set_fact:
     ros_resto: >-
-      {{ router | netlabs_ros_ops(dict(ros_claves_post | zip(
-           ros_relecturas.results | map(attribute='json') | list)), ros_clave, secrets,
-           env.management.address_space) }}
-  vars:
-    ros_claves_post:
-      - identity
-      - addresses
-      - routes
-      - pools
-      - dhcp_servers
-      - dhcp_networks
-      - services
-      - users
-      - snmp
-      - snmp_community
-      - bridges
-      - bridge_ports
-      - dhcp_leases
+      {{ router | netlabs_ros_ops(dict(ros_relecturas.results
+           | map(attribute='ros_lectura') | map(attribute='clave') | zip(ros_relecturas.results | map(attribute='json')
+           | list)), ros_clave, secrets, env.management.address_space) }}
 
 - name: "RouterOS · dar el cambio por bueno sólo si de verdad está en {{ router.name }}"
   ansible.builtin.assert:

@@ -301,6 +301,20 @@ def cajas_y_equipos(svg):
     return areas, equipos
 
 
+def tramos_de(svg):
+    """Cada tramo recto de cada línea del plano, como sus dos puntos.
+
+    Una línea del plano es una `polyline` en ángulo recto: sus vértices son los puntos
+    por donde pasa, y cada par consecutivo es un tramo. Sirve para saber por dónde va
+    una pata —si cruza una caja que no le toca— sin mirar el dibujo a ojo.
+    """
+    tramos = []
+    for m in re.finditer(r'<polyline points="([^"]*)"', svg):
+        puntos = [tuple(float(v) for v in par.split(",")) for par in m.group(1).split()]
+        tramos += list(zip(puntos, puntos[1:]))
+    return tramos
+
+
 def _visible(tramo, cajas):
     """Cuánto de un tramo queda a la vista, es decir, fuera de todo símbolo.
 
@@ -627,3 +641,38 @@ class ElPlanoSueltoAlLadoDeLaPagina(unittest.TestCase):
             dentro = pagina.split("<svg", 1)[1].split("</svg>", 1)[0]
             fichero = (RAIZ / "labs" / nombre / f"{nombre}-topologia.svg").read_text()
             self.assertEqual("<svg" + dentro + "</svg>", fichero.rstrip("\n"), nombre)
+
+
+class LasSalidasDeCadaSede(unittest.TestCase):
+    """Cada sede sale por su nube, y la línea lo dice sin cruzar la de la otra.
+
+    Las redes con `exit: true` no llevan cable declarado (tienen una sola punta, ADR
+    0018), así que su pata la dibuja el plano desde la interfaz del router. Si el plano
+    no la dibujara, la nube quedaría suelta y parecería que la sede no sale; y si la
+    dibujara subiendo en vertical con las nubes apiladas, cruzaría por dentro de la
+    nube de otra sede y el plano diría que sale por la que no es.
+    """
+
+    def test_cada_salida_tiene_su_pata_y_no_cruza_la_nube_de_otra(self):
+        lab = laboratorio("f_acme_cuatro_departamentos")
+        svg = plano.plano(lab, "topologia")
+        areas, _ = cajas_y_equipos(svg)
+        salidas = [a for a in areas if a["nube"] and a["lema"]]
+        self.assertGreaterEqual(len(salidas), 2, "el laboratorio no tiene dos salidas")
+        for salida in salidas:
+            base = salida["y"] + salida["alto"] - 8
+            suyos = [t for t in tramos_de(svg)
+                     if any(abs(y - base) < 1.0
+                            and salida["x"] <= x <= salida["x"] + salida["ancho"]
+                            for x, y in t)]
+            with self.subTest(salida=salida["titulo"]):
+                self.assertTrue(suyos, "la nube de la salida no tiene ninguna pata")
+                for otro in salidas:
+                    if otro is salida:
+                        continue
+                    caja = (otro["x"], otro["y"], otro["x"] + otro["ancho"],
+                            otro["y"] + otro["alto"])
+                    for tramo in suyos:
+                        self.assertFalse(
+                            plano._cruza(tramo, caja),
+                            f"la pata de «{salida['titulo']}» cruza «{otro['titulo']}»")

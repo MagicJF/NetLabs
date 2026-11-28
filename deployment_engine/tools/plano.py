@@ -428,10 +428,11 @@ def _arbol(lab: dict) -> Region:
         # `shape: cloud` es una decisión de dibujo: la red se pinta como nube porque no
         # es un segmento del cliente, no porque el despliegue sea distinto.
         region.nube = net.get("shape") == "cloud"
-        if region.nube:
-            # La nube no es una red más de la casa: es por donde se sale a Internet. Su
-            # cabecera lo dice con una leyenda, no con un bloque de direcciones —«Internet
-            # (/24)» se leía como un segmento del cliente y no lo es—.
+        if net.get("exit"):
+            # Sólo la salida a la red pública —la red marcada con `exit: true`— lleva esa
+            # leyenda: es la frontera por la que se navega de verdad. Otra nube (el
+            # tránsito del proveedor) no es una salida a internet y no puede decir que lo
+            # sea: conserva su bloque de direcciones, que es su tramo y sí lo identifica.
             region.lema = "salida a la red pública"
             region.subred = ""
         # Dos redes con la misma dirección se toman la una a la otra como padre y
@@ -621,7 +622,11 @@ def _marcar_pasillos(raiz: Region, cruces: dict[str, list[Region]]) -> None:
                 if hija not in grupos:
                     continue
                 for otro in grupos:
-                    if otro is not hija and otro in region.hijas:
+                    # Una salida al exterior no es una hermana del dibujo: los routers
+                    # de borde cruzan la caja de la empresa para llegar a su nube, y
+                    # contarla como hermana convertía la empresa en una banda más, que
+                    # es justo lo que no es. Sólo las sedes cuentan.
+                    if otro is not hija and otro in region.hijas and not otro.nube:
                         quienes.add(rol)
                         hermanas.add(id(otro))
             if len(quienes) >= 2 and len(hermanas) >= 2:
@@ -1039,10 +1044,23 @@ def _plano_anidado(lab: dict) -> str:
         redes = por_nodo[a["node"]].get("networks") or []
         red = por_red.get(redes[a["port"] - 1]) if a["port"] <= len(redes) else None
         if red is not None and red.nube and not _equipos_de(red):
-            nubes.setdefault(red.nombre, []).extend([(a["node"], a["port"]),
-                                                     (z["node"], z["port"])])
+            # No es un cable: la pata a la nube la dibuja la vuelta de abajo.
             continue
         cables.append((a["node"], a["port"], z["node"], z["port"]))
+
+    # Cada router se asoma a la nube por su cuenta, y la nube no tiene equipos dentro.
+    # Se recorre cada interfaz —no cada cable—: una salida a la red pública no lleva
+    # cable declarado (tiene una sola punta, ADR 0018) y sólo aparece en las interfaces
+    # del router que sale por ella. Sin esta vuelta la nube de la salida quedaría
+    # suelta, sin decir qué sede sale por dónde.
+    for nodo in lab["nodes"]:
+        for puerto, nombre in enumerate(nodo.get("networks") or [], start=1):
+            red = por_red.get(nombre)
+            if red is None or not red.nube or _equipos_de(red):
+                continue
+            asomos = nubes.setdefault(nombre, [])
+            if (nodo["role"], puerto) not in asomos:
+                asomos.append((nodo["role"], puerto))
 
     piezas: list[str] = []
     for region in regiones:
@@ -1364,10 +1382,13 @@ def _plano_anidado(lab: dict) -> str:
         )
 
     # La nube no tiene equipos: cada router se asoma a ella con su pata y su puerto.
+    nubes_de_verdad = [r for r in regiones if r.nube]
     for nombre, asomos in nubes.items():
         nube = por_red[nombre]
+        otras = tuple(r for r in nubes_de_verdad if r is not nube)
         for i, (rol, puerto) in enumerate(asomos):
-            piezas.append(_pata_a_nube(punto_de(rol), nube, SIMBOLO[tipos[rol]], puerto, i))
+            piezas.append(_pata_a_nube(punto_de(rol), nube, SIMBOLO[tipos[rol]], puerto, i,
+                                       otras))
 
     # Una red sin equipos nuestros se alcanza con una pata hasta su borde: dentro no
     # hay a qué atar la línea.
@@ -1528,20 +1549,41 @@ def _puerto(x: float, y: float, numero: int, arriba: bool = True) -> str:
 
 
 def _pata_a_nube(inicio: tuple[float, float], region: Region,
-                 tam: tuple[float, float], puerto: int, sitio: int = 0) -> str:
-    """La pata del router a la nube, por el pasillo y entrando por la base.
+                 tam: tuple[float, float], puerto: int, sitio: int = 0,
+                 otras: tuple[Region, ...] = ()) -> str:
+    """La pata del router a la nube, por el pasillo y entrando por su base.
 
     La nube es pequeña y está centrada, así que los dos routers no caen debajo de
     ella: si la pata subiera en vertical, acabaría en el aire y el plano diría que la
     sede no tiene salida. Sube, corre por el pasillo que queda bajo la nube y entra
     por su base, cada sede por su lado.
+
+    Cuando hay varias nubes apiladas —el tránsito del proveedor y la salida de cada
+    sede—, subir en vertical desde la sede cruzaría por dentro de las que quedan en
+    medio, y el plano diría que una sede sale por la nube de la otra. En ese caso se
+    sale por el costado de la pila —por fuera del ancho de todas las nubes— y se sube
+    por ese pasillo hasta la base de la propia.
     """
     cx, cy = inicio
     arranque = cy - tam[1] / 2 - 2
     base = region.y + region.alto - 8
-    carril = base + max(10.0, (arranque - base) / 2)
     centro = region.x + region.ancho / 2
     destino = centro - 34 if sitio % 2 == 0 else centro + 34
+    vertical = ((destino, base), (destino, arranque))
+    if any(_cruza(vertical, (r.x, r.y, r.x + r.ancho, r.y + r.alto)) for r in otras):
+        x0 = min(r.x for r in otras)
+        x1 = max(r.x + r.ancho for r in otras)
+        izquierda = cx <= centro
+        destino = x0 - 18 if izquierda else x1 + 18
+        # Se sube por fuera de la pila y se entra por el borde de la propia nube, a la
+        # altura de su base: el pasillo es ancho, pero la nube no llega hasta él.
+        dentro = region.x + 22 if izquierda else region.x + region.ancho - 22
+        return "".join([
+            _codo([(cx, arranque), (destino, arranque), (destino, base), (dentro, base)]),
+            (f'<text x="{destino + 4:.1f}" y="{arranque - 5:.1f}" font-family="{FUENTE}" '
+             f'font-size="9" fill="{TENUE}">p{puerto}</text>'),
+        ])
+    carril = base + max(10.0, (arranque - base) / 2)
     # El puerto se escribe en el tramo horizontal, en el aire que queda entre la sede
     # y la nube: pegado al router, caía justo bajo su propio nombre y sus direcciones.
     medio = cx + (destino - cx) * 0.5
