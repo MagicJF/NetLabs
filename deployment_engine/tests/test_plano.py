@@ -278,6 +278,131 @@ class TestPlanoAnidado(unittest.TestCase):
                 self.assertFalse(se_pisan(caja, otra),
                                  f"{rol} y {otro} se dibujan uno encima del otro")
 
+    def test_tres_sedes_con_salidas_distintas_no_tapan_sus_routers_de_borde(self):
+        """Tres sedes hermanas apiladas salen por SU propia nube y siguen sin taparse.
+
+        Con una salida distinta por sede —tres `exit`—, agrupar los routers por la nube que
+        pisan deja un grupo de uno por salida: nadie separa a los demás, los tres comparten
+        el techo de la compañía y el centro horizontal de las sedes, y los tres símbolos
+        acaban en el mismo punto. Se demuestra que el plano los agrupa por el techo y los
+        reparte por él, aunque cada uno salga por su nube. Greptile lo vio así; ningún
+        laboratorio del repositorio tiene tres sedes, así que el caso se inventa aquí.
+        """
+        lab = {
+            "lab": "tres_sedes_salidas",
+            "networks": [
+                {"name": "transito", "address": "203.0.113.0/24", "title": "Transito",
+                 "shape": "cloud"},
+                {"name": "ny_salida", "address": "172.30.10.0/24", "title": "Salida NY",
+                 "shape": "cloud", "exit": True},
+                {"name": "tk_salida", "address": "172.30.20.0/24", "title": "Salida TK",
+                 "shape": "cloud", "exit": True},
+                {"name": "bs_salida", "address": "172.30.30.0/24", "title": "Salida BS",
+                 "shape": "cloud", "exit": True},
+                {"name": "ny", "address": "10.20.0.0/16", "title": "Nueva York"},
+                {"name": "tk", "address": "10.40.0.0/16", "title": "Tokio"},
+                {"name": "bs", "address": "10.60.0.0/16", "title": "Buenos Aires"},
+            ],
+            "nodes": [
+                {"role": "swc3", "type": "switch", "networks": ["transito"] * 3},
+                {"role": "rte1", "type": "router", "networks": ["transito", "ny", "ny_salida"]},
+                {"role": "rte2", "type": "router", "networks": ["transito", "tk", "tk_salida"]},
+                {"role": "rte3", "type": "router", "networks": ["transito", "bs", "bs_salida"]},
+                {"role": "pst1", "type": "workstation", "networks": ["ny"]},
+                {"role": "pst2", "type": "workstation", "networks": ["tk"]},
+                {"role": "pst3", "type": "workstation", "networks": ["bs"]},
+            ],
+            "links": [
+                {"a": {"node": "swc3", "port": 1}, "z": {"node": "rte1", "port": 1}},
+                {"a": {"node": "swc3", "port": 2}, "z": {"node": "rte2", "port": 1}},
+                {"a": {"node": "swc3", "port": 3}, "z": {"node": "rte3", "port": 1}},
+                {"a": {"node": "rte1", "port": 2}, "z": {"node": "pst1", "port": 1}},
+                {"a": {"node": "rte2", "port": 2}, "z": {"node": "pst2", "port": 1}},
+                {"a": {"node": "rte3", "port": 2}, "z": {"node": "pst3", "port": 1}},
+            ],
+        }
+        svg = plano.plano(lab, "topologia")
+        simbolos = cajas_de_los_simbolos(svg, lab)
+        cajas = {}
+        for rol in ("rte1", "rte2", "rte3"):
+            self.assertIn(rol, simbolos, f"{rol} no aparece en el plano")
+            cajas[rol] = simbolos[rol]
+        for i, (rol, caja) in enumerate(cajas.items()):
+            for otro, otra in list(cajas.items())[i + 1:]:
+                self.assertFalse(se_pisan(caja, otra),
+                                 f"{rol} y {otro} se dibujan uno encima del otro")
+        # Y la salida sigue a SU router: al separarlos a lo largo del techo, la nube
+        # tiene que moverse con él o deja de estar sobre el equipo que la alcanza. Una
+        # nube reanclada a la sede —donde la dejó `_asentar_salidas`— ya no se lee como
+        # la salida de ese router.
+        salidas = {
+            m.group(1): float(m.group(2)) + float(m.group(3)) / 2
+            for m in re.finditer(
+                r'<g data-area="([^"]*)" data-x="([\d.-]+)" data-y="[\d.-]+" '
+                r'data-ancho="([\d.-]+)"[^>]*data-nube="1"', svg)
+        }
+        for rol, titulo in (("rte1", "Salida NY"), ("rte2", "Salida TK"),
+                            ("rte3", "Salida BS")):
+            self.assertIn(titulo, salidas, f"falta la salida «{titulo}»")
+            centro_router = (cajas[rol][0] + cajas[rol][2]) / 2
+            self.assertAlmostEqual(salidas[titulo], centro_router, delta=0.5,
+                                   msg=f"«{titulo}» no queda sobre {rol}")
+
+    def test_ninguna_area_se_sale_del_lienzo(self):
+        """Una salida anclada fuera de la raíz no puede quedar recortada por el SVG.
+
+        El lienzo cuenta la raíz y los equipos, pero una salida se ancla sobre la vertical
+        de su sede y, con la sede cerca del borde, la nube —que es más ancha— cae fuera de
+        la raíz: su nombre y su nube acabarían fuera del `viewBox`. Se demuestra con dos
+        sedes hoja, un puesto cada una, que cada área del plano cabe dentro del lienzo
+        después de aplicar su traslación.
+        """
+        lab = {
+            "lab": "dos_sedes_salidas",
+            "networks": [
+                {"name": "transito", "address": "203.0.113.0/24", "title": "Transito",
+                 "shape": "cloud"},
+                {"name": "izq_salida", "address": "172.30.10.0/24", "title": "Salida izquierda",
+                 "shape": "cloud", "exit": True},
+                {"name": "der_salida", "address": "172.30.20.0/24", "title": "Salida derecha",
+                 "shape": "cloud", "exit": True},
+                {"name": "izq", "address": "10.20.0.0/16", "title": "Izquierda"},
+                {"name": "der", "address": "10.40.0.0/16", "title": "Derecha"},
+            ],
+            "nodes": [
+                {"role": "swc3", "type": "switch", "networks": ["transito"] * 3},
+                {"role": "rte1", "type": "router", "networks": ["transito", "izq", "izq_salida"]},
+                {"role": "rte2", "type": "router", "networks": ["transito", "der", "der_salida"]},
+                {"role": "pst1", "type": "workstation", "networks": ["izq"]},
+                {"role": "pst2", "type": "workstation", "networks": ["der"]},
+            ],
+            "links": [
+                {"a": {"node": "swc3", "port": 1}, "z": {"node": "rte1", "port": 1}},
+                {"a": {"node": "swc3", "port": 2}, "z": {"node": "rte2", "port": 1}},
+                {"a": {"node": "rte1", "port": 2}, "z": {"node": "pst1", "port": 1}},
+                {"a": {"node": "rte2", "port": 2}, "z": {"node": "pst2", "port": 1}},
+            ],
+        }
+        svg = plano.plano(lab, "topologia")
+        caja = re.search(r'<svg[^>]*width="([0-9.]+)" height="([0-9.]+)"', svg)
+        tr = re.search(r'<g transform="translate\(([0-9.-]+),([0-9.-]+)\)">', svg)
+        self.assertIsNotNone(caja, "el SVG no declara su tamaño")
+        self.assertIsNotNone(tr, "el SVG no declara su traslación")
+        ancho, alto = float(caja.group(1)), float(caja.group(2))
+        dx, dy = float(tr.group(1)), float(tr.group(2))
+        areas, _ = cajas_y_equipos(svg)
+        self.assertTrue(areas, "el plano no declara ninguna área")
+        for area in areas:
+            with self.subTest(area=area["titulo"]):
+                self.assertGreaterEqual(area["x"] + dx, -0.5,
+                                        f"«{area['titulo']}» se sale por la izquierda")
+                self.assertGreaterEqual(area["y"] + dy, -0.5,
+                                        f"«{area['titulo']}» se sale por arriba")
+                self.assertLessEqual(area["x"] + area["ancho"] + dx, ancho + 0.5,
+                                     f"«{area['titulo']}» se sale por la derecha")
+                self.assertLessEqual(area["y"] + area["alto"] + dy, alto + 0.5,
+                                     f"«{area['titulo']}» se sale por abajo")
+
 
 def cajas_y_equipos(svg):
     """Lo que el SVG declara de sí mismo: cada área y cada equipo con su centro.
@@ -676,3 +801,56 @@ class LasSalidasDeCadaSede(unittest.TestCase):
                         self.assertFalse(
                             plano._cruza(tramo, caja),
                             f"la pata de «{salida['titulo']}» cruza «{otro['titulo']}»")
+
+    def test_cada_salida_se_dibuja_sobre_el_router_de_su_sede(self):
+        """La salida de una sede no cuelga del centro: cuelga de ESA sede.
+
+        El router de borde que se asoma a la salida tiene también una pata en su sede, y
+        eso es lo que ata una nube a su sitio. Se demuestra que el centro de la nube cae
+        sobre la vertical de su router de borde —dentro de un píxel—, que las dos salidas
+        no comparten x (o se leerían como una sola apilada, sin saber cuál es de quién) y
+        que el tránsito del proveedor sigue siendo una banda centrada por encima de la
+        empresa, por donde pasan las dos sedes. La salida es de su sede; el tránsito, del
+        centro.
+        """
+        lab = laboratorio("f_acme_cuatro_departamentos")
+        svg = plano.plano(lab, "topologia")
+        areas, equipos = cajas_y_equipos(svg)
+        # Qué router se asoma a cada salida: el que tiene una pata en la red de la salida
+        # y otra en su sede. Es dato del laboratorio, no una suposición.
+        _, _, _, patas, _ = montar(lab)
+        router_de_salida: dict[str, str] = {}
+        nombre_de_titulo: dict[str, str] = {}
+        for clave, suyas in patas.items():
+            for red in suyas:
+                nombre_de_titulo[red.titulo] = red.nombre
+            salida = next((r for r in suyas if r.exit), None)
+            if salida is not None:
+                router_de_salida[salida.nombre] = clave
+        xy = {e["rol"]: (e["x"], e["y"]) for e in equipos}
+
+        salidas = [a for a in areas if a["nube"] and a["lema"]]
+        self.assertEqual(len(salidas), 2, "el laboratorio no tiene dos salidas")
+        centros = []
+        for salida in salidas:
+            rol = router_de_salida[nombre_de_titulo[salida["titulo"]]]
+            cx = salida["x"] + salida["ancho"] / 2
+            centros.append(round(cx, 1))
+            with self.subTest(salida=salida["titulo"]):
+                self.assertIn(rol, xy, f"{rol} no tiene símbolo en el plano")
+                self.assertAlmostEqual(
+                    cx, xy[rol][0], delta=1.0,
+                    msg=f"«{salida['titulo']}» no cae sobre la vertical de {rol}")
+        self.assertEqual(len(set(centros)), len(centros),
+                         f"las dos salidas comparten x: {centros}")
+
+        # El tránsito (la nube sin `exit`) sigue centrado y por encima de la empresa: la
+        # banda del techo, por donde se cruzan las dos sedes.
+        transito = next(a for a in areas if a["nube"] and not a["lema"])
+        empresa = min((a for a in areas if not a["nube"] and a["hijas"]),
+                      key=lambda a: a["y"])
+        self.assertAlmostEqual(transito["x"] + transito["ancho"] / 2,
+                               empresa["x"] + empresa["ancho"] / 2, delta=1.0,
+                               msg="el tránsito ya no está centrado sobre la empresa")
+        self.assertLessEqual(transito["y"] + transito["alto"], empresa["y"] + 0.5,
+                             "el tránsito ya no es una banda por encima de la empresa")

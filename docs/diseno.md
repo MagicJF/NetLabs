@@ -205,6 +205,14 @@ un equipo con pata en varias redes se sienta donde se tocan, **encima del cruce*
 cada área pasa por debajo de su símbolo, no a un lado—, con una red a cada lado y la salida a
 Internet arriba; con una sola red, el router se sienta sobre el techo del área.
 
+Las nubes no se apilan por ser nubes. **El tránsito del proveedor se dibuja como una banda
+centrada por encima de la empresa**, que es por donde pasan las dos sedes; **cada salida a
+Internet (`exit: true`) se dibuja junto a su propia sede**, en la vertical del router de borde
+que la alcanza —el que tiene una pata en la salida y otra en su sede—, para leerse como la de
+esa sede y no como una nube más del montón. Dos salidas llevan **dos rótulos distintos**
+(«Salida de New York», «Salida de Tokyo»): sin ellos el plano dibujaría dos nubes idénticas y
+no diría cuál es de quién. El tránsito es del centro; la salida, de su sede (`docs/decisiones/0022`).
+
 **Lo que no cambia se escribe**: cada equipo lleva su dirección estática bajo el nombre —una por
 pata si tiene varias, como un router con un pie en cada red— y el que sale por DHCP lo dice con
 esa palabra. Cada área, en su cabecera, lleva su nombre, su subred y **el rango que sirve su

@@ -6,6 +6,9 @@
 #              mano; el SVG se escribe dentro de la página y `./netlabs docs --check`
 #              lo compara con lo que la declaración produce hoy, así que no se queda viejo.
 #              Nada de números derivados: ni vmid, ni MAC, ni dirección de gestión.
+#              Cada salida a internet (`exit: true`) se dibuja junto a su sede —en la
+#              vertical del router de borde que la alcanza—, no centrada con las demás;
+#              el tránsito del proveedor se queda como banda centrada arriba.
 # LÍMITES:     es puro texto: no enlaza imágenes, no pide fuentes, no ejecuta nada.
 # VER:         deployment_engine/tools/docs.py; docs/diseno.md §4
 
@@ -384,6 +387,12 @@ class Region(Caja):
         # tal. Y `enchufe` es el equipo que reparte dentro del área —el switch de
         # acceso—, que va en su propia fila arriba para que los cables entren por él.
         self.nube = False
+        # Una salida a internet (`exit: true`) es una nube que pertenece a UNA sede: se
+        # dibuja junto a ella, sobre el router de borde que la alcanza, y no como una
+        # banda más del techo. `ancla_x` la fija en la vertical de su sede cuando el
+        # reparto la colocaría centrada con las demás.
+        self.exit = False
+        self.ancla_x: float | None = None
         self.enchufe: str | None = None
         # A qué lado de esta área corre el pasillo por el que bajan los cables: por
         # ahí se asoman los routers de sus departamentos, así que sus cajas se
@@ -435,6 +444,7 @@ def _arbol(lab: dict) -> Region:
             # sea: conserva su bloque de direcciones, que es su tramo y sí lo identifica.
             region.lema = "salida a la red pública"
             region.subred = ""
+            region.exit = True
         # Dos redes con la misma dirección se toman la una a la otra como padre y
         # ninguna queda como raíz: el árbol se construye recurriendo y el plano se cae
         # con un error interno. La validación del laboratorio ya lo rechaza; aquí se
@@ -783,8 +793,13 @@ def _repartir(region: Region, x: float, y: float) -> None:
         for caja in espina:
             if caja.nube:
                 # La nube es el exterior, no una banda del dibujo: se queda pequeña y
-                # centrada. Estirada de lado a lado dejaría de parecer una nube.
-                _repartir(caja, x + (region.ancho - caja.ancho) / 2, alto)
+                # centrada. Estirada de lado a lado dejaría de parecer una nube. Una
+                # salida a internet se ancla en cambio sobre la vertical de su sede —la
+                # puso ahí `_asentar_salidas`— para leerse como la de ESA sede y no como
+                # una nube más apilada en el centro.
+                x_caja = (caja.ancla_x if caja.ancla_x is not None
+                          else x + (region.ancho - caja.ancho) / 2)
+                _repartir(caja, x_caja, alto)
             else:
                 # El pasillo ocupa todo el ancho: es el eje del dibujo, no una caja más.
                 _estirar(caja, x + M_REG, alto, region.ancho - 2 * M_REG)
@@ -870,11 +885,15 @@ def _repartir_asomados(borde: list[tuple[str, Region, Region, float]],
     que las envuelve no es más ancha que una sola sede y sus centros caen en la misma
     vertical: los tres routers de borde apuntan al mismo punto, se dibujan uno encima de
     otro y sus cables parecen salir de un solo equipo. Se reparten a lo largo del tramo
-    que el techo de la compañía y la nube tienen en común —la frontera por la que todos
+    que el techo de la compañía y las nubes tienen en común —la frontera por la que todos
     salen— sin repetir posiciones, y cada uno sigue asomando bajo su nube.
 
     Cada entrada del borde es (rol, caja, nube, ancho): el techo que pisa, la nube por la
-    que sale y el ancho de su símbolo, que manda sobre la separación mínima.
+    que sale y el ancho de su símbolo, que manda sobre la separación mínima. Los routers
+    se agrupan por el techo, no por la nube: aunque cada uno salga por una salida distinta
+    —tres sedes con tres `exit`—, todos pisan el mismo techo, así que separarlos es la
+    única forma de que sus símbolos no acaben en el mismo punto. Con la nube en la clave,
+    cada grupo tendría un solo router y ninguno separaría a los demás.
     """
     if len(borde) < 2:
         return
@@ -886,15 +905,16 @@ def _repartir_asomados(borde: list[tuple[str, Region, Region, float]],
         # Cada uno en la vertical de su sede, y ninguna coincide: ya no se tapan y
         # moverlos los despegaba de la sede que salen, que es lo que los identifica.
         return
-    _, caja, nube, _ = borde[0]
+    _, caja, _, _ = borde[0]
     guarda = max(SIMBOLO["internet"][0], 2 * HUECO_NUBE) / 2
-    # El tramo común: lo que el techo de la compañía y la nube comparten a la vez. Si no
-    # se solapan —la nube cae fuera de la caja—, se reparten sobre la nube, que es el
-    # borde por el que se lee la salida.
-    x0 = max(caja.x, nube.x + guarda)
-    x1 = min(caja.x + caja.ancho, nube.x + nube.ancho - guarda)
+    # El tramo común: lo que el techo de la compañía y TODAS las nubes comparten a la vez
+    # —una por router, porque cada uno puede salir por la suya—. Si no se solapan —alguna
+    # nube cae fuera de la caja—, se reparten sobre el propio techo, que es lo que de
+    # verdad comparten: es la frontera por la que todos se asoman.
+    x0 = max([caja.x] + [n.x + guarda for *_, n, _ in borde])
+    x1 = min([caja.x + caja.ancho] + [n.x + n.ancho - guarda for *_, n, _ in borde])
     if x1 <= x0:
-        x0, x1 = nube.x + guarda, nube.x + nube.ancho - guarda
+        x0, x1 = caja.x, caja.x + caja.ancho
     paso = (x1 - x0) / (len(borde) + 1)
     if paso < minimo:
         # El tramo no da para un diámetro por equipo: se usa el mínimo imprescindible y
@@ -903,8 +923,31 @@ def _repartir_asomados(borde: list[tuple[str, Region, Region, float]],
         xs = [centro + minimo * (i - (len(borde) - 1) / 2) for i in range(len(borde))]
     else:
         xs = [x0 + paso * (i + 1) for i in range(len(borde))]
-    for (rol, caja, _, _), x in zip(borde, xs):
+    for (rol, caja, nube, _), x in zip(borde, xs):
         casa_de[rol].dentro[rol] = (x, caja.y)
+        if nube.exit:
+            # La salida vive sobre la vertical del router que la alcanza —así se lee
+            # como la de ESA sede y no como una nube centrada—, y el router acaba de
+            # moverse: sin reanclarla, la nube se quedaría sobre la sede, donde la dejó
+            # `_asentar_salidas`, y la salida dejaría de estar sobre su propio equipo.
+            # La nube no tiene equipos ni hijas, así que basta con asentarla en su sitio.
+            _repartir(nube, x - nube.ancho / 2, nube.y)
+
+
+def _asentar_salidas(raiz: Region, sede_de_salida: dict[int, Region]) -> None:
+    """Ancla cada salida a internet sobre la vertical de la sede que la usa.
+
+    La salida de una sede no cuelga del centro del dibujo, cuelga de ESA sede: se
+    dibuja encima del router de borde que la alcanza, y ese router vive en la vertical
+    de su sede. Se corre en una segunda vuelta del reparto porque para saber por dónde
+    cae una sede hay que haberla repartido antes; el reparto de las sedes no depende
+    de dónde caigan las nubes, así que no se mueve al repetirlo.
+    """
+    for region in _todas(raiz):
+        sede = sede_de_salida.get(id(region))
+        if sede is None:
+            continue
+        region.ancla_x = sede.x + sede.ancho / 2 - region.ancho / 2
 
 
 def _plano_anidado(lab: dict) -> str:
@@ -936,14 +979,30 @@ def _plano_anidado(lab: dict) -> str:
             # Dos hermanas en la misma fila: se separan para que quepa el símbolo.
             casa.pasillos.append((grupos[0], grupos[1], nodo["role"]))
     _marcar_pasillos(raiz, cruces)
+    # Qué sede usa cada salida a internet: la red de tierra del router de borde que se
+    # asoma a ella. Es dato del laboratorio —ese router tiene una pata en la salida y
+    # otra en su sede—, no una suposición: la salida es de la sede por la que se sale.
+    sede_de_salida: dict[int, Region] = {}
+    for nodo in lab["nodes"]:
+        suyas = patas.get(nodo["role"]) or []
+        sus_salidas = [r for r in suyas if r.exit]
+        tierra = [r for r in suyas if not r.nube]
+        if sus_salidas and tierra:
+            for salida in sus_salidas:
+                sede_de_salida.setdefault(id(salida), tierra[0])
     _medir(raiz)
+    _repartir(raiz, 0.0, 0.0)
+    # Segunda vuelta: con las sedes ya asentadas, cada salida se ancla sobre la vertical
+    # de la suya y el dibujo se reparte otra vez con las nubes en su sitio.
+    _asentar_salidas(raiz, sede_de_salida)
     _repartir(raiz, 0.0, 0.0)
     # Dos equipos pueden compartir frontera —los dos routers de borde, sin ir más
     # lejos—: se reparten a lo largo de ella en vez de dibujarse uno encima del otro.
     por_frontera: dict[tuple[int, int], list[str]] = {}
-    # Los routers que se asoman por el mismo techo a la misma nube se reparten juntos,
-    # y el reparto se hace al final: uno solo no sabe con quién comparte la frontera.
-    asomados: dict[tuple[int, int], list[tuple[str, Region, Region, float]]] = {}
+    # Los routers que se asoman desde el mismo techo se reparten juntos, aunque cada uno
+    # salga por una nube distinta: el reparto se hace al final, porque uno solo no sabe
+    # con quién comparte la frontera.
+    asomados: dict[int, list[tuple[str, Region, Region, float]]] = {}
     for rol, grupos in cruces.items():
         clave = tuple(sorted((id(grupos[0]), id(grupos[1]))))
         por_frontera.setdefault(clave, []).append(rol)
@@ -953,14 +1012,21 @@ def _plano_anidado(lab: dict) -> str:
         # demás se alcanzan por su cable, que es lo que de verdad las une.
         una, otra = grupos[0], grupos[1]
         casa = casa_de[rol]
-        if una.nube or otra.nube:
+        if any(g.nube for g in grupos):
             # El router de borde vive EN la frontera entre Internet y la empresa: se apoya
             # en el techo de la caja que contiene a su sede —la empresa— y se asoma bajo la
             # nube, que es su salida. Metido en la caja parecía un equipo más de la red
             # privada, que es justo lo que no es; y cada sede tiene la suya, así que los dos
             # routers de borde no pueden acabar en el mismo punto del borde.
-            dentro = otra if una.nube else una
-            nube = otra if otra.nube else una
+            #
+            # Un router de borde puede tocar DOS nubes —el tránsito del proveedor y su
+            # propia salida—: se dibuja bajo SU salida (la nube con `exit`), no bajo la
+            # del centro, o las dos sedes acabarían apuntando a la misma nube. Si no hay
+            # salida —el laboratorio que sólo tiene el tránsito—, la nube es la única que
+            # toca.
+            nubes_pata = [g for g in grupos if g.nube]
+            nube = next((g for g in nubes_pata if g.exit), nubes_pata[0])
+            dentro = next((g for g in grupos if not g.nube), nube)
             suya = [q for q in patas.get(rol) or [] if not q.nube]
             caja = suya[0] if suya else dentro
             while caja.padre is not None and not caja.padre.sintetica:
@@ -972,8 +1038,8 @@ def _plano_anidado(lab: dict) -> str:
             izquierda, derecha = nube.x + guarda, nube.x + nube.ancho - guarda
             x = min(max(centro, izquierda), derecha) if derecha >= izquierda else centro
             # Posición provisional: la definitiva la fija el reparto de los que comparten
-            # techo y nube, que sólo puede hacerse cuando se conocen todos.
-            asomados.setdefault((id(caja), id(nube)), []).append(
+            # techo, que sólo puede hacerse cuando se conocen todos.
+            asomados.setdefault(id(caja), []).append(
                 (rol, caja, nube, max(SIMBOLO[por_nodo[rol]["type"]])))
             casa_de[rol].dentro[rol] = (x, caja.y)
             continue
@@ -1405,6 +1471,12 @@ def _plano_anidado(lab: dict) -> str:
 
     textos: list[str] = []
     puntos: list[tuple[float, float]] = [(0.0, 0.0), (raiz.ancho, raiz.alto)]
+    # El lienzo cuenta también las cajas: una salida anclada a la vertical de su sede
+    # puede caer fuera de la raíz —con su nube y su rótulo—, y sin contarla el SVG la
+    # recortaría por el borde. La raíz sola no basta: la nube desplazada vive fuera de ella.
+    for region in regiones:
+        puntos += [(region.x, region.y),
+                   (region.x + region.ancho, region.y + region.alto)]
     for region in regiones:
         for rol, (cx, cy) in region.dentro.items():
             piezas.append(_simbolo(tipos[rol], cx, cy, rol=rol))
