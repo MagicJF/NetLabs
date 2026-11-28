@@ -797,7 +797,7 @@ Tres vías, cada una en un fichero del motor:
   nodo, con la contraseña del fichero de secretos (§10).
 
 Lo configurable se declara por **áreas**, nombradas con el vocabulario de la API del equipo
-(`addresses`, `routes`, `dhcp_server`, `services`, `users`, `snmp`). Un área declarada se
+(`addresses`, `routes`, `dhcp_server`, `services`, `users`, `snmp`, `dns`). Un área declarada se
 converge entera; un área ausente se deja intacta. El **nombre del equipo no es un área**: sale del
 rol declarado y el motor lo escribe en todas partes (el hostname del invitado, la identidad del
 RouterOS), así que declararlo otra vez sería una segunda verdad esperando a contradecirse. Todas las
@@ -812,6 +812,16 @@ con autenticación y cifrado, o la comunidad v2c en claro— lo declara el **ent
 dos equipos del mismo laboratorio podrían mirarse de dos maneras. Sin el área, el motor no toca el
 servicio; es lo que permite a NetXMS leer nombre, interfaces, rutas y tabla ARP del router, y de ahí
 lo que cuelga de sus redes (§3.4).
+
+El área `dns` hace que el router de la sede **resuelva y reenvíe**: el laboratorio dice
+`dns: {enabled: true}` y **nada más**. Con qué resolutor aguas arriba lo hace lo declara una vez el
+**entorno** (`dns.servers`), porque una dirección que resuelva tiene que ser alcanzable por la pata
+de salida de **esa** sede —una decisión del entorno, no del laboratorio—, igual que la identidad
+SNMP (ADR 0024). El motor deriva lo que no se declara: el router atiende a los suyos
+(`allow-remote-requests`) y su servidor DHCP **anuncia al propio router** como servidor DNS en la
+opción de la red servida. Así los puestos —que toman su dirección por DHCP— quedan resueltos solos:
+**nada se toca dentro del invitado**. Los servidores declaran dirección estática y no pasan por el
+DHCP, así que este anuncio no les llega: su resolutor queda fuera de este cambio.
 
 El área que abre el laboratorio al plano de gestión (permitir el cruce desde la red de gestión
 hacia sus redes) forma parte del router y la aplica el motor: sin ella, §4.3.

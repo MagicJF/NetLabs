@@ -265,9 +265,39 @@ def validate_observabilidad(env: dict) -> None:
         )
 
 
+def validate_dns(env: dict) -> None:
+    """El bloque `dns` del entorno: con qué resuelve el sitio (ADR 0024).
+
+    Igual que `observabilidad` (ADR 0019), no es de un laboratorio y por eso no lo valida
+    `_validate_area`: se comprueba aquí, con el entorno delante, para que un error se lea
+    donde está escrito. El laboratorio sólo dice si sus sedes resuelven; la dirección del
+    resolutor aguas arriba —que tiene que ser alcanzable por la pata de salida— se declara
+    una sola vez aquí, y el motor la lee para cada router que resuelva.
+    """
+    bloque = env.get("dns")
+    if bloque is None:
+        return
+    if not isinstance(bloque, dict):
+        raise LabError("'dns' del entorno tiene que ser un mapa")
+    sobran = set(bloque) - {"servers"}
+    if sobran:
+        raise LabError(
+            f"'dns' del entorno no entiende {', '.join(sorted(sobran))}: es {{servers}}")
+    servidores = bloque.get("servers")
+    if not isinstance(servidores, list) or not servidores:
+        raise LabError(
+            "'dns.servers' del entorno tiene que ser una lista con al menos una dirección")
+    for servidor in servidores:
+        try:
+            ipaddress.ip_address(servidor)
+        except ValueError as exc:
+            raise LabError(f"resolutor inválido en 'dns.servers' del entorno: {exc}") from exc
+
+
 def validate(lab: dict, env: dict) -> None:
     """Rechaza lo que el motor no entiende, con el motivo y el sitio."""
     validate_observabilidad(env)
+    validate_dns(env)
     if not isinstance(lab, dict):
         raise LabError("la declaración tiene que ser un mapa YAML")
     unknown = set(lab) - LAB_KEYS
@@ -818,23 +848,22 @@ def _validate_area(role: str, area: str, body, networks: dict, salidas=None,
                     "escribe `masquerade`"
                 )
     elif area == "dns":
-        if not isinstance(body, dict) or set(body) - {"servers", "allow_remote_requests"}:
+        # El laboratorio sólo dice si sus sedes resuelven; con qué resolutor lo hacen es
+        # del entorno (`dns.servers`, ADR 0024). Un laboratorio que eligiera su propio
+        # servidor DNS tendría a cada sede preguntando a un sitio distinto de lo que el
+        # sitio declara, y la dirección tendría que ser alcanzable por la salida de esa
+        # sede en concreto —una decisión que no es del laboratorio—.
+        if not isinstance(body, dict):
+            raise LabError(f"el área 'dns' de {role!r} tiene que ser un mapa")
+        sobran = set(body) - {"enabled"}
+        if sobran:
             raise LabError(
-                f"el área 'dns' de {role!r} es {{servers?, allow_remote_requests?}}")
-        servidores = body.get("servers")
-        if servidores is not None:
-            if not isinstance(servidores, list) or not servidores:
-                raise LabError(
-                    f"'servers' del área 'dns' de {role!r} tiene que ser una lista con al "
-                    "menos una dirección")
-            for servidor in servidores:
-                try:
-                    ipaddress.ip_address(servidor)
-                except ValueError as exc:
-                    raise LabError(f"servidor DNS inválido en {role!r}: {exc}") from exc
-        if "allow_remote_requests" in body and not isinstance(body["allow_remote_requests"], bool):
-            raise LabError(
-                f"'allow_remote_requests' del área 'dns' de {role!r} es verdadero o falso")
+                f"el área 'dns' de {role!r} no entiende {', '.join(sorted(sobran))}: es "
+                "{enabled}. El resolutor aguas arriba vive en el entorno (`dns.servers`), "
+                "no en el laboratorio (ADR 0024)"
+            )
+        if not isinstance(body.get("enabled"), bool):
+            raise LabError(f"el área 'dns' de {role!r} declara 'enabled' sí o no")
     elif area == "dhcp_server":
         _require_list(role, area, body)
         for item in body:
